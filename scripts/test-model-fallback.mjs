@@ -22,6 +22,13 @@ import {
   LLMApiError,
   LLMBackbone,
 } from '../dist/llm/index.js';
+import { mkdtemp, readFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
+const auditDir = await mkdtemp(join(tmpdir(), 't3mp3st-fallback-audit-'));
+const auditPath = join(auditDir, 'fallback.jsonl');
+process.env.TEMPEST_FALLBACK_AUDIT_LOG = auditPath;
 
 let pass = 0, fail = 0;
 const ok = (label, cond) =>
@@ -88,6 +95,8 @@ ok('400+ctx-msg → context_length',
 ok('400 plain → bad_request', classifyErrorKind(new LLMApiError('bad params', 400)) === 'bad_request');
 ok('abort → timeout',        classifyErrorKind(new Error('The operation was aborted due to timeout')) === 'timeout');
 ok('ECONNREFUSED → network', classifyErrorKind(new Error('connect ECONNREFUSED 1.2.3.4:443')) === 'network');
+ok('Codex policy block → refusal',
+   classifyErrorKind(new Error('Codex CLI exited 1: ERROR: This content was flagged for possible cybersecurity risk. Join the Trusted Access for Cyber program.')) === 'refusal');
 ok('null → unknown',         classifyErrorKind(null) === 'unknown');
 ok('odd error → unknown',    classifyErrorKind(new Error('something weird happened')) === 'unknown');
 
@@ -140,6 +149,11 @@ console.log('\nLADDER FLOW (integration):');
   threw = false; try { await b.chat([{ role: 'user', content: 'x' }]); } catch { threw = true; }
   ok('no chain + hard error → throws (back-compat)', threw);
 }
+
+const auditText = await readFile(auditPath, 'utf8');
+ok('fallback audit records trigger reason', auditText.includes('"event":"fallback_trigger"') && auditText.includes('"reason":"refusal"'));
+ok('fallback audit records fallback answer', auditText.includes('"event":"fallback_result"') && auditText.includes('Found a concrete bug at line 42.'));
+await rm(auditDir, { recursive: true, force: true });
 
 console.log(`\n${fail === 0 ? '✅ ALL PASS' : `❌ ${fail} FAILED`} — ${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

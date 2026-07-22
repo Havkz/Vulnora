@@ -855,7 +855,8 @@ class ConfigManager {
    * or a hard error that survives same-model retries (rate-limit, 5xx, timeout, dead
    * key, missing model, context blowout) — escalates across the OTHER configured
    * providers in priority order (openrouter → venice → anthropic → openai), each with its own
-   * key/model. OFF by default (no surprise model-switching). On a refusal the real
+   * key/model. TEMPEST_MODEL_FALLBACK=local selects the configured local/Ollama
+   * model as the sole fallback. OFF by default (no surprise model-switching). On a refusal the real
    * authorization context is restated — honest escalation, no jailbreak prompts
    * (see LLMBackbone.chat).
    */
@@ -863,6 +864,17 @@ class ConfigManager {
     const flag = (process.env.TEMPEST_MODEL_FALLBACK || '').trim().toLowerCase();
     if (!flag || ['0', 'false', 'off', 'no'].includes(flag)) return [];
     const chain: FallbackEntry[] = [];
+    if (['local', 'ollama'].includes(flag)) {
+      if (primary !== 'local') {
+        chain.push({
+          provider: 'local',
+          model: process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3',
+          apiKey: process.env.TEMPEST_LOCAL_API_KEY?.trim() || undefined,
+          baseUrl: process.env.TEMPEST_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api',
+        });
+      }
+      return chain;
+    }
     const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek') => {
       if (p === primary) return;
       if (p === 'litellm' ? !this.hasLiteLLMProxy() : !this.hasApiKey(p)) return;

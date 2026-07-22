@@ -5611,6 +5611,7 @@
                                 <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='google/gemini-2.5-pro-preview';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,255,255,0.06); border: 1px solid #444;">Gemini 2.5 Pro</button>
                                 <button class="btn btn-sm" onclick="document.getElementById('fallbackModelInput').value='';saveFallbackModel()" style="font-size: 10px; padding: 2px 8px; background: rgba(255,68,68,0.1); border: 1px solid rgba(255,68,68,0.3); color: #ff6666;">Disable Fallback</button>
                             </div>
+                            <div id="backendModelStatus" style="display:none; margin-top:8px; font-size:11px; color:#2fd6ff;"></div>
                         </div>
                     </div>
 
@@ -5909,6 +5910,7 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                     // /api/health returns llm as an object ({connected:true,...}); accept that or the legacy string
                     this.llmAvailable = data.llm === 'connected' || !!(data.llm && data.llm.connected);
                     this.serverLLM = data.llm && typeof data.llm === 'object' ? data.llm : null;
+                    if (typeof syncBackendModelSettings === 'function') syncBackendModelSettings(this.serverLLM);
                     // Keep the dispatch latch honest: BackendDispatch.available is otherwise write-only-true.
                     // A server that's down / lost mission support must clear it; a healthy one re-arms it.
                     if (typeof BackendDispatch !== 'undefined') {
@@ -5937,6 +5939,8 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                 } catch (e) {
                     this.connected = false;
                     this.llmAvailable = false;
+                    this.serverLLM = null;
+                    if (typeof syncBackendModelSettings === 'function') syncBackendModelSettings(null);
 
                     // If on a remote host and first check fails, switch to standalone
                     if (!this._isLocal && !this._hasCustomUrl) {
@@ -6155,6 +6159,27 @@ tempest.operators.<span class="function">spawn</span>(<span class="string">'scan
                         try {
                             const data = JSON.parse(e.data);
                             window.recordLiveScanEvent?.(data);
+                        } catch {}
+                    });
+
+                    this._eventSource.addEventListener('orchestration:event', (e) => {
+                        try {
+                            const data = JSON.parse(e.data);
+                            if (['SKIPPED', 'USED', 'DEFERRED', 'STOPPED', 'REPEATED', 'BLOCKED'].includes(data.action)) {
+                                const severe = ['FAILED', 'BLOCKED', 'STOPPED'].includes(data.action);
+                                const warning = ['SKIPPED', 'DEFERRED', 'REPEATED'].includes(data.action);
+                                addIntel(data.action, `${data.toolName}: ${data.reason}`, severe ? 'danger' : warning ? 'warning' : 'info');
+                            }
+                            if (data.action !== 'EXECUTED' && data.action !== 'FAILED') window.recordLiveScanEvent?.({
+                                id: `orchestrator-${data.signature}-${data.timestamp}`,
+                                timestamp: data.timestamp,
+                                kind: 'orchestration',
+                                action: data.action,
+                                callsign: 'ORCHESTRATOR',
+                                toolName: data.toolName,
+                                detail: `${data.reason} · ${data.target}`,
+                                success: !['FAILED', 'BLOCKED', 'STOPPED'].includes(data.action)
+                            });
                         } catch {}
                     });
 
@@ -6974,6 +6999,8 @@ Correlating findings across agents, identifying patterns, producing actionable i
         ];
 
         const MODELS = [
+            // Local account-backed Codex CLI
+            { id: 'codex/codex-default', name: 'Codex', provider: 'Local account' },
             // Anthropic (Feb 2026)
             { id: 'anthropic/claude-opus-4.6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
             { id: 'anthropic/claude-sonnet-4.5', name: 'Claude Sonnet 4.5', provider: 'Anthropic' },
@@ -7116,7 +7143,8 @@ Correlating findings across agents, identifying patterns, producing actionable i
                 tool_call: 'TOOL',
                 tool_result: 'RESULT',
                 task_completed: 'DONE',
-                task_failed: 'FAIL'
+                task_failed: 'FAIL',
+                orchestration: 'POLICY'
             })[kind] || String(kind || 'EVENT').toUpperCase();
         }
 
@@ -7170,6 +7198,11 @@ Correlating findings across agents, identifying patterns, producing actionable i
             const events = LiveScanState.events.slice().reverse();
             const currentPhase = mission.currentPhase || status.currentPhase || 'none';
             const progress = typeof mission.progress === 'number' ? `${Math.round(mission.progress)}%` : '-';
+            const orchestration = status.orchestration || {};
+            const orchestrationMetrics = orchestration.metrics || {};
+            const budgetRows = Object.values(orchestration.budgets || {});
+            const totalBudgetUsed = budgetRows.reduce((sum, row) => sum + Number(row?.used?.total_request_budget || 0), 0);
+            const totalBudgetLimit = budgetRows.reduce((sum, row) => sum + Number(row?.limits?.total_request_budget || 0), 0);
 
             const summary = document.getElementById('liveScanSummary');
             if (summary) {
@@ -7179,7 +7212,18 @@ Correlating findings across agents, identifying patterns, producing actionable i
                     ['Progress', progress, '#00ff88'],
                     ['Operators', String(operatorSummary.total ?? operators.length ?? 0), '#ffaa00'],
                     ['Tasks', String(tasks.length), '#00aaff'],
-                    ['Stall', status.stallReason || '-', status.stallReason ? '#ff4444' : 'var(--text-secondary)']
+                    ['Stall', status.stallReason || '-', status.stallReason ? '#ff4444' : 'var(--text-secondary)'],
+                    ['Network Requests', String(orchestrationMetrics.actualNetworkRequests ?? 0), '#00aaff'],
+                    ['Redundancy Avoided', String(orchestrationMetrics.redundantRequestsAvoided ?? 0), '#00ff88'],
+                    ['Cache Hits', String(orchestrationMetrics.cacheHits ?? 0), '#00ff88'],
+                    ['Tool Errors', String(orchestrationMetrics.toolFailures ?? 0), Number(orchestrationMetrics.toolFailures || 0) ? '#ff6666' : '#00ff88'],
+                    ['WAF / Rate Events', `${orchestrationMetrics.wafEvents ?? 0} / ${orchestrationMetrics.rateLimitEvents ?? 0}`, Number(orchestrationMetrics.wafEvents || orchestrationMetrics.rateLimitEvents || 0) ? '#ffaa00' : '#00ff88'],
+                    ['Blocked Calls', String(orchestrationMetrics.blockedCalls ?? 0), Number(orchestrationMetrics.blockedCalls || 0) ? '#ffaa00' : '#00ff88'],
+                    ['Request Budget', totalBudgetLimit ? `${totalBudgetUsed}/${totalBudgetLimit}` : '-', totalBudgetLimit && totalBudgetUsed >= totalBudgetLimit ? '#ff6666' : '#00aaff'],
+                    ['Budget Estimate / Actual', `${orchestrationMetrics.budgetCostEstimated ?? 0} / ${orchestrationMetrics.budgetCostActual ?? 0}`, '#00aaff'],
+                    ['Budget Cost Source', Object.entries(orchestrationMetrics.budgetCostSources || {}).map(([name, count]) => `${name}:${count}`).join(' · ') || '-', 'var(--text-secondary)'],
+                    ['Conflicts', String((orchestration.conflicts || []).length), (orchestration.conflicts || []).length ? '#ffaa00' : '#00ff88'],
+                    ['Incomplete Areas', String((orchestrationMetrics.incompleteAreas || []).length), (orchestrationMetrics.incompleteAreas || []).length ? '#ffaa00' : '#00ff88']
                 ];
                 summary.innerHTML = cells.map(([label, value, color]) => `
                     <div style="background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:8px;padding:12px;min-height:74px;">
@@ -7244,7 +7288,10 @@ Correlating findings across agents, identifying patterns, producing actionable i
                     feed.innerHTML = '<div style="padding:18px;color:var(--text-muted);font-size:12px;">No live reasoning events yet. Start or refresh a scan to populate this stream.</div>';
                 } else {
                     feed.innerHTML = events.map(ev => {
-                        const color = ev.kind === 'task_failed' || ev.success === false ? '#ff6666'
+                        const color = ev.kind === 'orchestration' && ['BLOCKED', 'FAILED', 'STOPPED'].includes(ev.action) ? '#ff6666'
+                            : ev.kind === 'orchestration' && ['SKIPPED', 'DEFERRED', 'REPEATED'].includes(ev.action) ? '#ffaa00'
+                            : ev.kind === 'orchestration' ? '#00aaff'
+                            : ev.kind === 'task_failed' || ev.success === false ? '#ff6666'
                             : ev.kind === 'tool_call' ? '#ffaa00'
                             : ev.kind === 'tool_result' ? '#00aaff'
                             : ev.kind === 'thinking' ? '#cfd6e6'
@@ -8773,6 +8820,21 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
             toast(`${provider} key saved`, 'success');
         }
 
+        let backendLLMSettings = null;
+
+        function backendModelId(llm) {
+            if (!llm) return null;
+            if (llm.provider === 'codex') return 'codex/codex-default';
+            if (llm.provider === 'local') return 'local/ollama';
+            return llm.model || null;
+        }
+
+        function syncBackendModelSettings(llm) {
+            backendLLMSettings = llm && llm.configured ? llm : null;
+            renderModels();
+            loadFallbackModelSetting();
+        }
+
         function renderModels() {
             const container = document.getElementById('modelSelector');
             if (!container) {
@@ -8783,16 +8845,20 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
                 container.innerHTML = '<div style="color: var(--error);">No models available</div>';
                 return;
             }
-            const selectedModel = state.settings?.selectedModel || 'anthropic/claude-opus-4.6';
+            const selectedModel = backendModelId(backendLLMSettings) || state.settings?.selectedModel || 'anthropic/claude-opus-4.6';
             container.innerHTML = MODELS.map(m => `
                 <div class="model-option ${selectedModel === m.id ? 'selected' : ''}" onclick="selectModel('${m.id}')">
                     <h4>${m.name}</h4>
-                    <p>${m.provider}</p>
+                    <p>${m.provider}${backendLLMSettings && selectedModel === m.id ? ' · Backend active' : ''}</p>
                 </div>
             `).join('');
         }
 
         function selectModel(id) {
+            if (backendLLMSettings) {
+                toast(`Model is managed by the backend: ${backendLLMSettings.provider}/${backendLLMSettings.model}`, 'info');
+                return;
+            }
             state.settings.selectedModel = id;
             saveState();
             renderModels();
@@ -8800,6 +8866,11 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
         }
 
         function saveFallbackModel() {
+            if (backendLLMSettings) {
+                toast('Fallback is managed by the T3MP3ST backend configuration', 'info');
+                loadFallbackModelSetting();
+                return;
+            }
             const input = document.getElementById('fallbackModelInput');
             const model = input?.value?.trim() || '';
             state.settings.fallbackModel = model;
@@ -8813,7 +8884,30 @@ o.id === 'coordinator' ? `1. MISSION_STATUS: Progress assessment
 
         function loadFallbackModelSetting() {
             const input = document.getElementById('fallbackModelInput');
-            if (input) input.value = state.settings?.fallbackModel || 'nousresearch/hermes-3-llama-3.1-405b';
+            const status = document.getElementById('backendModelStatus');
+            const saveButton = input?.nextElementSibling;
+            if (backendLLMSettings) {
+                const fallback = Array.isArray(backendLLMSettings.fallbackChain) ? backendLLMSettings.fallbackChain[0] : null;
+                if (input) {
+                    input.value = fallback?.model || '';
+                    input.readOnly = true;
+                }
+                if (saveButton) saveButton.disabled = true;
+                if (status) {
+                    const fallbackText = fallback
+                        ? `${fallback.provider}/${fallback.model} @ ${fallback.baseUrl || 'default endpoint'}`
+                        : 'disabled';
+                    status.textContent = `Backend-managed: primary ${backendLLMSettings.provider}/${backendLLMSettings.model} → fallback ${fallbackText}`;
+                    status.style.display = 'block';
+                }
+                return;
+            }
+            if (input) {
+                input.value = state.settings?.fallbackModel || 'nousresearch/hermes-3-llama-3.1-405b';
+                input.readOnly = false;
+            }
+            if (saveButton) saveButton.disabled = false;
+            if (status) status.style.display = 'none';
         }
 
         function saveApiServerUrl() {

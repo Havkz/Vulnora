@@ -13,12 +13,15 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { spawn } from 'child_process';
-import { mkdtemp, readFile, rm } from 'fs/promises';
-import { tmpdir } from 'os';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
+import { randomUUID } from 'crypto';
+import { homedir, tmpdir } from 'os';
 import { join } from 'path';
+import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
 import { localAgentChat } from '../agent/local-agents.js';
+import { redactLedgerText, redactSecrets } from '../redact.js';
 
 // =============================================================================
 // LLM EVENTS
@@ -56,6 +59,67 @@ export interface ChatOptions {
   systemPrompt?: string;
   /** Tool definitions for function calling */
   tools?: LLMToolDefinition[];
+}
+
+export function isContextCompactionNotice(content: string): boolean {
+  const normalized = String(content || '').replace(/\s+/g, ' ').trim();
+  return /(?:some|part of|previous).*conversation history.*(?:removed|truncated|compacted)|conversation history.*(?:removed|truncated|compacted)/i.test(normalized);
+}
+
+// =============================================================================
+// FALLBACK AUDIT LOG
+// =============================================================================
+
+interface FallbackAuditEntry {
+  requestId: string;
+  event: 'fallback_trigger' | 'fallback_result';
+  primary: { provider: LLMProvider; model: string };
+  from: { provider: LLMProvider; model: string };
+  to?: { provider: LLMProvider; model: string };
+  reason: string;
+  status?: 'success' | 'refusal' | 'empty' | 'error';
+  question?: string;
+  conversation?: Array<{ role: string; name?: string; content: string }>;
+  messageCount?: number;
+  sourceResponse?: string;
+  sourceError?: string;
+  fallbackResponse?: string;
+  fallbackError?: string;
+  durationMs?: number;
+}
+
+function fallbackAuditPath(): string | null {
+  const override = process.env.TEMPEST_FALLBACK_AUDIT_LOG?.trim();
+  if (override && ['0', 'false', 'off', 'no'].includes(override.toLowerCase())) return null;
+  return override || join(homedir(), '.t3mp3st', 'logs', 'model-fallback.jsonl');
+}
+
+function fallbackConversation(messages: LLMMessage[]): Array<{ role: string; name?: string; content: string }> {
+  return messages.slice(-8).map(message => ({
+    role: message.role,
+    ...(message.name ? { name: message.name } : {}),
+    content: redactLedgerText(message.content || '', 8000),
+  }));
+}
+
+async function appendFallbackAudit(entry: FallbackAuditEntry): Promise<void> {
+  const path = fallbackAuditPath();
+  if (!path) return;
+  try {
+    const directory = path.slice(0, Math.max(path.lastIndexOf('/'), 0)) || '.';
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const record = redactSecrets({
+      schema: 't3mp3st.model-fallback/v1',
+      timestamp: new Date().toISOString(),
+      ...entry,
+    });
+    await appendFile(path, `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+    await chmod(path, 0o600);
+  } catch (error) {
+    // Audit logging is best-effort: never turn a successful model recovery into a
+    // failed mission just because the local log directory is unavailable.
+    console.warn('[T3MP3ST] Could not write fallback audit log:', error instanceof Error ? error.message : error);
+  }
 }
 
 /**
@@ -763,13 +827,16 @@ class LocalAdapter implements LLMProviderAdapter {
   // back into tool calls after the round-trip.
   private buildMessages(messages: LLMMessage[], options?: ChatOptions): { role: string; content: string }[] {
     const contract = renderToolContract(options?.tools);
-    const preamble = 'You are the planning brain for T3MP3ST, an authorized offensive-security harness.'
+    const preamble = 'You are the planning brain for T3MP3ST, an authorized security-assessment harness.'
       + (contract
-        ? ' You drive a ReAct loop: REQUEST tools, the harness runs them and returns results, you reason until the surface is exhausted.' + contract
+        ? ' Request tools through the action contract; the harness executes them and returns real results.' + contract
         : ' Operate in planning and analysis mode; when JSON is requested, return ONLY the requested block — no preamble.');
     const systemParts = [preamble];
     const out: { role: string; content: string }[] = [];
     for (const m of messages) {
+      // Provider-generated compaction notices are transport metadata, not user intent.
+      // Never let one become the last/dominant instruction sent to a fallback model.
+      if (isContextCompactionNotice(m.content)) continue;
       if (m.role === 'system') {
         if (m.content.trim()) systemParts.push(m.content);
       } else if (m.role === 'assistant' && m.toolCalls?.length) {
@@ -780,7 +847,59 @@ class LocalAdapter implements LLMProviderAdapter {
         out.push({ role: m.role, content: m.content });
       }
     }
-    return [{ role: 'system', content: systemParts.join('\n\n') }, ...out];
+    // Strict Ollama chat templates reject or mishandle runs of consecutive `user`
+    // messages. Parallel tool results naturally create exactly that shape, so merge
+    // adjacent roles and bound verbose tool output before sending the fallback request.
+    const compactContent = (content: string, limit: number): string => {
+      if (content.length <= limit) return content;
+      const marker = '\n[Earlier verbose context compacted]\n';
+      const side = Math.max(1, Math.floor((limit - marker.length) / 2));
+      return `${content.slice(0, side)}${marker}${content.slice(-side)}`;
+    };
+    const perMessageLimit = 8_000;
+    const bounded = [{ role: 'system', content: systemParts.join('\n\n') }, ...out]
+      .filter(message => message.content.trim())
+      .map((message, index) => {
+        // The initial mission turn is deliberately compact already. Preserve it in
+        // full so scope, objective, evidence and output format survive compaction.
+        if (index === 1 && /\bROLE\b[\s\S]*\bMISSION\b[\s\S]*\bOUTPUT\b/.test(message.content)) return message;
+        return {
+          ...message,
+          content: message.content.length > perMessageLimit
+            ? `${message.content.slice(0, perMessageLimit).replace(/\s+\S*$/, '')}\n[Earlier verbose context compacted]`
+            : message.content,
+        };
+      });
+    const merged: { role: string; content: string }[] = [];
+    for (const message of bounded) {
+      const previous = merged.at(-1);
+      if (previous?.role === message.role) previous.content += `\n\n${message.content}`;
+      else merged.push({ ...message });
+    }
+    for (const message of merged) message.content = compactContent(message.content, perMessageLimit);
+
+    const configuredBudget = Number(process.env.TEMPEST_LOCAL_CONTEXT_CHARS || 24_000);
+    const contextBudget = Number.isFinite(configuredBudget) && configuredBudget >= 8_000
+      ? configuredBudget
+      : 24_000;
+    if (merged.reduce((sum, message) => sum + message.content.length, 0) <= contextBudget) return merged;
+
+    const head = merged.slice(0, 2);
+    const kept = [...head];
+    let used = head.reduce((sum, message) => sum + message.content.length, 0);
+    const tail: { role: string; content: string }[] = [];
+    for (let i = merged.length - 1; i >= head.length; i--) {
+      if (used + merged[i].content.length > contextBudget) continue;
+      tail.unshift(merged[i]);
+      used += merged[i].content.length;
+    }
+    const compacted: { role: string; content: string }[] = [];
+    for (const message of [...kept, ...tail]) {
+      const previous = compacted.at(-1);
+      if (previous?.role === message.role) previous.content += `\n\n${message.content}`;
+      else compacted.push({ ...message });
+    }
+    return compacted;
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
@@ -793,7 +912,31 @@ class LocalAdapter implements LLMProviderAdapter {
 
     const requestBody = openaiWire
       ? { model: this.config.model, messages: wireMessages, max_tokens: maxTokens, temperature, stream: false }
-      : { model: this.config.model, messages: wireMessages, stream: false, options: { num_predict: maxTokens, temperature } };
+      : {
+          model: this.config.model,
+          messages: wireMessages,
+          stream: false,
+          options: {
+            num_predict: maxTokens,
+            temperature,
+            // Ollama otherwise defaults many models to only 4096 tokens even when
+            // the model advertises a much larger context window.
+            num_ctx: Math.max(4096, Number(process.env.TEMPEST_LOCAL_NUM_CTX || 32768) || 32768),
+          },
+        };
+
+    const configuredLocalTimeout = Number(process.env.TEMPEST_LOCAL_TIMEOUT_MS || 3600000);
+    const localTimeoutMs = Number.isFinite(configuredLocalTimeout) && configuredLocalTimeout > 0
+      ? configuredLocalTimeout
+      : 3600000;
+    // Node/Undici otherwise applies its own ~5 minute response-header timeout,
+    // which fires before our one-hour AbortSignal when a large local model is
+    // still loading/evaluating the prompt and has not emitted headers yet.
+    const dispatcher = new UndiciAgent({
+      connectTimeout: Math.min(60000, localTimeoutMs),
+      headersTimeout: localTimeoutMs,
+      bodyTimeout: localTimeoutMs,
+    });
 
     try {
       const response = await fetch(url, {
@@ -805,11 +948,22 @@ class LocalAdapter implements LLMProviderAdapter {
           ...(openaiWire ? { Authorization: `Bearer ${this.config.apiKey || 'local'}` } : {}),
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(this.config.timeout || 120000),
-      });
+        signal: AbortSignal.timeout(localTimeoutMs),
+        dispatcher,
+      } as unknown as RequestInit & { dispatcher: UndiciAgent });
 
       if (!response.ok) {
-        throw new Error(`Local LLM error: ${response.status}`);
+        const rawResponseBody = await response.text().catch(() => '');
+        let responseBody = redactLedgerText(rawResponseBody, 4000);
+        try {
+          responseBody = redactLedgerText(JSON.stringify(redactSecrets(JSON.parse(rawResponseBody))), 4000);
+        } catch {
+          // Non-JSON error bodies are still covered by the string redactor above.
+        }
+        throw new Error(
+          `Local LLM HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}` +
+          `${responseBody ? `: ${responseBody}` : ' (empty response body)'}`
+        );
       }
 
       const data = await response.json() as OllamaResponse & {
@@ -839,11 +993,18 @@ class LocalAdapter implements LLMProviderAdapter {
       };
     } catch (error) {
       if (error instanceof TypeError && error.message.includes('fetch')) {
+        const cause = (error as TypeError & { cause?: unknown }).cause;
+        const causeText = cause instanceof Error
+          ? `${cause.name}: ${cause.message}`
+          : cause ? String(cause) : error.message;
         throw new Error(
-          'Could not connect to local LLM. Start Ollama (`ollama serve`), or point TEMPEST_LOCAL_BASE_URL at your OpenAI-compatible server (LM Studio / vLLM / llama.cpp).'
+          `Local LLM request failed at ${url} (${causeText}). `
+          + 'The server may be offline, may have closed an idle generation socket, or may still be loading the model.'
         );
       }
       throw error;
+    } finally {
+      await dispatcher.close().catch(() => undefined);
     }
   }
 }
@@ -865,7 +1026,7 @@ function renderToolContract(tools?: LLMToolDefinition[]): string {
     const props = (t.parameters?.properties || {}) as Record<string, { type?: string }>;
     const req = new Set(t.parameters?.required || []);
     const sig = Object.entries(props).map(([k, v]) => `${k}${req.has(k) ? '*' : ''}: ${v.type || 'any'}`).join(', ');
-    lines.push(`- ${t.name}(${sig}) — ${t.description}`);
+    lines.push(`- ${t.name}(${sig})`);
   }
   lines.push(
     '',
@@ -875,7 +1036,7 @@ function renderToolContract(tools?: LLMToolDefinition[]): string {
     '{"tool_calls":[{"name":"<tool>","arguments":{ ... }}]}',
     '```',
     '  The harness runs them (scope-gated) and returns the results as new messages; then you reason again.',
-    '• When the attack surface is exhausted and you are DONE, reply with your final debrief in prose (NO json block).',
+    '• When done, return the RESULT format required by the mission prompt (NO tool-call json block).',
     '• Never run these tools yourself — REQUEST them. Requesting is how you act.',
   );
   return lines.join('\n');
@@ -886,7 +1047,7 @@ function renderToolContract(tools?: LLMToolDefinition[]): string {
 // (ReDoS). Bounded work regardless of input shape (unbalanced braces, 80k '{', etc.).
 function* balancedObjectSpans(text: string): Generator<string> {
   const n = text.length;
-  let budget = 2_000_000; // total-scan cap → DoS-safe upper bound on worst-case work
+  let budget = 500_000; // total-scan cap → DoS-safe upper bound on worst-case work
   let spans = 0;
   for (let i = 0; i < n && spans < 200 && budget > 0; i++) {
     if (text[i] !== '{') continue;
@@ -985,7 +1146,33 @@ class CodexAdapter implements LLMProviderAdapter {
       parts.push('When the caller requests JSON, return only valid JSON or the exact requested fenced JSON block.');
     }
     if (options?.maxTokens) parts.push(`Target max output tokens: ${options.maxTokens}.`);
-    for (const message of messages) parts.push(renderCliMessage(message));
+    const compactMessage = (message: LLMMessage): string => {
+      const rendered = renderCliMessage(message);
+      const limit = 20_000;
+      if (rendered.length <= limit) return rendered;
+      const marker = '\n...[message middle omitted to stay within Codex input limit]...\n';
+      const side = Math.floor((limit - marker.length) / 2);
+      return `${rendered.slice(0, side)}${marker}${rendered.slice(-side)}`;
+    };
+    const renderedMessages = messages.map(compactMessage);
+    const configuredBudget = Number(process.env.TEMPEST_CODEX_PROMPT_CHARS || 400_000);
+    const promptBudget = Number.isFinite(configuredBudget) && configuredBudget >= 100_000
+      ? Math.min(configuredBudget, 900_000)
+      : 400_000;
+    const fixedLength = parts.reduce((sum, part) => sum + part.length + 1, 0);
+    const head = renderedMessages.slice(0, 2);
+    let used = fixedLength + head.reduce((sum, part) => sum + part.length + 1, 0);
+    const tail: string[] = [];
+    for (let i = renderedMessages.length - 1; i >= head.length; i--) {
+      if (used + renderedMessages[i].length + 1 > promptBudget) continue;
+      tail.unshift(renderedMessages[i]);
+      used += renderedMessages[i].length + 1;
+    }
+    parts.push(...head);
+    if (head.length + tail.length < renderedMessages.length) {
+      parts.push(`\n...[${renderedMessages.length - head.length - tail.length} older message(s) omitted to stay within Codex input limit]...`);
+    }
+    parts.push(...tail);
     return parts.join('\n');
   }
 
@@ -1025,10 +1212,12 @@ class CodexAdapter implements LLMProviderAdapter {
 
         let stdout = '';
         let stderr = '';
+        const envTimeout = Number(process.env.TEMPEST_CODEX_TIMEOUT_MS || 600000);
+        const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 600000;
         const timer = setTimeout(() => {
           child.kill('SIGTERM');
-          reject(new Error('Codex CLI timed out while planning'));
-        }, this.config.timeout || 240000);
+          reject(new Error(`Codex CLI timed out while planning after ${timeoutMs}ms`));
+        }, timeoutMs);
 
         child.stdout.on('data', chunk => { stdout += chunk.toString(); });
         child.stderr.on('data', chunk => { stderr += chunk.toString(); });
@@ -1041,7 +1230,12 @@ class CodexAdapter implements LLMProviderAdapter {
           if (code === 0) {
             resolve({ stdout, stderr });
           } else {
-            reject(new Error(`Codex CLI exited ${code}: ${(stderr || stdout).trim().slice(0, 4000)}`));
+            const raw = (stderr || stdout).trim();
+            const limit = 4000;
+            const diagnostic = raw.length <= limit
+              ? raw
+              : `${raw.slice(0, limit / 2)}\n...[Codex diagnostic middle omitted]...\n${raw.slice(-limit / 2)}`;
+            reject(new Error(`Codex CLI exited ${code}: ${diagnostic}`));
           }
         });
         child.stdin.end(prompt);
@@ -1179,6 +1373,7 @@ export function classifySoftFailure(r: LLMResponse): 'refusal' | 'empty' | null 
   if (isLikelyRefusal(r.content, r.finishReason)) return 'refusal';
   const hasContent = (r.content || '').trim().length > 0;
   const hasToolCalls = (r.toolCalls?.length || 0) > 0;
+  if (!hasToolCalls && isContextCompactionNotice(r.content || '')) return 'empty';
   if (!hasContent && !hasToolCalls) return 'empty';
   return null;
 }
@@ -1200,9 +1395,29 @@ export function classifyErrorKind(error: Error | null): string {
     return `http_${error.status}`;
   }
   const m = error.message || '';
-  if (/abort|timed? ?out|timeout/i.test(m)) return 'timeout';
-  if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket/i.test(m)) return 'network';
+  // Codex may echo the entire prompt before its actual failure. Tool schemas and
+  // prior results commonly contain the word "timeout", so classify CLI failures
+  // from the diagnostic tail where Codex prints the real cause.
+  const diagnostic = /^Codex CLI exited/i.test(m) ? m.slice(-2000) : m;
+  if (/input exceeds the maximum length|input_too_large|max_chars|context length|maximum context|too many tokens/i.test(diagnostic)) {
+    return 'context_length';
+  }
+  if (/flagged for possible cybersecurity risk|trusted access for cyber|content (?:was )?flagged|safety (?:policy|filter)|policy (?:refusal|violation)|request (?:was )?rejected/i.test(diagnostic)) {
+    return 'refusal';
+  }
+  if (/abort|timed? ?out|timeout/i.test(diagnostic)) return 'timeout';
+  if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket|stream disconnected/i.test(diagnostic)) return 'network';
   return 'unknown';
+}
+
+/** The configured fallback ladder is always available. Codex refusals engage it
+ * immediately; all hard Codex failures (including its ten-minute timeout) also
+ * advance to Ollama instead of failing the task outright. */
+export function shouldAdvanceFallback(primaryProvider: LLMProvider, rung: number, reason: string): boolean {
+  void primaryProvider;
+  void rung;
+  void reason;
+  return true;
 }
 
 export class LLMBackbone extends EventEmitter<LLMEvents> {
@@ -1266,6 +1481,18 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     return this.config.model;
   }
 
+  /** Choose the compact profile whenever this request may reach a local model.
+   * A Codex primary with an Ollama fallback must use one prompt both can handle. */
+  getPromptProfile(): 'large_model' | 'small_model_30b' {
+    const ladder = [
+      { provider: this.config.provider, model: this.config.model },
+      ...(this.config.fallbackChain || []),
+    ];
+    return ladder.some(entry => entry.provider === 'local' || /(?:^|[-_:])(30b|32b)(?:$|[-_:])/i.test(entry.model))
+      ? 'small_model_30b'
+      : 'large_model';
+  }
+
   /**
    * Validate the configuration
    */
@@ -1281,6 +1508,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     options?: ChatOptions
   ): Promise<LLMResponse> {
     const startTime = Date.now();
+    const requestId = randomUUID();
     this.emit('request:start', { messages });
 
     // The model ladder: primary first, then each configured fallback hop. A hop is
@@ -1291,6 +1519,14 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       { provider: this.config.provider, model: this.config.model, apiKey: this.config.apiKey, baseUrl: this.config.baseUrl },
       ...(this.config.fallbackChain || []),
     ];
+    const question = [...messages].reverse().find(message => message.role === 'user')?.content;
+    const auditContext = {
+      requestId,
+      primary: { provider: this.config.provider, model: this.config.model },
+      question: question ? redactLedgerText(question, 12000) : undefined,
+      conversation: fallbackConversation(messages),
+      messageCount: messages.length,
+    };
 
     let lastError: Error | null = null;
     let reframeNext = false; // honest authz restatement on the hop after a refusal
@@ -1330,8 +1566,29 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       if (!response) {
         const reason = classifyErrorKind(lastError);
         trail.push(`${hop.model}:${reason}`);
+        if (onFallback) {
+          await appendFallbackAudit({
+            ...auditContext,
+            event: 'fallback_result',
+            from: { provider: ladder[rung - 1].provider, model: ladder[rung - 1].model },
+            to: { provider: hop.provider, model: hop.model },
+            reason,
+            status: 'error',
+            fallbackError: lastError?.message,
+            durationMs: Date.now() - startTime,
+          });
+        }
         reframeNext = false;
-        if (hasNext) {
+        if (hasNext && shouldAdvanceFallback(this.config.provider, rung, reason)) {
+          await appendFallbackAudit({
+            ...auditContext,
+            event: 'fallback_trigger',
+            from: { provider: hop.provider, model: hop.model },
+            to: { provider: ladder[rung + 1].provider, model: ladder[rung + 1].model },
+            reason,
+            sourceError: lastError?.message,
+            durationMs: Date.now() - startTime,
+          });
           this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason });
           continue;
         }
@@ -1342,11 +1599,32 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       const soft = classifySoftFailure(response);
       if (soft) {
         trail.push(`${hop.model}:${soft}`);
+        if (onFallback) {
+          await appendFallbackAudit({
+            ...auditContext,
+            event: 'fallback_result',
+            from: { provider: ladder[rung - 1].provider, model: ladder[rung - 1].model },
+            to: { provider: hop.provider, model: hop.model },
+            reason: soft,
+            status: soft,
+            fallbackResponse: redactLedgerText(response.content || '', 30000),
+            durationMs: Date.now() - startTime,
+          });
+        }
         if (soft === 'refusal') {
           this.emit('request:refusal', { provider: hop.provider, model: hop.model, preview: (response.content || '').slice(0, 160) });
         }
         reframeNext = soft === 'refusal';
-        if (hasNext) {
+        if (hasNext && shouldAdvanceFallback(this.config.provider, rung, soft)) {
+          await appendFallbackAudit({
+            ...auditContext,
+            event: 'fallback_trigger',
+            from: { provider: hop.provider, model: hop.model },
+            to: { provider: ladder[rung + 1].provider, model: ladder[rung + 1].model },
+            reason: soft,
+            sourceResponse: redactLedgerText(response.content || '', 30000),
+            durationMs: Date.now() - startTime,
+          });
           this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason: soft });
           continue;
         }
@@ -1358,6 +1636,16 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       // ── success ──
       this.emit('request:complete', { response, durationMs: Date.now() - startTime });
       if (onFallback) {
+        await appendFallbackAudit({
+          ...auditContext,
+          event: 'fallback_result',
+          from: { provider: ladder[rung - 1].provider, model: ladder[rung - 1].model },
+          to: { provider: hop.provider, model: hop.model },
+          reason: trail.at(-1)?.split(':').at(-1) || 'fallback',
+          status: 'success',
+          fallbackResponse: redactLedgerText(response.content || '', 30000),
+          durationMs: Date.now() - startTime,
+        });
         this.emit('request:fallback', { fromModel: this.config.model, toModel: hop.model, engaged: true, reason: `recovered_after:${trail.join('>')}` });
       }
       return response;

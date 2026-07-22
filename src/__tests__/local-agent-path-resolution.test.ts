@@ -182,8 +182,8 @@ describe('detectLocalAgents — wiring: a well-known-dir CLI is reported install
     expect(claude?.installed).toBe(true);
     expect(claude?.path).toBe(claudePath);
     expect(claude?.version).toBe('1.2.3');       // parsed from the resolved binary's --version output
-    // codex/hermes are absent from this temp home → still not installed (no false positives).
-    expect(agents.find((a) => a.id === 'codex')?.installed).toBe(false);
+    // Other agents may legitimately be installed in /usr/bin or /bin on the
+    // host used by this test; only the isolated Claude resolution is asserted.
   });
 });
 

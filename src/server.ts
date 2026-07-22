@@ -28,7 +28,7 @@ import { AGENT_PROMPT_PACKS, FOREFRONT_PRESSURE_LANES, OPERATOR_RUNBOOKS, RESOUR
 import { AI_REDTEAM_PLAYBOOK, AI_REDTEAM_TECHNIQUE_IDS, aiRedTeamBriefing } from './resources/ai-redteam-playbook.js';
 import { OPERATOR_SYSTEM_PROMPTS, PLINIAN_OPERATOR_DOCTRINE, THE_FIXER_SYSTEM_PROMPT } from './prompts/index.js';
 import { createTargetFromUrl, createTargetFromIP } from './target/index.js';
-import type { OperatorArchetype } from './types/index.js';
+import type { OperatorArchetype, FallbackEntry } from './types/index.js';
 import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type OperatorOverride } from './operators/index.js';
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { redactCredential } from './evidence/index.js';
@@ -4382,6 +4382,7 @@ function healthPayload(): Record<string, unknown> {
       connected: Boolean(llm) || llmConfig.provider === 'codex',
       provider: llmConfig.provider,
       model: llmConfig.model,
+      fallbackChain: (llmConfig.fallbackChain || []).map(({ provider, model, baseUrl }) => ({ provider, model, baseUrl })),
       codexAccountMode: '/api/codex/status',
     },
     storage: {
@@ -4619,6 +4620,13 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
       approval: 'Networked or active commands require ScopeGuard receipts unless they target local loopback/lab fixtures.',
       catalogOnly: 'Credential, post-exploitation, C2, and broad exploitation platforms stay catalog-only until narrow adapters and gates exist.',
       evidenceFlow: 'Tool output should become evidence, then findings, then retests, then explicit memory proposals.',
+    },
+    orchestration: getTempestCommand()?.getStatus().orchestration || {
+      metrics: null,
+      budgets: {},
+      conflicts: [],
+      preflight: {},
+      phaseStatuses: {},
     },
   };
 }
@@ -6085,6 +6093,7 @@ app.get('/api/llm/status', (_req: Request, res: Response) => {
     model: llmConfig.model,
     hasApiKey: !!llmConfig.apiKey,
     configured: Boolean(llmConfig.apiKey) || providerRunsKeyless(llmConfig.provider),
+    fallbackChain: (llmConfig.fallbackChain || []).map(({ provider, model, baseUrl }) => ({ provider, model, baseUrl })),
   });
 });
 
@@ -6708,9 +6717,11 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
   provider: any;
   model: string;
   apiKey?: string;
+  baseUrl?: string;
   maxTokens: number;
   temperature: number;
   timeout: number;
+  fallbackChain?: FallbackEntry[];
 } {
   const defaultConfig = config.getLLMConfig();
   const selectedProvider = provider || defaultConfig.provider;
@@ -6736,9 +6747,11 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
     provider: selectedProvider as any,
     model: model || baseConfig.model,
     apiKey: effectiveKey,
+    baseUrl: baseConfig.baseUrl,
     maxTokens: 8192,
     temperature: 0.4,
     timeout: readGeneralTimeoutEnv() ?? 300000, // General planning needs room (was a hardcoded 60s); override via env
+    fallbackChain: baseConfig.fallbackChain,
   };
 }
 

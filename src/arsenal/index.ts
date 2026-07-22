@@ -5,16 +5,19 @@
  */
 
 import { EventEmitter } from 'eventemitter3';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { promisify } from 'util';
 import * as net from 'net';
 import * as dns from 'dns';
 import * as tls from 'tls';
+import * as http from 'http';
+import * as https from 'https';
 import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
+import { ToolOrchestrator, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -33,6 +36,80 @@ const dnsResolveTxt = promisify(dns.resolveTxt);
 const dnsResolveNs = promisify(dns.resolveNs);
 const dnsReverse = promisify(dns.reverse);
 
+/** Interactive web analyzers used to abort too early on busy or rate-limited
+ * targets, especially while Nuclei and discovery tools were running. Keep the
+ * value configurable, but allow two minutes by default for one request. */
+export function webRequestTimeoutMs(): number {
+  const configured = Number(process.env.T3MP3ST_WEB_REQUEST_TIMEOUT_MS || 120000);
+  return Number.isFinite(configured)
+    ? Math.max(5000, Math.min(600000, Math.round(configured)))
+    : 120000;
+}
+
+async function usableWebWordlist(requested?: string): Promise<string> {
+  const fallback = '/usr/share/wordlists/dirb/common.txt';
+  const candidate = requested?.trim() || fallback;
+  try {
+    await access(candidate);
+    return candidate;
+  } catch {
+    await access(fallback);
+    return fallback;
+  }
+}
+
+export function formatDnsRecords(recordType: string, records: unknown): string[] {
+  if (Array.isArray(records)) {
+    return records.map(record => {
+      if (typeof record === 'string') return record;
+      if (Array.isArray(record)) return record.join('');
+      if (record && typeof record === 'object') return Object.entries(record)
+        .map(([key, value]) => `${key}=${String(value)}`)
+        .join(' ');
+      return String(record);
+    });
+  }
+  if (records && typeof records === 'object') {
+    const record = records as Record<string, unknown>;
+    if (recordType === 'SOA') {
+      return [
+        `nsname=${record.nsname} hostmaster=${record.hostmaster} serial=${record.serial} `
+        + `refresh=${record.refresh} retry=${record.retry} expire=${record.expire} minttl=${record.minttl}`,
+      ];
+    }
+    return [Object.entries(record).map(([key, value]) => `${key}=${String(value)}`).join(' ')];
+  }
+  return records === undefined || records === null ? [] : [String(records)];
+}
+
+export function parsePortSpec(spec: string): number[] {
+  const ports = new Set<number>();
+  for (const rawPart of spec.split(',')) {
+    const part = rawPart.trim();
+    if (!part) continue;
+    const range = part.match(/^(\d+)-(\d+)$/);
+    if (range) {
+      const start = Number(range[1]);
+      const end = Number(range[2]);
+      if (start < 1 || end > 65535 || start > end) throw new Error(`Invalid port range: ${part}`);
+      for (let port = start; port <= end; port++) ports.add(port);
+      continue;
+    }
+    if (!/^\d+$/.test(part)) throw new Error(`Invalid port: ${part}`);
+    const port = Number(part);
+    if (port < 1 || port > 65535) throw new Error(`Invalid port: ${part}`);
+    ports.add(port);
+  }
+  if (ports.size === 0) throw new Error('No valid ports specified');
+  return [...ports];
+}
+
+/** Missing records are a valid negative DNS answer, not a tool execution failure. */
+export function isExpectedDnsAbsence(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENODATA' || code === 'ENOTFOUND';
+}
+
 import { CVE_DATABASE } from '../stubs/index.js';
 import type { CVEEntry } from '../stubs/index.js';
 
@@ -40,28 +117,45 @@ import type { CVEEntry } from '../stubs/index.js';
 // PORT SCANNING UTILITY
 // =============================================================================
 
-async function checkPort(host: string, port: number, timeout: number = 2000): Promise<boolean> {
+type PortProbeState = 'open' | 'closed' | 'filtered/timeout' | 'unreachable';
+
+async function probePort(host: string, port: number, timeout: number = 2000): Promise<PortProbeState> {
   return new Promise((resolve) => {
     const socket = new net.Socket();
     socket.setTimeout(timeout);
 
     socket.on('connect', () => {
       socket.destroy();
-      resolve(true);
+      resolve('open');
     });
 
     socket.on('timeout', () => {
       socket.destroy();
-      resolve(false);
+      resolve('filtered/timeout');
     });
 
-    socket.on('error', () => {
+    socket.on('error', (error: NodeJS.ErrnoException) => {
       socket.destroy();
-      resolve(false);
+      resolve(error.code === 'ECONNREFUSED' ? 'closed' : 'unreachable');
     });
 
     socket.connect(port, host);
   });
+}
+
+async function checkPort(host: string, port: number, timeout: number = 2000): Promise<boolean> {
+  return (await probePort(host, port, timeout)) === 'open';
+}
+
+/** Models commonly supply small timeout values as seconds even though the original
+ * schema said milliseconds. Treat 1..60 as seconds, otherwise milliseconds, and
+ * clamp pathological values so a typo cannot create instant false negatives or a
+ * permanently stuck socket. */
+export function normalizePortScanTimeout(raw: unknown): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 2000;
+  const milliseconds = parsed <= 60 ? parsed * 1000 : parsed;
+  return Math.max(250, Math.min(30_000, Math.round(milliseconds)));
 }
 
 // =============================================================================
@@ -173,6 +267,36 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
   throw new Error('Target request redirect handling failed');
 }
 
+async function nativeHttpRequest(
+  url: string,
+  method: string,
+  explicitHeaders?: Record<string, string>,
+  body?: string,
+  timeoutMs = 30000
+): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]> }> {
+  const target = new URL(url);
+  if (!['http:', 'https:'].includes(target.protocol)) throw new Error(`Unsupported protocol: ${target.protocol}`);
+  const mergedHeaders = targetHeadersForUrl(target, explicitHeaders);
+  const headers = mergedHeaders ? Object.fromEntries(mergedHeaders.entries()) : undefined;
+  const transport = target.protocol === 'https:' ? https : http;
+  return new Promise((resolve, reject) => {
+    const request = transport.request(target, { method, headers }, response => {
+      const responseHeaders = Object.fromEntries(Object.entries(response.headers)
+        .filter((entry): entry is [string, string | string[]] => entry[1] !== undefined));
+      response.resume();
+      resolve({
+        status: response.statusCode || 0,
+        statusText: response.statusMessage || '',
+        headers: responseHeaders,
+      });
+    });
+    request.setTimeout(timeoutMs, () => request.destroy(new Error(`Request timed out after ${timeoutMs}ms`)));
+    request.on('error', reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
 // =============================================================================
 // EVENTS
 // =============================================================================
@@ -181,6 +305,7 @@ export interface ArsenalEvents {
   'tool:registered': CustomTool;
   'tool:executed': { tool: CustomTool; result: ToolResult; durationMs: number };
   'tool:error': { tool: CustomTool; error: Error };
+  'tool:orchestration': OrchestratorEvent;
 }
 
 export interface ToolExecution {
@@ -282,6 +407,22 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
   return null;
 }
 
+async function isResolvedAddressOfAllowedHost(scope: ArsenalScope | null, address: string): Promise<boolean> {
+  if (!scope || net.isIP(address) === 0 || address.includes('/')) return false;
+  const hostnames = scope.allowedHosts.filter(host => net.isIP(host) === 0);
+  for (const hostname of hostnames) {
+    try {
+      const records = net.isIP(address) === 6
+        ? await dns.promises.resolve6(hostname)
+        : await dns.promises.resolve4(hostname);
+      if (records.includes(address)) return true;
+    } catch {
+      // A failed lookup does not widen scope; try the next explicitly allowed hostname.
+    }
+  }
+  return false;
+}
+
 /** Best-effort target for an approval request/warning — the first target-like param, else the
  *  context target address. Informational only (the scope gate does the real host math). */
 function approvalTargetOf(context: ToolContext): string | undefined {
@@ -312,6 +453,51 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   /** Capability approval gate; null = gating off (backward-compat). The engine wires one for live runs. */
   private approval: ApprovalController | null = null;
   private executions: ToolExecution[] = [];
+  /** Heavy scanners against one host must not run concurrently. */
+  private hostScannerTails = new Map<string, Promise<void>>();
+  /** Reuse identical successful Nuclei scans within one mission. */
+  private nucleiResultCache = new Map<string, ToolResult>();
+  /** Shared across every agent attached to this Arsenal; LLM plans cannot bypass it. */
+  private readonly orchestrator = new ToolOrchestrator({
+    onEvent: event => this.emit('tool:orchestration', event),
+  });
+
+  private async runToolHandler(toolName: string, context: ToolContext, handler: CustomTool['handler']): Promise<ToolResult> {
+    const serialized = new Set(['nuclei_scan', 'nmap_scan', 'ffuf_fuzz', 'dir_bruteforce']);
+    if (!serialized.has(toolName)) return handler(context);
+
+    const rawTarget = approvalTargetOf(context) || context.target?.address || 'unknown';
+    const host = hostFromTargetValue(rawTarget) || rawTarget.toLowerCase();
+    const previous = this.hostScannerTails.get(host) || Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const tail = previous.catch(() => {}).then(() => gate);
+    this.hostScannerTails.set(host, tail);
+
+    await previous.catch(() => {});
+    try {
+      const cacheKey = toolName === 'nuclei_scan'
+        ? JSON.stringify({
+            host,
+            target: String(context.parameters.target || rawTarget).replace(/\/$/, ''),
+            severity: String(context.parameters.severity || 'medium,high,critical')
+              .split(',').map(value => value.trim()).filter(Boolean).sort(),
+            tags: String(context.parameters.tags || '')
+              .split(',').map(value => value.trim()).filter(Boolean).sort(),
+          })
+        : undefined;
+      if (cacheKey) {
+        const cached = this.nucleiResultCache.get(cacheKey);
+        if (cached) return cached;
+      }
+      const result = await handler(context);
+      if (cacheKey && result.success) this.nucleiResultCache.set(cacheKey, result);
+      return result;
+    } finally {
+      release();
+      if (this.hostScannerTails.get(host) === tail) this.hostScannerTails.delete(host);
+    }
+  }
 
   /**
    * Register a tool
@@ -358,6 +544,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   /** Set (or clear) the capability-approval gate enforced in execute() for intrusive/dangerous tools. */
   setApprovalController(approval: ApprovalController | null): void { this.approval = approval; }
   getApprovalController(): ApprovalController | null { return this.approval; }
+  getOrchestrator(): ToolOrchestrator { return this.orchestrator; }
 
   /**
    * Execute a tool
@@ -373,12 +560,18 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
     // Egress scope gate: deny out-of-scope network targets BEFORE the handler runs. A tool call
     // never reaches a host outside the authorized scope, regardless of what the model supplied.
-    const blockedHost = scopeViolation(this.scope, context);
+    let blockedHost = scopeViolation(this.scope, context);
+    // Models commonly continue a hostname assessment using the address returned by dns_lookup.
+    // Admit that address only after independently proving that it currently resolves from one of
+    // the explicitly authorized hostnames. Arbitrary model-supplied IPs remain denied.
+    if (blockedHost && await isResolvedAddressOfAllowedHost(this.scope, blockedHost)) blockedHost = null;
     if (blockedHost) {
       const denied: ToolResult = {
         success: false,
         error: `SCOPE DENIED: target '${blockedHost}' is not in the authorized scope — ${toolName} refused before execution. Only authorized / loopback / lab targets are permitted.`,
+        metadata: { orchestrationStatus: 'scope_denied', executionStatus: 'blocked' },
       };
+      this.orchestrator.recordBlocked(tool, context, denied, 'scope_denied');
       this.emit('tool:error', { tool, error: new Error(denied.error) });
       return denied;
     }
@@ -397,7 +590,8 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       };
       const decision = await this.approval.gate(request);
       if (!decision.allowed) {
-        const denied: ToolResult = { success: false, error: `APPROVAL REQUIRED: ${decision.reason}` };
+        const denied: ToolResult = { success: false, error: `APPROVAL REQUIRED: ${decision.reason}`, metadata: { orchestrationStatus: 'not_authorized', executionStatus: 'blocked' } };
+        this.orchestrator.recordBlocked(tool, context, denied, 'not_authorized');
         this.emit('tool:error', { tool, error: new Error(denied.error) });
         return denied;
       }
@@ -413,7 +607,11 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     const startTime = Date.now();
 
     try {
-      const result = redactConfiguredSecrets(await tool.handler(context));
+      const result = redactConfiguredSecrets(await this.orchestrator.execute(
+        tool,
+        context,
+        () => this.runToolHandler(toolName, context, tool.handler)
+      ));
       const durationMs = Date.now() - startTime;
 
       execution.completedAt = Date.now();
@@ -579,14 +777,14 @@ export const BUILTIN_TOOLS: CustomTool[] = [
     category: 'recon',
     parameters: [
       { name: 'domain', type: 'string', description: 'Domain to lookup', required: true },
-      { name: 'type', type: 'string', description: 'Record type (A, AAAA, MX, TXT, NS)', required: false, default: 'A' },
+      { name: 'type', type: 'string', description: 'Record type (A, AAAA, MX, TXT, NS, SOA, CNAME, CAA, DNSKEY, DS; AXFR is reported as unsupported)', required: false, default: 'A' },
     ],
     handler: async (context) => {
       const domain = context.parameters.domain as string;
       const recordType = (context.parameters.type as string || 'A').toUpperCase();
 
       try {
-        let records: string[] = [];
+        let records: unknown = [];
 
         switch (recordType) {
           case 'A':
@@ -605,15 +803,47 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           case 'NS':
             records = await dnsResolveNs(domain);
             break;
+          case 'SOA':
+            records = await dns.promises.resolveSoa(domain);
+            break;
+          case 'CAA':
+            records = await dns.promises.resolveCaa(domain);
+            break;
+          case 'DNSKEY':
+          case 'DS': {
+            // Node's high-level resolver does not expose DNSKEY/DS on every
+            // supported runtime. Resolve through the installed `dig` binary so
+            // the requested RRset is returned instead of unrelated ANY records.
+            const result = await runSubprocess('dig', ['+short', domain, recordType], { timeout: 30000 });
+            if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `dig exited ${result.exitCode}`);
+            records = result.stdout.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+            break;
+          }
+          case 'AXFR':
+            return {
+              success: true,
+              output: `DNS AXFR lookup for ${domain}: zone transfer is not supported by dns_lookup; use an explicitly authorized DNS transfer tool.`,
+            };
           default:
-            records = await dnsResolve(domain, recordType) as string[];
+            records = await dnsResolve(domain, recordType);
         }
+
+        const formattedRecords = formatDnsRecords(recordType, records);
 
         return {
           success: true,
-          output: `DNS ${recordType} lookup for ${domain}:\n${records.join('\n')}`,
+          output: formattedRecords.length > 0
+            ? `DNS ${recordType} lookup for ${domain}:\n${formattedRecords.join('\n')}`
+            : `DNS ${recordType} lookup for ${domain}: no records found`,
         };
       } catch (error) {
+        if (isExpectedDnsAbsence(error)) {
+          const code = (error as NodeJS.ErrnoException).code;
+          return {
+            success: true,
+            output: `DNS ${recordType} lookup for ${domain}: no records found (${code})`,
+          };
+        }
         return {
           success: false,
           error: `DNS lookup failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -628,7 +858,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
     parameters: [
       { name: 'target', type: 'string', description: 'Target IP or hostname', required: true },
       { name: 'ports', type: 'string', description: 'Ports to scan (e.g., "22,80,443")', required: false, default: '22,80,443,8080' },
-      { name: 'timeout', type: 'number', description: 'Timeout per port in ms', required: false, default: 2000 },
+      { name: 'timeout', type: 'number', description: 'Timeout per port: values 1-60 are seconds; larger values are milliseconds', required: false, default: 2000 },
     ],
     handler: async (context) => {
       const target = context.parameters.target as string || context.target?.address;
@@ -637,8 +867,13 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }
 
       const portsStr = context.parameters.ports as string || '22,80,443,8080';
-      const ports = portsStr.split(',').map(p => parseInt(p.trim(), 10)).filter(p => !isNaN(p));
-      const timeout = (context.parameters.timeout as number) || 2000;
+      let ports: number[];
+      try {
+        ports = parsePortSpec(portsStr);
+      } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
+      }
+      const timeout = normalizePortScanTimeout(context.parameters.timeout);
 
       const portServices: Record<number, string> = {
         21: 'ftp', 22: 'ssh', 23: 'telnet', 25: 'smtp', 53: 'dns',
@@ -651,29 +886,29 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       const openPorts: number[] = [];
 
       // Scan ports in parallel with concurrency limit
-      const concurrency = 10;
+      const concurrency = ports.length > 1000 ? 256 : ports.length > 100 ? 64 : 10;
       for (let i = 0; i < ports.length; i += concurrency) {
         const batch = ports.slice(i, i + concurrency);
         const checks = await Promise.all(
           batch.map(async (port) => {
-            const isOpen = await checkPort(target, port, timeout);
-            return { port, isOpen };
+            const state = await probePort(target, port, timeout);
+            return { port, state };
           })
         );
 
-        for (const { port, isOpen } of checks) {
-          if (isOpen) {
+        for (const { port, state } of checks) {
+          if (state === 'open') {
             openPorts.push(port);
             results.push(`${port}/tcp open ${portServices[port] || 'unknown'}`);
           } else {
-            results.push(`${port}/tcp closed`);
+            results.push(`${port}/tcp ${state}`);
           }
         }
       }
 
       return {
         success: true,
-        output: `Port scan of ${target} (${ports.length} ports scanned):\n${results.join('\n')}\n\nOpen ports: ${openPorts.length}`,
+        output: `Port scan of ${target} (${ports.length} ports scanned, ${timeout}ms per port):\n${results.join('\n')}\n\nOpen ports: ${openPorts.length}`,
         findings: openPorts.length > 0 ? [{
           title: 'Open Ports Detected',
           severity: 'info',
@@ -777,11 +1012,33 @@ export const BUILTIN_TOOLS: CustomTool[] = [
 
       const whoisServer = whoisServers[tld] || `whois.nic.${tld}`;
 
+      // Prefer the platform WHOIS client: unlike the simple socket fallback it follows registry
+      // referrals and knows newer TLD mappings such as .jetzt.
+      if (await isToolAvailable('whois')) {
+        const result = await runSubprocess('whois', [domain], { timeout: 30000, maxOutput: 2 * 1024 * 1024 });
+        if (result.exitCode === 0 && result.stdout.trim()) {
+          const lines = result.stdout.split('\n');
+          const importantFields = [
+            'domain name', 'registrar', 'creation date', 'updated date', 'expiration date',
+            'registry expiry', 'registrant', 'name server', 'status', 'dnssec', 'registrar abuse',
+          ];
+          const extracted = lines.filter(line => {
+            const lower = line.toLowerCase();
+            return importantFields.some(field => lower.includes(field));
+          });
+          const output = extracted.length > 0 ? extracted.slice(0, 20).join('\n') : result.stdout.slice(0, 2000);
+          return {
+            success: true,
+            output: `WHOIS for ${domain}:\n\n${output}${extracted.length > 20 ? '\n... (truncated)' : ''}`,
+          };
+        }
+      }
+
       return new Promise((resolve) => {
         const socket = new net.Socket();
         let data = '';
 
-        socket.setTimeout(10000);
+        socket.setTimeout(30000);
 
         socket.on('connect', () => {
           socket.write(`${domain}\r\n`);
@@ -867,17 +1124,52 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       const body = context.parameters.body as string | undefined;
 
       try {
+        // WHATWG fetch deliberately rejects TRACE. The native client supports it and keeps the
+        // same exact-origin header injection/redaction rules, so this is a real result rather than
+        // a permanent "method unsupported" tool failure.
+        if (method.toUpperCase() === 'TRACE') {
+          const response = await nativeHttpRequest(url, 'TRACE', headers, body, webRequestTimeoutMs());
+          return redactConfiguredSecrets({
+            success: true,
+            output: `HTTP TRACE ${url}\nStatus: ${response.status} ${response.statusText}\nHeaders: ${JSON.stringify(response.headers, null, 2)}`,
+            metadata: { responseStatus: response.status, responseHeaders: response.headers, responseBody: '', finalUrl: url, redirectChain: [] },
+          });
+        }
         const response = await targetFetch(url, {
           method,
           headers,
           body: body && method !== 'GET' ? body : undefined,
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
 
         const responseHeaders = Object.fromEntries(response.headers.entries());
+        const responseBody = method.toUpperCase() === 'HEAD' ? '' : (await response.text()).slice(0, 1024 * 1024);
+        const title = responseBody.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim();
+        const technologies = [
+          responseHeaders.server,
+          responseHeaders['x-powered-by'],
+          responseHeaders['cf-ray'] ? 'Cloudflare' : '',
+          responseHeaders['x-amz-cf-id'] ? 'CloudFront' : '',
+          /ddos-guard|__ddg/i.test(`${JSON.stringify(responseHeaders)} ${responseBody}`) ? 'DDoS-Guard' : '',
+        ].filter(Boolean);
         return {
           success: true,
           output: `HTTP ${method} ${url}\nStatus: ${response.status} ${response.statusText}\nHeaders: ${JSON.stringify(responseHeaders, null, 2)}`,
+          metadata: {
+            responseStatus: response.status,
+            responseHeaders,
+            responseBody,
+            responseBodyHash: createHash('sha256').update(responseBody).digest('hex'),
+            contentType: responseHeaders['content-type'],
+            cookies: responseHeaders['set-cookie'] || '',
+            csp: responseHeaders['content-security-policy'] || responseHeaders['content-security-policy-report-only'] || '',
+            title,
+            server: responseHeaders.server,
+            technologies,
+            finalUrl: response.url || url,
+            redirectChain: response.redirected ? [url, response.url] : [url],
+            wafChallenge: /captcha|challenge-platform|checking your browser|access denied|request blocked/i.test(responseBody),
+          },
         };
       } catch (error) {
         return {
@@ -904,7 +1196,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       try {
         const response = await targetFetch(url, {
           method: 'HEAD',
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
         const analysis = securityHeaders.map(h => {
           const value = response.headers.get(h);
@@ -1014,7 +1306,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
 
       try {
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
 
         const headers = Object.fromEntries(response.headers.entries());
@@ -1307,7 +1599,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           host,
           port,
           rejectUnauthorized: false, // Allow self-signed for scanning
-          timeout: 10000,
+          timeout: webRequestTimeoutMs(),
         }, () => {
           try {
             // Get certificate info
@@ -1724,7 +2016,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const robotsUrl = `${baseUrl}/robots.txt`;
         const response = await targetFetch(robotsUrl, {
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
 
         if (response.status === 404) {
@@ -1885,7 +2177,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         // Fetch main page
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
         const headers = Object.fromEntries(response.headers.entries());
         const body = await response.text();
@@ -2114,7 +2406,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const response = await targetFetch(url, {
           method: 'GET',
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
 
         const csp = response.headers.get('content-security-policy');
@@ -2522,7 +2814,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
 
       try {
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
           redirect: 'manual', // Don't follow redirects to capture Set-Cookie
         });
 
@@ -2923,7 +3215,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const response = await targetFetch(url, {
           method: 'GET',
-          signal: AbortSignal.timeout(10000),
+          signal: AbortSignal.timeout(webRequestTimeoutMs()),
         });
 
         const xfo = response.headers.get('x-frame-options');
@@ -3172,7 +3464,7 @@ export async function isToolAvailable(command: string): Promise<boolean> {
 export async function runSubprocess(
   command: string,
   args: string[],
-  options?: { timeout?: number; maxOutput?: number }
+  options?: { timeout?: number; maxOutput?: number; signal?: AbortSignal }
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const timeout = options?.timeout ?? 60000;
   const maxOutput = options?.maxOutput ?? 1024 * 1024; // 1MB
@@ -3181,10 +3473,14 @@ export async function runSubprocess(
     const { stdout, stderr } = await execFileAsync(command, args, {
       timeout,
       maxBuffer: maxOutput,
+      signal: options?.signal,
     });
     return { stdout, stderr, exitCode: 0 };
   } catch (error: unknown) {
-    const err = error as { stdout?: string; stderr?: string; code?: number; killed?: boolean };
+    const err = error as { stdout?: string; stderr?: string; code?: number; killed?: boolean; name?: string };
+    if (options?.signal?.aborted || err.name === 'AbortError') {
+      return { stdout: err.stdout || '', stderr: `Process aborted: ${String(options?.signal?.reason || 'policy stop')}`, exitCode: -2 };
+    }
     if (err.killed) {
       return { stdout: err.stdout || '', stderr: 'Process killed (timeout)', exitCode: -1 };
     }
@@ -3205,14 +3501,33 @@ const DANGEROUS_EXTERNAL_FLAGS: Record<string, RegExp> = {
   curl: /^(-o|-O|--output|--remote-name|-K|--config|-T|--upload-file|-x|--proxy|--preproxy|-D|--dump-header|--trace|--trace-ascii|-w|--write-out|--cert|--key|--cacert|--capath|--cert-type|--key-type|--output-dir|--create-dirs|-c|--cookie-jar)$/i,
   nmap: /^(-o[NXGAS]|--script|--script-args|--script-args-file|--script-help|--script-updatedb|-iL|--excludefile|--datadir|--servicedb|--versiondb|--resume|--stylesheet|--webxml)$/i,
 };
-function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): string[] {
+const DANGEROUS_FLAGS_WITH_VALUES: Record<'curl' | 'nmap', Set<string>> = {
+  curl: new Set([
+    '-o', '--output', '-K', '--config', '-T', '--upload-file', '-x', '--proxy', '--preproxy',
+    '-D', '--dump-header', '--trace', '--trace-ascii', '-w', '--write-out', '--cert', '--key',
+    '--cacert', '--capath', '--cert-type', '--key-type', '--output-dir', '-c', '--cookie-jar',
+  ].map(flag => flag.toLowerCase())),
+  nmap: new Set([
+    '-on', '-ox', '-og', '-oa', '-os', '--script', '--script-args', '--script-args-file',
+    '--script-help', '-il', '--excludefile', '--datadir', '--servicedb', '--versiondb', '--resume',
+    '--stylesheet',
+  ]),
+};
+
+export function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): string[] {
   const bad = DANGEROUS_EXTERNAL_FLAGS[tool];
   const toks = (raw || '').split(/\s+/).filter(Boolean);
   const out: string[] = [];
   for (let i = 0; i < toks.length; i++) {
-    const name = toks[i].split('=')[0];
-    if (bad.test(name)) {
-      if (!toks[i].includes('=') && toks[i + 1] && !toks[i + 1].startsWith('-')) i++; // also drop the flag's value token
+    const token = toks[i];
+    const name = token.split('=')[0];
+    // curl accepts attached short-option values (`-D-`, `-oFILE`, `-KFILE`, ...).
+    // Treat those as dangerous too; checking only the exact option left the value `-`
+    // behind for `-D -`, which curl then interpreted as an invalid standalone option.
+    const attachedDangerousCurlValue = tool === 'curl' && /^-(?:o|K|T|x|D|w|c).+/i.test(token);
+    if (bad.test(name) || attachedDangerousCurlValue) {
+      const consumesNext = DANGEROUS_FLAGS_WITH_VALUES[tool].has(name.toLowerCase());
+      if (consumesNext && !token.includes('=') && !attachedDangerousCurlValue && toks[i + 1] !== undefined) i++;
       continue;
     }
     out.push(toks[i]);
@@ -3220,13 +3535,110 @@ function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): string[] {
   return out;
 }
 
+/** Split newline/comma-separated headers without splitting legal commas inside a value. */
+export function parseCurlHeaderLines(raw?: string): string[] {
+  return (raw || '')
+    .split(/\r?\n|,(?=\s*[!#$%&'*+.^_`|~0-9A-Za-z-]+\s*:)/)
+    .map(header => header.trim())
+    .filter(Boolean);
+}
+
+export function isRetryableCurlExit(exitCode: number | string): boolean {
+  // Retry only idempotent GET/HEAD calls for transient DNS/connect/transfer failures:
+  // 6 resolve, 7 connect, 18 partial body, 28 timeout, 35 TLS handshake, 52 empty reply,
+  // 56 receive failure. Certificate validation and HTTP errors remain final.
+  return [6, 7, 18, 28, 35, 52, 56].includes(Number(exitCode));
+}
+
+/** Keep Node's subprocess watchdog beyond curl's own deadline so curl can
+ * return its real diagnostic instead of being killed at the same instant. */
+export function resolveCurlProcessTimeoutMs(args: string[]): number {
+  let curlMaxSeconds = 60;
+  for (let index = 0; index < args.length; index++) {
+    const token = args[index];
+    const long = token.match(/^--max-time=(\d+(?:\.\d+)?)$/);
+    const short = token.match(/^-m(\d+(?:\.\d+)?)$/);
+    const separate = token === '--max-time' || token === '-m' ? Number(args[index + 1]) : NaN;
+    const value = long ? Number(long[1]) : short ? Number(short[1]) : separate;
+    if (Number.isFinite(value) && value > 0) curlMaxSeconds = value;
+  }
+  return Math.max(65000, Math.min(360000, Math.ceil(curlMaxSeconds * 1000) + 5000));
+}
+
+export function enforceCurlMinimumTimeout(args: string[], minimumSeconds: number): void {
+  let found = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--max-time' || args[i] === '-m') {
+      found = true;
+      const value = Number(args[i + 1]);
+      if (Number.isFinite(value) && value > 0 && value < minimumSeconds) args[i + 1] = String(minimumSeconds);
+    } else {
+      const match = args[i].match(/^(--max-time=|-m)(\d+(?:\.\d+)?)$/);
+      if (match) {
+        found = true;
+        if (Number(match[2]) < minimumSeconds) args[i] = `${match[1]}${minimumSeconds}`;
+      }
+    }
+  }
+  if (!found) args.push('--max-time', String(minimumSeconds));
+}
+
+function compactCurlOutput(output: string, limit = 512 * 1024): string {
+  if (output.length <= limit) return output;
+  const marker = `\n...[curl output truncated: ${output.length - limit} characters omitted]...\n`;
+  const head = Math.floor(limit * 0.75);
+  const tail = Math.max(0, limit - head - marker.length);
+  return `${output.slice(0, head)}${marker}${output.slice(-tail)}`;
+}
+
 function withoutCurlRedirectFlags(flags: string[]): string[] {
   return flags.filter(flag => !/^--location(?:-trusted)?(?:=|$)/i.test(flag) && !/^-[^-]*L/.test(flag));
+}
+
+function portCountFromSpec(ports?: string): number | undefined {
+  if (!ports?.trim()) return undefined;
+  let count = 0;
+  for (const part of ports.split(',')) {
+    const value = part.trim();
+    const range = value.match(/^(\d+)-(\d+)$/);
+    if (range) count += Math.max(0, Number(range[2]) - Number(range[1]) + 1);
+    else if (/^\d+$/.test(value)) count++;
+  }
+  return count || undefined;
+}
+
+/** Keep broad single-host scans finite on filtered networks without changing targeted scans. */
+export function normalizeNmapRuntimeFlags(flags: string[], ports?: string): string[] {
+  const portCount = portCountFromSpec(ports);
+  if ((portCount || 0) <= 10_000) return [...flags];
+  const normalized = [...flags];
+  const has = (name: string): boolean => normalized.some(flag => flag === name || flag.startsWith(`${name}=`));
+  if (!normalized.some(flag => /^-T[0-5]$/i.test(flag))) normalized.push('-T4');
+  if (!has('--max-retries')) normalized.push('--max-retries', '1');
+  if (!has('--min-rate')) normalized.push('--min-rate', '500');
+  if (!has('--host-timeout')) normalized.push('--host-timeout', '10m');
+  return normalized;
+}
+
+/** Give broad/version-heavy scans enough wall time while retaining a finite cap. */
+export function resolveNmapTimeoutMs(flags: string[], ports?: string): number {
+  const override = Number(process.env.T3MP3ST_NMAP_TIMEOUT_MS);
+  if (Number.isFinite(override) && override > 0) {
+    return Math.max(30_000, Math.min(3_600_000, Math.round(override)));
+  }
+  const portCount = portCountFromSpec(ports);
+  const topPortsIndex = flags.findIndex(flag => flag === '--top-ports');
+  const topPorts = topPortsIndex >= 0 ? Number(flags[topPortsIndex + 1]) : 0;
+  const versionHeavy = flags.some(flag => /^-sV$/i.test(flag) || /^--version-all$/i.test(flag));
+  if ((portCount || 0) > 10_000) return versionHeavy ? 30 * 60_000 : 15 * 60_000;
+  if ((portCount || 0) > 1_000 || topPorts >= 1_000) return versionHeavy ? 10 * 60_000 : 7 * 60_000;
+  return versionHeavy ? 5 * 60_000 : 3 * 60_000;
 }
 
 export const EXTERNAL_TOOLS: CustomTool[] = [
   {
     name: 'nmap_scan',
+    supportsAbort: true,
     description: 'Run nmap port/service scan (requires nmap installed)',
     category: 'recon',
     parameters: [
@@ -3239,16 +3651,18 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         return { success: false, error: 'nmap is not installed. Install it with: apt install nmap' };
       }
       const target = context.parameters.target as string;
-      const flags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4'); // drop -oN/--script/-iL injection
+      const requestedFlags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4'); // drop -oN/--script/-iL injection
       const ports = context.parameters.ports as string | undefined;
+      const flags = normalizeNmapRuntimeFlags(requestedFlags, ports);
 
       const args = [...flags];
       if (ports) args.push('-p', ports);
       args.push(target);
 
-      const result = await runSubprocess('nmap', args, { timeout: 120000 });
+      const nmapTimeoutMs = resolveNmapTimeoutMs(flags, ports);
+      const result = await runSubprocess('nmap', args, { timeout: nmapTimeoutMs, signal: context.abortSignal });
       if (result.exitCode !== 0) {
-        return { success: false, error: `nmap failed: ${result.stderr}` };
+        return { success: false, error: `nmap failed (timeout limit ${nmapTimeoutMs}ms): ${result.stderr}` };
       }
 
       // Parse open ports from output
@@ -3266,6 +3680,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
   },
   {
     name: 'nuclei_scan',
+    supportsAbort: true,
     description: 'Run nuclei vulnerability scanner (requires nuclei installed)',
     category: 'vuln',
     parameters: [
@@ -3284,7 +3699,10 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       const args = ['-target', target, '-severity', severity, '-silent', '-jsonl'];
       if (tags) args.push('-tags', tags);
 
-      const result = await runSubprocess('nuclei', args, { timeout: 300000 });
+      const result = await runSubprocess('nuclei', args, { timeout: 300000, signal: context.abortSignal });
+      if (result.exitCode !== 0) {
+        return { success: false, error: `nuclei failed (exit ${result.exitCode}): ${result.stderr.trim() || 'no diagnostic output'}` };
+      }
 
       // Parse JSON lines output
       const findings: Array<{ title: string; severity: 'info' | 'low' | 'medium' | 'high' | 'critical'; details: string }> = [];
@@ -3312,6 +3730,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
   },
   {
     name: 'ffuf_fuzz',
+    supportsAbort: true,
     description: 'Run ffuf web fuzzer for directory/parameter discovery (requires ffuf installed)',
     category: 'web',
     parameters: [
@@ -3324,11 +3743,21 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         return { success: false, error: 'ffuf is not installed. Install: go install github.com/ffuf/ffuf/v2@latest' };
       }
       const url = context.parameters.url as string;
-      const wordlist = context.parameters.wordlist as string || '/usr/share/wordlists/dirb/common.txt';
+      const wordlist = await usableWebWordlist(context.parameters.wordlist as string | undefined);
       const mc = context.parameters.mc as string || '200,301,302,403';
 
       const args = ['-u', url, '-w', wordlist, '-mc', mc, '-o', '/dev/stdout', '-of', 'json', '-s'];
-      const result = await runSubprocess('ffuf', args, { timeout: 120000 });
+      const result = await runSubprocess('ffuf', args, { timeout: 300000, signal: context.abortSignal });
+
+      if (result.exitCode !== 0) {
+        return { success: false, error: `ffuf failed (exit ${result.exitCode}): ${result.stderr.trim() || result.stdout.trim() || 'no diagnostic output'}` };
+      }
+      if (/Fuzz Faster U Fool[\s\S]*HTTP OPTIONS:/i.test(result.stdout)) {
+        return {
+          success: false,
+          error: 'ffuf printed its help instead of scanning; the generated invocation was rejected by ffuf.',
+        };
+      }
 
       try {
         const data = JSON.parse(result.stdout);
@@ -3345,12 +3774,13 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
           }] : undefined,
         };
       } catch {
-        return { success: true, output: result.stdout || 'No results found' };
+        return { success: false, error: `ffuf returned non-JSON output: ${result.stdout.trim() || result.stderr.trim() || 'empty output'}` };
       }
     },
   },
   {
     name: 'curl_request',
+    supportsAbort: true,
     description: 'Make an HTTP request using curl (supports advanced options)',
     category: 'web',
     parameters: [
@@ -3365,12 +3795,16 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         return { success: false, error: 'curl is not installed' };
       }
       const url = context.parameters.url as string;
-      const method = context.parameters.method as string || 'GET';
+      const method = (context.parameters.method as string || 'GET').toUpperCase();
       const data = context.parameters.data as string | undefined;
       const headers = context.parameters.headers as string | undefined;
       const flags = context.parameters.flags as string | undefined;
 
-      const args = ['-s', '-i', '-X', method];
+      // -S keeps diagnostics visible while -s suppresses progress bars.
+      // `-X HEAD` only changes the method and still makes curl expect a response body. Servers
+      // commonly advertise the GET Content-Length on HEAD, which then produces false exit 18
+      // (partial file). `--head` enables curl's correct no-body semantics.
+      const args = method === 'HEAD' ? ['-sS', '-i', '--head'] : ['-sS', '-i', '-X', method];
       let configuredHeaders = targetHeadersForUrl(url);
       let configDir: string | undefined;
       if (data) {
@@ -3380,7 +3814,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         args.push('--data-raw', data);
       }
       if (headers) {
-        const headerLines = headers.split(',').map(header => header.trim()).filter(Boolean);
+        const headerLines = parseCurlHeaderLines(headers);
         if (configuredHeaders) {
           const explicitHeaders = new Headers();
           for (const header of headerLines) {
@@ -3397,6 +3831,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         const sanitized = sanitizeExternalFlags('curl', flags); // drop -o/-K/-T/-x file-read/write injection
         args.push(...(configuredHeaders ? withoutCurlRedirectFlags(sanitized) : sanitized));
       }
+      enforceCurlMinimumTimeout(args, 120);
       try {
         if (configuredHeaders) {
           configDir = await mkdtemp(join(tmpdir(), 't3mp3st-curl-'));
@@ -3409,11 +3844,48 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
           args.push('--config', configPath);
         }
         args.push(url);
-        const result = await runSubprocess('curl', args, { timeout: 30000 });
+        const idempotent = ['GET', 'HEAD'].includes(method) && !data;
+        const processTimeout = resolveCurlProcessTimeoutMs(args);
+        let result = await runSubprocess('curl', args, { timeout: processTimeout, maxOutput: 16 * 1024 * 1024, signal: context.abortSignal });
+        let attempts = 1;
+        while (idempotent && isRetryableCurlExit(result.exitCode) && attempts < 3) {
+          attempts++;
+          await new Promise(resolve => setTimeout(resolve, 500));
+          result = await runSubprocess('curl', args, { timeout: processTimeout, maxOutput: 16 * 1024 * 1024, signal: context.abortSignal });
+        }
+        const output = compactCurlOutput(result.stdout);
+        const responseBlocks = [...result.stdout.matchAll(/HTTP\/\S+\s+(\d{3})[^\r\n]*\r?\n([\s\S]*?)(?=\r?\n\r?\n|$)/g)];
+        const finalBlock = responseBlocks.at(-1);
+        const responseStatus = finalBlock ? Number(finalBlock[1]) : undefined;
+        const responseHeaders = finalBlock
+          ? Object.fromEntries(finalBlock[2].split(/\r?\n/).map(line => {
+              const separator = line.indexOf(':');
+              return separator > 0 ? [line.slice(0, separator).trim().toLowerCase(), line.slice(separator + 1).trim()] : null;
+            }).filter((entry): entry is [string, string] => !!entry))
+          : undefined;
+        const headerEnd = result.stdout.lastIndexOf('\r\n\r\n') >= 0
+          ? result.stdout.lastIndexOf('\r\n\r\n') + 4
+          : result.stdout.lastIndexOf('\n\n') >= 0 ? result.stdout.lastIndexOf('\n\n') + 2 : result.stdout.length;
+        const responseBody = method === 'HEAD' ? '' : result.stdout.slice(headerEnd, headerEnd + 1024 * 1024);
+        const diagnostic = result.exitCode !== 0
+          ? `curl failed after ${attempts} attempt(s) (exit ${result.exitCode}): ${result.stderr.trim() || 'no stderr'}${output.trim() ? ` | response: ${output.trim()}` : ''}`
+          : undefined;
         return redactConfiguredSecrets({
           success: result.exitCode === 0,
-          output: result.stdout,
-          error: result.exitCode !== 0 ? result.stderr : undefined,
+          output: result.exitCode === 0 && attempts > 1
+            ? `[curl recovered after ${attempts} attempts]\n${output}`
+            : output,
+          error: diagnostic,
+          metadata: responseStatus ? {
+            responseStatus,
+            responseHeaders,
+            responseBody,
+            responseBodyHash: createHash('sha256').update(responseBody).digest('hex'),
+            contentType: responseHeaders?.['content-type'],
+            cookies: responseHeaders?.['set-cookie'] || '',
+            csp: responseHeaders?.['content-security-policy'] || responseHeaders?.['content-security-policy-report-only'] || '',
+            title: responseBody.match(/<title[^>]*>([^<]*)<\/title>/i)?.[1]?.replace(/\s+/g, ' ').trim(),
+          } : undefined,
         });
       } finally {
         if (configDir) await rm(configDir, { recursive: true, force: true });

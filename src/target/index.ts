@@ -119,9 +119,24 @@ export class TargetEnvironment extends EventEmitter<TargetEvents> {
     const target = this.targets.get(targetId);
     if (target) {
       target.vulnerabilities = target.vulnerabilities || [];
-      target.vulnerabilities.push(vulnerability);
+      const normalize = (value: string): string => value.toLowerCase().replace(/\W+/g, ' ').trim();
+      const existing = target.vulnerabilities.find(item => normalize(item.name) === normalize(vulnerability.name));
+      if (existing) {
+        const rank = { suspected: 0, observed: 1, validated: 2, exploitable: 3 } as const;
+        const currentStatus = existing.evidenceStatus || (existing.exploitAvailable ? 'exploitable' : 'observed');
+        const incomingStatus = vulnerability.evidenceStatus || (vulnerability.exploitAvailable ? 'exploitable' : 'observed');
+        Object.assign(existing, vulnerability, {
+          id: existing.id,
+          evidenceStatus: rank[incomingStatus] > rank[currentStatus] ? incomingStatus : currentStatus,
+          evidence: vulnerability.evidence || existing.evidence,
+          impact: vulnerability.impact || existing.impact,
+          references: [...new Set([...(existing.references || []), ...(vulnerability.references || [])])],
+        });
+      } else {
+        target.vulnerabilities.push(vulnerability);
+      }
       target.status = 'vulnerable';
-      this.emit('vulnerability:found', { target, vulnerability });
+      this.emit('vulnerability:found', { target, vulnerability: existing || vulnerability });
     }
     return target;
   }

@@ -101,6 +101,23 @@ export type { EvidenceVaultEvents } from './evidence/index.js';
 // Arsenal
 export { Arsenal, successResult, failResult, createToolContext, BUILTIN_TOOLS, EXTERNAL_TOOLS, isToolAvailable, runSubprocess } from './arsenal/index.js';
 export type { ArsenalEvents, ToolExecution } from './arsenal/index.js';
+export { ToolOrchestrator, normalizeToolCall, toolCategory } from './orchestrator/tool-orchestrator.js';
+export type {
+  EvidenceConflict,
+  EvidenceRecord,
+  NetworkContext,
+  NormalizedToolCall,
+  OrchestratorEvent,
+  OrchestratorMetrics,
+  OrchestratedToolCategory,
+  RepeatReason,
+  TargetBudgets,
+  ToolErrorType,
+} from './orchestrator/tool-orchestrator.js';
+export { MemoryEvidenceStore, JsonlEvidenceStore, evidenceStoreFromEnvironment } from './orchestrator/evidence-store.js';
+export type { EvidenceStore, EvidenceQuery } from './orchestrator/evidence-store.js';
+export { evaluateCoverage, planCoverageRecovery, openCoverage, missionCompletionStatus, RECON_COVERAGE, VALIDATION_COVERAGE } from './orchestrator/coverage.js';
+export type { CoverageCapability, CoverageEntry, CoverageSnapshot, CoverageStatus, CoverageRecoveryAction } from './orchestrator/coverage.js';
 
 // Agent Loop
 export { AgentLoop, createAgentLoop, runAgentTask } from './agent/index.js';
@@ -217,6 +234,15 @@ import type {
   Task,
 } from './types/index.js';
 
+export function dependencyAllowsTask(dependency: Task | undefined, nextTask: Pick<Task, 'operatorType'>): boolean {
+  if (dependency?.status === 'completed') return true;
+  if (dependency?.status !== 'skipped') return false;
+  const reason = dependency.result?.skipReason;
+  if (reason === 'no_validated_targets' || reason === 'not_exploitable') return true;
+  const reportingOnly = ['scope_denied', 'not_authorized', 'budget_exceeded', 'dependency_missing', 'waf_blocked', 'configuration_error'].includes(String(reason));
+  return reportingOnly && nextTask.operatorType === 'analyst';
+}
+
 // Re-export commonly used types
 export { KillChainPhase } from './types/index.js';
 export type { OpsecConfig, Finding, Credential, Target, DetectionEvent } from './types/index.js';
@@ -248,6 +274,16 @@ import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
 import { OpGeneral } from './general/index.js';
+import {
+  evaluateCoverage,
+  missionCompletionStatus,
+  openCoverage,
+  planCoverageRecovery,
+  RECON_COVERAGE,
+  VALIDATION_COVERAGE,
+  type CoverageCapability,
+  type CoverageSnapshot,
+} from './orchestrator/coverage.js';
 
 // Stubs for advanced modules
 import {
@@ -331,6 +367,18 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   private tickCount: number = 0;
   private hooks: RuntimeHooks;
   private readonly taskTimeoutMs: number;
+  private readonly phaseStatuses = new Map<string, string>();
+  private readonly coverageRecoveryAttempts = new Map<string, number>();
+  private readonly coverageTerminalized = new Map<string, Set<CoverageCapability>>();
+  private readonly coverageSnapshots = new Map<string, CoverageSnapshot>();
+
+  public getPhaseStatuses(): Record<string, string> {
+    return Object.fromEntries(this.phaseStatuses);
+  }
+
+  public getCoverage(): Record<string, CoverageSnapshot> {
+    return Object.fromEntries(this.coverageSnapshots);
+  }
 
   /**
    * White-box source context (security-prioritized code excerpt), set by the
@@ -485,6 +533,9 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * Setup event forwarding from subsystems
    */
   private setupEventForwarding(): void {
+    this.arsenal.on('tool:orchestration', event => {
+      this.emit('orchestration:event', event);
+    });
     // Forward operator events
     this.cell.on('operator:spawned', (op) => {
       this.emit('operator:spawned', { id: op.id, archetype: op.archetype });
@@ -578,7 +629,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     operator.on('agent:tool_result', ({ task, name, result, source }) => {
       const detail = result.success
         ? (result.output || 'Tool completed')
-        : (result.error || result.output || 'Tool failed');
+        : (result.error || result.output || `${name} failed without a diagnostic response`);
       this.recordProgress('tool_result', operator, task, detail, { toolName: name, success: result.success, source });
     });
 
@@ -691,6 +742,9 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     if (this.progressEvents.length > MAX_PROGRESS_EVENTS) {
       this.progressEvents.splice(0, this.progressEvents.length - MAX_PROGRESS_EVENTS);
     }
+    if (task?.id && this.activeDispatches.has(task.id)) {
+      this.dispatchLastProgress.set(task.id, Date.now());
+    }
     this.emit('scan:progress', event);
   }
 
@@ -728,6 +782,15 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         cve: finding.cve,
         cwe: finding.cwe,
         exploitAvailable: finding.exploitedAt != null,
+        evidenceStatus: finding.exploitedAt != null
+          ? 'exploitable'
+          : finding.verifiedAt != null || finding.verifyGate?.passed
+            ? 'validated'
+            : finding.evidence.length > 0
+              ? 'observed'
+              : 'suspected',
+        evidence: finding.evidence[0]?.content,
+        impact: finding.description,
         references: finding.references,
       });
     }
@@ -879,6 +942,9 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    */
   private dispatchStartTimes: Map<string, number> = new Map();
 
+  /** Last observable THINK/TOOL/RESULT/task event for each in-flight dispatch. */
+  private dispatchLastProgress: Map<string, number> = new Map();
+
   /** The operator each in-flight dispatch was assigned to, keyed by task id — so a
    * timed-out dispatch can reset the exact wedged operator back to idle. */
   private dispatchOperators: Map<string, OperatorAgent> = new Map();
@@ -901,11 +967,13 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   private static resolveTaskTimeoutMs(provider?: LLMProvider): number {
     const DEFAULT_TASK_TIMEOUT_MS = 300000; // 5 minutes — generous backstop, not a deadline
     const LOCAL_AGENT_TASK_TIMEOUT_MS = 1800000; // local CLI agents can need multiple slow turns
+    const CODEX_TASK_TIMEOUT_MS = 4500000; // 10m Codex + up to 60m Ollama fallback + recovery margin
     const raw = process.env.T3MP3ST_TASK_TIMEOUT_MS;
     if (raw != null && raw.trim() !== '') {
       const parsed = Number(raw);
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
+    if (provider === 'codex') return CODEX_TASK_TIMEOUT_MS;
     return provider === 'local-agent' ? LOCAL_AGENT_TASK_TIMEOUT_MS : DEFAULT_TASK_TIMEOUT_MS;
   }
 
@@ -914,6 +982,75 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
 
   /** Human-readable reason a mission was paused because required work failed. */
   private stallReason: string | null = null;
+
+  private coverageKey(missionId: string, target: string, capability: CoverageCapability): string {
+    return `${missionId}:${target}:${capability}`;
+  }
+
+  /**
+   * Evaluate evidence, then seed exactly one deterministic recovery action when useful.
+   * Returning true means phase advancement must wait for the newly queued task.
+   */
+  private ensureCoverageBeforeAdvance(mission: import('./types/index.js').Mission, taskQueue: TaskQueue): boolean {
+    const required = mission.currentPhase === KillChainPhase.RECON
+      ? RECON_COVERAGE
+      : mission.currentPhase === KillChainPhase.WEAPONIZE ? VALIDATION_COVERAGE : [];
+    if (!required.length) return false;
+
+    const availableTools = new Set(this.arsenal.getAllTools().map(tool => tool.name));
+    for (const target of this.targetEnv.getAllTargets()) {
+      const snapshot = evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence());
+      this.coverageSnapshots.set(target.address, snapshot);
+      const terminalKey = `${mission.id}:${target.address}`;
+      const terminalized = this.coverageTerminalized.get(terminalKey) || new Set<CoverageCapability>();
+      this.coverageTerminalized.set(terminalKey, terminalized);
+      const open = openCoverage(snapshot, required, terminalized);
+      if (!open.length) continue;
+
+      const attempts = Object.fromEntries(required.map(capability => [
+        capability,
+        this.coverageRecoveryAttempts.get(this.coverageKey(mission.id, target.address, capability)) || 0,
+      ])) as Partial<Record<CoverageCapability, number>>;
+      const action = planCoverageRecovery({
+        snapshot,
+        records: this.arsenal.getOrchestrator().getEvidence(),
+        availableTools,
+        attempts,
+        network: this.arsenal.getOrchestrator().getNetworkContext(target.address),
+        budget: this.arsenal.getOrchestrator().getBudget(target.address),
+        includeValidation: mission.currentPhase === KillChainPhase.WEAPONIZE,
+      });
+      if (action && open.includes(action.capability)) {
+        const key = this.coverageKey(mission.id, target.address, action.capability);
+        this.coverageRecoveryAttempts.set(key, (this.coverageRecoveryAttempts.get(key) || 0) + 1);
+        taskQueue.add({
+          id: randomUUID(),
+          missionId: mission.id,
+          name: `Coverage Recovery · ${action.capability}`,
+          description: `${action.description} for ${target.address}. Execute the fixed recovery plan first; do not replace it with an equivalent broad scan.`,
+          phase: mission.currentPhase,
+          operatorType: mission.currentPhase === KillChainPhase.WEAPONIZE ? 'scanner' : 'recon',
+          status: 'pending',
+          priority: 100,
+          dependencies: [],
+          capability: action.capability,
+          executionPlan: { toolName: action.toolName, parameters: action.parameters, repeatReason: action.repeatReason },
+          createdAt: Date.now(),
+        });
+        this.phaseStatuses.set(`${mission.id}:${mission.currentPhase}:${target.id}`, `coverage_recovery:${action.capability}`);
+        return true;
+      }
+
+      // No safe/budgeted fallback remains. Preserve the gap and allow reporting,
+      // but never represent the capability as successfully completed.
+      for (const capability of open) {
+        terminalized.add(capability);
+        this.arsenal.getOrchestrator().markIncompleteArea(`${target.address}: ${capability}`);
+        this.phaseStatuses.set(`${mission.id}:coverage:${target.id}:${capability}`, 'incomplete');
+      }
+    }
+    return false;
+  }
 
   /**
    * Main tick loop — seeds tasks, dispatches to operators, advances phases
@@ -950,7 +1087,8 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         // Auto-spawn a recon operator if none exists
         const recon = this.cell.getAvailableOperator('recon');
         if (!recon) {
-          this.spawnOperator('Recon-Auto', 'recon');
+          try { this.spawnOperator('Recon-Auto', 'recon'); }
+          catch { /* a full cell can reuse an existing operator when one becomes idle */ }
         }
       }
     }
@@ -971,16 +1109,27 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Failed required tasks are terminal, but they are not successful progress.
     // Stall instead of walking the phase bar forward with no backend/model work.
     if (allMissionTasks.length > 0 && pendingOrActive.length === 0 && inFlight.length === 0) {
+      const infrastructureFailures = allMissionTasks.filter(task =>
+        task.phase === mission.currentPhase
+        && task.status === 'failed'
+        && task.result?.failureKind === 'dispatch_infrastructure'
+      );
+      if (infrastructureFailures.length > 0) {
+        const firstError = infrastructureFailures[0].result?.error;
+        this.stallReason = `stalled in ${mission.currentPhase}: ${infrastructureFailures.length} dispatch infrastructure failure(s)`
+          + (firstError ? ` — ${firstError}` : '');
+        this.paused = true;
+        this.emit('command:paused');
+        return;
+      }
+      if (this.ensureCoverageBeforeAdvance(mission, taskQueue)) return;
       const failedCurrentPhase = allMissionTasks.filter(
         t => t.phase === mission.currentPhase && t.status === 'failed'
       );
       if (failedCurrentPhase.length > 0) {
-        const firstError = failedCurrentPhase[0].result?.error;
-        this.stallReason = `stalled in ${mission.currentPhase}: ${failedCurrentPhase.length} required task(s) failed` +
-          (firstError ? ` — ${firstError}` : '');
-        this.paused = true;
-        this.emit('command:paused');
-        return;
+        for (const task of failedCurrentPhase) {
+          this.arsenal.getOrchestrator().markIncompleteArea(`${mission.currentPhase}: ${task.name} — ${task.result?.error || 'failed'}`);
+        }
       }
 
       const phaseIndex = mission.phases.indexOf(mission.currentPhase);
@@ -999,7 +1148,12 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         this.autoSpawnForPhase(nextPhase);
       } else {
         // All phases complete — finish the mission
-        this.mission.completeMission(mission.id);
+        const snapshots = this.targetEnv.getAllTargets().map(target => {
+          const snapshot = evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence(), true);
+          this.coverageSnapshots.set(target.address, snapshot);
+          return snapshot;
+        });
+        this.mission.completeMission(mission.id, missionCompletionStatus(snapshots));
         return;
       }
     }
@@ -1029,7 +1183,16 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
           // treat that as "no operator available right now" and defer (operator stays unset),
           // never crash the tick.
           try { operator = this.spawnOperator(callsign, task.operatorType); }
-          catch { /* pool full / dup callsign — dispatch skipped by the !operator guard below */ }
+          catch {
+            // A previous-phase operator may occupy the last slot indefinitely.
+            // Recycle only an idle operator of another archetype; never remove a
+            // busy operator or interrupt an active task.
+            const recyclable = allOps.find(op => op.archetype !== task.operatorType && op.isAvailable());
+            if (recyclable && this.cell.removeOperator(recyclable.id)) {
+              try { operator = this.spawnOperator(callsign, task.operatorType); }
+              catch { /* duplicate/race: defer until the next tick */ }
+            }
+          }
         }
         if (!operator) continue;
       }
@@ -1037,8 +1200,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       // Check task dependencies are met
       if (task.dependencies.length > 0) {
         const allDepsComplete = task.dependencies.every(depId => {
-          const dep = taskQueue.getTask(depId);
-          return dep?.status === 'completed';
+          return dependencyAllowsTask(taskQueue.getTask(depId), task);
         });
         if (!allDepsComplete) continue;
       }
@@ -1051,11 +1213,50 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       const target = allTargets.find(t => task.description.includes(t.address)) || allTargets[0];
       if (!target) continue; // No targets available — leave task pending, skip dispatch
 
+      // Deterministic exploit gate: an LLM plan cannot start an exploit lane without
+      // validated evidence, authorization, reachability, an available tool and budget.
+      if (task.operatorType === 'exploiter' || task.phase === KillChainPhase.DELIVER || task.phase === KillChainPhase.EXPLOIT) {
+        const evidence = this.arsenal.getOrchestrator().getEvidence();
+        const validatedFindings = (target.vulnerabilities || []).filter(vulnerability =>
+          vulnerability.evidenceStatus === 'validated' || vulnerability.evidenceStatus === 'exploitable'
+        ).length;
+        const activeTestingAllowed = Boolean(
+          process.env.T3MP3ST_AUTHORIZATION_RECEIPT?.trim()
+          || this.approval.approvedTools().length > 0
+          || target.metadata?.authorizationReceipt
+          || target.metadata?.scopeReceipt
+          || target.metadata?.receipt
+        );
+        const targetReachable = evidence.some(record =>
+          record.status === 'success' && record.target.includes(target.address)
+          && !['offline', 'reporting'].includes(record.toolCategory)
+        );
+        const requiredToolAvailable = ARCHETYPE_PROFILES.exploiter.defaultTools.some(name => this.arsenal.getTool(name));
+        const gate = this.arsenal.getOrchestrator().canStartExploit({
+          target: target.address,
+          validatedFindings,
+          activeTestingAllowed,
+          targetReachable,
+          requiredToolAvailable,
+        });
+        this.phaseStatuses.set(`${mission.id}:${task.phase}:${target.id}`, gate.phaseStatus);
+        if (!gate.allowed) {
+          const skipReason = gate.phaseStatus === 'no_validated_targets' ? 'no_validated_targets'
+            : gate.phaseStatus === 'not_authorized' ? 'not_authorized'
+              : gate.phaseStatus === 'unavailable' ? 'dependency_missing'
+                : this.arsenal.getOrchestrator().getNetworkContext(target.address).blockState === 'probable_edge_block' ? 'waf_blocked'
+                  : /budget/i.test(gate.reason) ? 'budget_exceeded' : 'configuration_error';
+          taskQueue.updateStatus(task.id, 'skipped', { success: false, error: `${gate.phaseStatus}: ${gate.reason}`, skipReason, executionStatus: 'blocked', outcomeStatus: 'inconclusive' });
+          continue;
+        }
+      }
+
       // Dispatch task (fire and forget — don't block the tick loop)
       this.activeDispatches.add(task.id);
       // Record wall-clock start + owning operator so checkDispatchTimeouts() can reap
       // this exact dispatch if its promise never settles.
       this.dispatchStartTimes.set(task.id, Date.now());
+      this.dispatchLastProgress.set(task.id, Date.now());
       this.dispatchOperators.set(task.id, operator);
       taskQueue.assign(task.id, operator.id);
 
@@ -1067,7 +1268,20 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
         if (result.success === false) {
-          taskQueue.fail(task.id, result.error || result.output || 'task returned unsuccessful result');
+          if (result.skipReason) {
+            taskQueue.updateStatus(task.id, 'skipped', result);
+            this.phaseStatuses.set(`${mission.id}:${task.phase}:${target.id}`, result.outcomeStatus || result.skipReason);
+            return;
+          }
+          const nonExploitOutcome = (task.operatorType === 'exploiter' || task.phase === KillChainPhase.DELIVER || task.phase === KillChainPhase.EXPLOIT)
+            && /Exploit phase did not meet its technical completion condition/i.test(result.error || '');
+          if (nonExploitOutcome) {
+            const outcome = result.outcomeStatus || 'inconclusive';
+            taskQueue.updateStatus(task.id, 'skipped', { ...result, skipReason: result.skipReason || 'not_exploitable' });
+            this.phaseStatuses.set(`${mission.id}:${task.phase}:${target.id}`, outcome);
+          } else {
+            taskQueue.fail(task.id, result.error || result.output || 'task returned unsuccessful result');
+          }
         } else {
           taskQueue.complete(task.id, result);
           this.hooks.onTaskCompleted?.(task);
@@ -1091,6 +1305,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
   private clearDispatch(taskId: string): void {
     this.activeDispatches.delete(taskId);
     this.dispatchStartTimes.delete(taskId);
+    this.dispatchLastProgress.delete(taskId);
     this.dispatchOperators.delete(taskId);
   }
 
@@ -1124,10 +1339,12 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Snapshot ids first — we mutate the maps inside the loop.
     for (const taskId of [...this.activeDispatches]) {
       const startedAt = this.dispatchStartTimes.get(taskId);
+      const lastProgressAt = this.dispatchLastProgress.get(taskId) ?? startedAt;
       const operator = this.dispatchOperators.get(taskId);
 
       const elapsed = startedAt != null ? now - startedAt : Number.POSITIVE_INFINITY;
-      const overTime = elapsed >= this.taskTimeoutMs;
+      const idleElapsed = lastProgressAt != null ? now - lastProgressAt : elapsed;
+      const overTime = idleElapsed >= this.taskTimeoutMs;
 
       // Wedge symptom: operator claims to be working (executing/tasked) but has no
       // current task — the promise silently dropped it. Only treat this as a wedge
@@ -1141,8 +1358,8 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       if (!overTime && !wedged) continue;
 
       const reason = wedged
-        ? `dispatch wedged: operator ${operator?.id ?? 'unknown'} stuck in '${operator?.status}' with no current task for ${Math.round(elapsed / 1000)}s`
-        : `dispatch timed out after ${Math.round(elapsed / 1000)}s (backstop ${Math.round(this.taskTimeoutMs / 1000)}s)`;
+        ? `dispatch wedged: operator ${operator?.id ?? 'unknown'} stuck in '${operator?.status}' with no current task and no progress for ${Math.round(idleElapsed / 1000)}s`
+        : `dispatch made no progress for ${Math.round(idleElapsed / 1000)}s after ${Math.round(elapsed / 1000)}s total (backstop ${Math.round(this.taskTimeoutMs / 1000)}s)`;
 
       // Clear a CLEAR event/log so a timed-out dispatch is never silent.
       console.warn(`[T3MP3ST] task ${taskId} force-resolved as timeout — ${reason}`);
@@ -1151,7 +1368,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       //    just stamps status:'failed'; if it somehow already completed, this is a
       //    no-op-ish overwrite that still lets the phase advance).
       try {
-        taskQueue.fail(taskId, `timeout: ${reason}`);
+        taskQueue.fail(taskId, `timeout: ${reason}`, 'dispatch_infrastructure');
       } catch {
         // Swallow — task may already be terminal.
       }
@@ -1189,7 +1406,17 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         const hasArchetype = allOps.some(op => op.archetype === archetype);
         if (!hasArchetype) {
           const callsign = `${archetype.charAt(0).toUpperCase() + archetype.slice(1)}-Auto`;
-          this.spawnOperator(callsign, archetype);
+          // Capacity is transient: existing operators may still be finishing the
+          // previous phase. Defer spawning until a later tick instead of letting
+          // the phase-transition tick reject and strand the mission.
+          try { this.spawnOperator(callsign, archetype); }
+          catch {
+            const recyclable = allOps.find(op => op.archetype !== archetype && op.isAvailable());
+            if (recyclable && this.cell.removeOperator(recyclable.id)) {
+              try { this.spawnOperator(callsign, archetype); }
+              catch { /* duplicate/race: a later dispatch tick will retry */ }
+            }
+          }
         }
       }
     }
@@ -1212,6 +1439,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     this.on('mission:phase_changed', (data) => broadcast('phase_changed', data));
     this.on('approval:decision', (data) => broadcast('arsenal.approval', data));
     this.on('scan:progress', (data) => broadcast('scan:progress', data));
+    this.on('orchestration:event', (data) => broadcast('orchestration:event', data));
     this.on('tick', (count) => {
       // Broadcast status every 5 ticks to avoid flooding
       if (typeof count === 'number' && count % 5 === 0) {
@@ -1237,14 +1465,37 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Attach the agent loop scoped to this archetype's SPECIALIZED role toolkit (defaultTools =
     // the curated per-operator tool allowlist). toolCategories stays as a coarse fallback.
     const profile = ARCHETYPE_PROFILES[archetype];
+    // Full Arsenal is an explicit opt-in workstation mode. In that mode the adapter-backed
+    // tools registered during construction must also be visible to operators; retaining the
+    // curated role allowlist here would leave the newly installed binaries registered but
+    // unreachable. Approval and scope gates still apply at Arsenal.execute().
+    const fullArsenal = /^(1|true|on)$/i.test(process.env.T3MP3ST_FULL_ARSENAL ?? '');
     const maxIterations = this.llm.getProvider() === 'local-agent'
       ? LOCAL_AGENT_MAX_ITERATIONS
       : DEFAULT_AGENT_MAX_ITERATIONS;
+    const mission = this.mission.getActiveMission();
+    const configuredReceipt = process.env.T3MP3ST_AUTHORIZATION_RECEIPT?.trim();
+    const approvedTools = this.approval.approvedTools();
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
+      sourceAgent: callsign,
       maxIterations,
       maxTokens: 50000,
-      toolCategories: profile.toolCategories,
-      tools: profile.defaultTools,
+      toolCategories: fullArsenal ? undefined : profile.toolCategories,
+      tools: fullArsenal ? undefined : profile.defaultTools,
+      securityContext: {
+        allowedHosts: mission?.rules.scope || [],
+        authorization: mission?.status === 'active'
+          ? 'Active authorized mission; runtime ScopeGuard and approval checks remain authoritative.'
+          : 'No active mission authorization.',
+        receipt: configuredReceipt || undefined,
+        approvedTools,
+        intensity: configuredReceipt ? 'Only actions covered by the receipt.' : 'Non-intrusive and read-only only.',
+        forbidden: mission?.rules.forbiddenTechniques || [],
+        rateLimit: 'Use tool defaults; stop on throttling, instability, or OPSEC abort.',
+        stopConditions: ['validated result', 'missing scope', 'missing required receipt', 'no testable path', 'two steps without new relevant evidence'],
+        intrusiveAllowed: Boolean(configuredReceipt),
+        credentialToolsAllowed: Boolean(configuredReceipt),
+      },
     });
     operator.attachArsenal(this.arsenal, agentLoop);
     // [Phase-2] Give the operator the shared board ONLY when swarm coordination is on — so the
@@ -1305,6 +1556,13 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     opsec: ReturnType<OpsecController['getStats']>;
     activeMission: string | null;
     stallReason: string | null;
+    orchestration: {
+      metrics: ReturnType<Arsenal['getOrchestrator']>['getMetrics'] extends (...args: never[]) => infer R ? R : never;
+      budgets: Record<string, ReturnType<ReturnType<Arsenal['getOrchestrator']>['getBudget']>>;
+      conflicts: ReturnType<ReturnType<Arsenal['getOrchestrator']>['getConflicts']>;
+      preflight: ReturnType<ReturnType<Arsenal['getOrchestrator']>['getPreflightStatus']>;
+      phaseStatuses: Record<string, string>;
+    };
     progress: ScanProgressEvent[];
     tasks: Array<{
       id: string;
@@ -1330,6 +1588,13 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       opsec: this.opsec.getStats(),
       activeMission: activeMission?.id || null,
       stallReason: this.stallReason,
+      orchestration: {
+        metrics: this.arsenal.getOrchestrator().getMetrics(),
+        budgets: Object.fromEntries(this.targetEnv.getAllTargets().map(target => [target.address, this.arsenal.getOrchestrator().getBudget(target.address)])),
+        conflicts: this.arsenal.getOrchestrator().getConflicts(),
+        preflight: this.arsenal.getOrchestrator().getPreflightStatus(),
+        phaseStatuses: this.getPhaseStatuses(),
+      },
       progress: [...this.progressEvents],
       tasks: activeMission
         ? taskQueue.getForMission(activeMission.id).map(task => ({

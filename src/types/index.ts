@@ -254,6 +254,12 @@ export interface Vulnerability {
   exploitAvailable?: boolean;
   patchAvailable?: boolean;
   references?: string[];
+  /** Evidence maturity carried between operators; impact claims must not exceed it. */
+  evidenceStatus?: 'observed' | 'suspected' | 'validated' | 'exploitable';
+  /** Concise source observation suitable for the next operator's prompt. */
+  evidence?: string;
+  /** Concise demonstrated or plausible impact, kept separate from the observation. */
+  impact?: string;
 }
 
 // =============================================================================
@@ -299,6 +305,7 @@ export interface Mission {
   completedAt?: number;
   currentPhase: KillChainPhase;
   progress: number;
+  completionStatus?: 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'PARTIALLY_COMPLETED' | 'BLOCKED' | 'FAILED';
 }
 
 export interface RulesOfEngagement {
@@ -326,6 +333,12 @@ export interface Task {
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
+  capability?: string;
+  executionPlan?: {
+    toolName: string;
+    parameters: Record<string, unknown>;
+    repeatReason?: ToolContext['repeatReason'];
+  };
 }
 
 export interface TaskResult {
@@ -335,6 +348,11 @@ export interface TaskResult {
   credentials?: string[];
   nextTasks?: string[];
   error?: string;
+  skipReason?: 'no_validated_targets' | 'not_exploitable' | 'scope_denied' | 'not_authorized' | 'budget_exceeded' | 'dependency_missing' | 'waf_blocked' | 'configuration_error' | 'manual_skip';
+  executionStatus?: 'not_executed' | 'executed' | 'skipped' | 'deferred' | 'blocked' | 'failed';
+  outcomeStatus?: 'not_exploitable' | 'inconclusive' | 'validated' | 'exploited';
+  /** Distinguishes a recoverable tool outcome from a broken scheduler/operator execution path. */
+  failureKind?: 'tool' | 'dispatch_infrastructure';
 }
 
 // =============================================================================
@@ -400,6 +418,8 @@ export interface CustomTool {
   requiredPermissions?: string[];
   /** Risk tier carried from the catalog when the tool is a minted adapter — gates approval. */
   riskTier?: RiskTier;
+  /** Whether the handler honors ToolContext.abortSignal for controlled shutdown. */
+  supportsAbort?: boolean;
 }
 
 export interface ToolParameter {
@@ -414,6 +434,14 @@ export interface ToolContext {
   target?: Target;
   operator?: string;
   mission?: string;
+  /** Execution lane used by deterministic orchestration policy. */
+  purpose?: 'assessment' | 'verification' | 'reporting';
+  phase?: KillChainPhase;
+  authorizationReceipt?: string;
+  repeatReason?: 'expired_cache' | 'previous_failure' | 'contradiction_verification' | 'independent_confirmation_required' | 'different_network_perspective' | 'materially_different_configuration';
+  attemptId?: string;
+  sourceToolCallId?: string;
+  abortSignal?: AbortSignal;
   parameters: Record<string, unknown>;
 }
 
@@ -421,6 +449,7 @@ export interface ToolContext {
  * Simplified finding for tool results (tools don't have full context)
  */
 export interface ToolFinding {
+  findingId?: string;
   title: string;
   severity: Severity;
   details: string;
@@ -438,6 +467,10 @@ export interface ToolFinding {
   /** For 'tool' provenance: the tool that produced it + the raw output backing the claim. */
   toolName?: string;
   toolOutput?: string;
+  evidenceStatus?: 'observed' | 'suspected' | 'validated' | 'exploitable';
+  evidenceRecordIds?: string[];
+  attemptId?: string;
+  sourceToolCallId?: string;
 }
 
 export interface ToolResult {
@@ -447,6 +480,8 @@ export interface ToolResult {
   credentials?: Credential[];
   error?: string;
   duration?: number;
+  /** Structured execution/response metadata for caching and orchestration. */
+  metadata?: Record<string, unknown>;
 }
 
 // =============================================================================
@@ -564,6 +599,14 @@ export interface CommandEvents {
   'detection:triggered': DetectionEvent;
   'mission:phase_changed': { missionId: string; phase: KillChainPhase };
   'scan:progress': ScanProgressEvent;
+  'orchestration:event': {
+    action: string;
+    reason: string;
+    toolName: string;
+    target: string;
+    signature: string;
+    timestamp: number;
+  };
   'abort:recommended': string;
   /** A capability-approval gate decision (allowed/denied) on an intrusive/dangerous tool — bridged to
    *  the dashboard's live approval/audit feed. Structural match for arsenal/approval.ts ApprovalRecord. */

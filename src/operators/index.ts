@@ -21,8 +21,44 @@ import {
 } from '../types/index.js';
 import type { LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
-import type { AgentLoop } from '../agent/index.js';
+import type { AgentLoop, AgentResult } from '../agent/index.js';
 import type { ToolResult } from '../types/index.js';
+
+export function evaluateExploitExecution(result: Pick<AgentResult, 'steps'>): {
+  success: boolean;
+  executionStatus: 'not_executed' | 'executed';
+  outcomeStatus: 'not_exploitable' | 'inconclusive' | 'validated' | 'exploited';
+  evidenceProduced: boolean;
+} {
+  const executedSteps = result.steps.filter(step =>
+    step.type === 'tool_call'
+    && step.toolResult?.metadata?.orchestrationStatus === 'executed'
+    && !!step.evidenceRecordId
+  );
+  const linkedValidated = executedSteps.some(step => (step.toolResult?.findings || []).some(finding =>
+    finding.provenance === 'tool'
+    && finding.sourceToolCallId === step.sourceToolCallId
+    && finding.evidenceRecordIds?.includes(step.evidenceRecordId!)
+    && (finding.evidenceStatus === 'validated' || finding.evidenceStatus === 'exploitable')
+  ));
+  const structuredValidation = executedSteps.some(step =>
+    step.toolResult?.metadata?.exploitValidated === true
+    && (step.toolResult.findings || []).some(finding =>
+      finding.sourceToolCallId === step.sourceToolCallId
+      && finding.evidenceRecordIds?.includes(step.evidenceRecordId!)
+    )
+  );
+  const evidenceProduced = executedSteps.some(step => (step.toolResult?.findings || []).some(finding => finding.provenance === 'tool'));
+  const exploited = executedSteps.some(step => step.toolResult?.findings?.some(finding => finding.evidenceStatus === 'exploitable'));
+  const negative = executedSteps.length > 0 && executedSteps.every(step => step.toolResult?.metadata?.resultType === 'negative');
+  const success = executedSteps.length > 0 && evidenceProduced && (linkedValidated || structuredValidation);
+  return {
+    success,
+    executionStatus: executedSteps.length ? 'executed' : 'not_executed',
+    outcomeStatus: success ? (exploited ? 'exploited' : 'validated') : negative ? 'not_exploitable' : 'inconclusive',
+    evidenceProduced,
+  };
+}
 import type { Target } from '../types/index.js';
 import { OPERATOR_SYSTEM_PROMPTS } from '../prompts/index.js';
 import { gateLiveFinding } from '../evidence/gate.js';
@@ -490,14 +526,29 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
         });
       }
 
+      const exploitLane = task.operatorType === 'exploiter'
+        || task.phase === KillChainPhase.DELIVER
+        || task.phase === KillChainPhase.EXPLOIT;
+      const exploitEvaluation = evaluateExploitExecution(result);
+      const executionSuccess = !exploitLane || exploitEvaluation.success;
+      const outcomeStatus = exploitLane ? exploitEvaluation.outcomeStatus : undefined;
+      const policySkip = result.steps.map(step => String(step.toolResult?.metadata?.orchestrationStatus || '')).find(reason =>
+        ['scope_denied', 'not_authorized', 'budget_exceeded', 'dependency_missing', 'waf_blocked', 'configuration_error'].includes(reason)
+      ) as TaskResult['skipReason'] | undefined;
+
       return {
-        success: result.success,
+        success: result.success && executionSuccess && !policySkip,
         output: result.summary,
-        error: result.finalSummaryError
+        error: policySkip ? `Task blocked by orchestration policy: ${policySkip}.` : !executionSuccess
+          ? 'Exploit phase did not meet its technical completion condition: a real tool execution, tool-backed evidence, and a validated outcome are required.'
+          : result.finalSummaryError
           ? `${result.summary} Final summary failed: ${result.finalSummaryError}`
           : undefined,
         findings: result.findings.map(f => f.title),
         nextTasks: undefined,
+        executionStatus: policySkip ? 'blocked' : exploitLane ? exploitEvaluation.executionStatus : 'executed',
+        outcomeStatus,
+        skipReason: policySkip || (exploitLane && !executionSuccess ? (outcomeStatus === 'not_exploitable' ? 'not_exploitable' : undefined) : undefined),
       };
     }
 

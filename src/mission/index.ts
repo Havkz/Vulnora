@@ -135,7 +135,7 @@ export class TaskQueue extends EventEmitter<TaskQueueEvents> {
       task.status = status;
       if (result) task.result = result;
       if (status === 'in_progress') task.startedAt = Date.now();
-      if (status === 'completed' || status === 'failed') task.completedAt = Date.now();
+      if (status === 'completed' || status === 'failed' || status === 'skipped') task.completedAt = Date.now();
     }
     return task;
   }
@@ -169,8 +169,8 @@ export class TaskQueue extends EventEmitter<TaskQueueEvents> {
   /**
    * Mark a task as failed with error message
    */
-  fail(taskId: string, error: string): void {
-    this.updateStatus(taskId, 'failed', { success: false, error });
+  fail(taskId: string, error: string, failureKind: TaskResult['failureKind'] = 'tool'): void {
+    this.updateStatus(taskId, 'failed', { success: false, error, failureKind });
   }
 
   /**
@@ -374,7 +374,7 @@ export class MissionControl extends EventEmitter<MissionEvents> {
   /**
    * Complete a mission
    */
-  completeMission(missionId: string): Mission {
+  completeMission(missionId: string, completionStatus: Mission['completionStatus'] = 'COMPLETED'): Mission {
     const mission = this.missions.get(missionId);
     if (!mission) {
       throw new Error(`Mission ${missionId} not found`);
@@ -383,6 +383,7 @@ export class MissionControl extends EventEmitter<MissionEvents> {
     mission.status = 'completed';
     mission.completedAt = Date.now();
     mission.progress = 100;
+    mission.completionStatus = completionStatus;
 
     if (this.activeMissionId === missionId) {
       this.activeMissionId = null;

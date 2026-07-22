@@ -47,7 +47,7 @@ export interface AdapterToolDeps {
   runSubprocess: (
     command: string,
     args: string[],
-    options?: { timeout?: number; maxOutput?: number }
+    options?: { timeout?: number; maxOutput?: number; signal?: AbortSignal }
   ) => Promise<SubprocessResult>;
   /** Same signature as `isToolAvailable` in src/arsenal/index.ts. */
   isToolAvailable: (command: string) => Promise<boolean>;
@@ -150,7 +150,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
   },
   ffuf: {
     targetParam: 'url',
-    defaultTimeoutMs: 120_000,
+    defaultTimeoutMs: 300_000,
     build: (target, params) => {
       const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
       const mc = str(params.mc) ?? '200,301,302,403';
@@ -169,11 +169,19 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
   },
   gobuster: {
     targetParam: 'url',
-    defaultTimeoutMs: 120_000,
+    defaultTimeoutMs: 300_000,
     build: (target, params) => {
       const mode = str(params.mode) ?? 'dir';
       const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
-      return [mode, '-u', target, '-w', wordlist, '-q'];
+      return [mode, '-u', target, '-w', wordlist, '--timeout', '60s', '-q'];
+    },
+  },
+  feroxbuster: {
+    targetParam: 'url',
+    defaultTimeoutMs: 300_000,
+    build: (target, params) => {
+      const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
+      return ['-u', target, '-w', wordlist, '--silent'];
     },
   },
   nikto: {
@@ -196,7 +204,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
   },
   katana: {
     targetParam: 'url',
-    defaultTimeoutMs: 120_000,
+    defaultTimeoutMs: 300_000,
     build: (target) => ['-u', target, '-jsonl', '-silent'],
   },
   subfinder: {
@@ -382,9 +390,15 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     build: (target) => ['-d', target, '-a', '-aaaa', '-cname', '-resp', '-json', '-silent'],
   },
   'testssl.sh': {
-    targetParam: 'url',
+    targetParam: 'host',
     defaultTimeoutMs: 300_000,
-    build: (target) => ['--quiet', '--color', '0', target],
+    build: (target, params) => {
+      const port = Number(params.port);
+      const endpoint = /^https?:\/\//i.test(target) || target.includes(':') || !Number.isInteger(port)
+        ? target
+        : `${target}:${port}`;
+      return ['--quiet', '--color', '0', endpoint];
+    },
   },
   waybackurls: {
     targetParam: 'domain',
@@ -423,13 +437,20 @@ export function hasArgTemplate(adapter: ToolAdapter): boolean {
  */
 function resolveTarget(template: ArgTemplate, context: ToolContext): string | undefined {
   const params = context.parameters || {};
-  const preferred = str(params[template.targetParam]);
+  const usable = (value: unknown): string | undefined => {
+    const candidate = str(value);
+    // Common model interpolation artefacts such as `${null}${443}` used to
+    // reach testssl as the literal target "null443". Ignore placeholders and
+    // fall back to another supplied key or the mission target.
+    return candidate && !/^(?:null|undefined)(?:\d+)?$/i.test(candidate) ? candidate : undefined;
+  };
+  const preferred = usable(params[template.targetParam]);
   if (preferred) return preferred;
   for (const k of TARGET_PARAM_KEYS) {
-    const v = str(params[k]);
+    const v = usable(params[k]);
     if (v) return v;
   }
-  return str(context.target?.address);
+  return usable(context.target?.address);
 }
 
 // =============================================================================
@@ -496,7 +517,7 @@ export function adapterToCustomTool(adapter: ToolAdapter, deps: AdapterToolDeps)
     } catch (err) {
       return { success: false, error: `${adapter.name}: ${err instanceof Error ? err.message : String(err)}` };
     }
-    const result = await deps.runSubprocess(adapter.binary, argv, { timeout: template.defaultTimeoutMs });
+    const result = await deps.runSubprocess(adapter.binary, argv, { timeout: template.defaultTimeoutMs, signal: context.abortSignal });
 
     if (result.exitCode !== 0) {
       return {
@@ -513,13 +534,14 @@ export function adapterToCustomTool(adapter: ToolAdapter, deps: AdapterToolDeps)
     const findings = parseToolOutput(adapter.id, result.stdout);
     return {
       success: true,
-      output: result.stdout,
+      output: result.stdout.trim() ? result.stdout : `${adapter.name} completed with no findings or output.`,
       ...(findings.length ? { findings } : {}),
     };
   };
 
   return {
     name: toolNameFor(adapter),
+    supportsAbort: true,
     description: `${adapter.name}: ${adapter.notes} (Kali+ adapter; ${adapter.execution}, risk=${adapter.risk})`,
     category: adapter.category,
     // Carry the catalog risk onto the tool so Arsenal.execute()'s approval gate can see it: an

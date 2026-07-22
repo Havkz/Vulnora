@@ -145,6 +145,26 @@ describe('adapterToCustomTool — degrade / scope / execution', () => {
     expect(res.success).toBe(false);
     expect(res.error).toContain('boom');
   });
+
+  it('testssl builds a valid host:port target and ignores null interpolation artefacts', async () => {
+    const deps = makeDeps({ scopeOk: () => true });
+    const tool = mint('testssl', deps);
+    await tool.handler({
+      parameters: { url: 'null443', port: 443 },
+      target: { address: 'target.example.com' } as ToolContext['target'],
+    });
+    expect(deps.spawns[0]).toEqual(['--quiet', '--color', '0', 'target.example.com:443']);
+  });
+
+  it('successful adapters with empty stdout return an explicit result', async () => {
+    const deps = makeDeps({
+      scopeOk: () => true,
+      runSubprocess: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    });
+    const res = await mint('waybackurls', deps).handler(ctx({ domain: 'target.example.com' }));
+    expect(res.success).toBe(true);
+    expect(res.output).toMatch(/no findings or output/i);
+  });
 });
 
 describe('adapterToCustomTool — argument-injection hardening', () => {
@@ -333,7 +353,7 @@ describe('invocation-honesty guard — every mintable adapter is classified, non
   // KNOWN DEBT: the positional default is broken/degraded and these SHOULD get a template later.
   // Tracked honestly here rather than hidden — a good follow-up PR shrinks this set.
   const KNOWN_DEBT = new Set([
-    'feroxbuster', 'osv-scanner', 'hashcat', 'apktool', 'yara',
+    'osv-scanner', 'hashcat', 'apktool', 'yara',
   ]);
 
   const mintable = TOOL_ADAPTERS.filter(isMintable);

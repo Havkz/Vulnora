@@ -23,7 +23,7 @@ vi.mock('fs/promises', async (orig) => {
   return { ...actual, readFile: vi.fn() };
 });
 
-import { parseTextToolCalls, LLMBackbone } from '../llm/index.js';
+import { classifyErrorKind, parseTextToolCalls, shouldAdvanceFallback, LLMBackbone } from '../llm/index.js';
 import { localAgentChat } from '../agent/local-agents.js';
 import { readFile } from 'fs/promises';
 const cli = vi.mocked(localAgentChat);
@@ -70,6 +70,35 @@ describe('parseTextToolCalls — happy path + drift tolerance', () => {
   });
 });
 
+describe('Codex CLI failure classification', () => {
+  it('does not mistake a timeout word in the echoed prompt for the actual failure', () => {
+    const echoedPrompt = `port_scan timeout: number ${'x'.repeat(2200)}`;
+    const error = new Error(`Codex CLI exited 1: ${echoedPrompt}\nstream disconnected before completion`);
+    expect(classifyErrorKind(error)).toBe('network');
+  });
+
+  it('classifies Codex input limits as context length rather than network', () => {
+    const error = new Error('Codex CLI exited 1: turn/start failed: Input exceeds the maximum length of 1048576 characters (input_too_large)');
+    expect(classifyErrorKind(error)).toBe('context_length');
+  });
+
+  it('classifies Codex cybersecurity policy blocks as refusals', () => {
+    const error = new Error(
+      'Codex CLI exited 1: ERROR: This content was flagged for possible cybersecurity risk. '
+      + 'Join the Trusted Access for Cyber program.'
+    );
+    expect(classifyErrorKind(error)).toBe('refusal');
+  });
+
+  it('allows Ollama fallback for every Codex failure, including timeout and refusal', () => {
+    expect(shouldAdvanceFallback('codex', 0, 'timeout')).toBe(true);
+    expect(shouldAdvanceFallback('codex', 0, 'refusal')).toBe(true);
+    expect(shouldAdvanceFallback('codex', 0, 'network')).toBe(true);
+    expect(shouldAdvanceFallback('codex', 0, 'context_length')).toBe(true);
+    expect(shouldAdvanceFallback('local', 0, 'network')).toBe(true);
+  });
+});
+
 describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
   it('describes the current ACTION CONTRACT to the local agent', async () => {
     cli.mockResolvedValueOnce('Final debrief.');
@@ -77,7 +106,9 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
     const prompt = String(cli.mock.calls.at(-1)?.[1] || '');
     expect(prompt).toContain('ACTION CONTRACT');
     expect(prompt).toContain('nmap_scan');
-    expect(prompt).toContain('port scan a host');
+    expect(prompt).toContain('nmap_scan(target*: string)');
+    expect(prompt).not.toContain('port scan a host');
+    expect(prompt.match(/nmap_scan\(/g)).toHaveLength(1);
   });
 
   it('returns toolCalls + finishReason=tool_calls when the agent requests a tool', async () => {
@@ -154,6 +185,43 @@ describe('local-model (HTTP) backbone surfaces toolCalls — the keyless-path fi
     const body = JSON.parse((spy.mock.calls[0][1] as { body: string }).body);
     const sys = body.messages.find((m: { role: string }) => m.role === 'system');
     expect(sys.content).toContain('nmap_scan');
+  });
+
+  it('merges consecutive tool results for strict Ollama chat templates', async () => {
+    const spy = mockJson({ model: 'llama3', message: { content: 'ok' } });
+    await localModel('http://localhost:11434/api').chat([
+      { role: 'user', content: 'scan' },
+      { role: 'tool', name: 'first', content: 'one' },
+      { role: 'tool', name: 'second', content: 'two' },
+    ] as never);
+    const body = JSON.parse((spy.mock.calls[0][1] as { body: string }).body);
+    expect(body.messages.map((message: { role: string }) => message.role)).toEqual(['system', 'user']);
+    expect(body.messages[1].content).toContain('TOOL RESULT (first)');
+    expect(body.messages[1].content).toContain('TOOL RESULT (second)');
+  });
+
+  it('bounds oversized Ollama history and explicitly raises the native context window', async () => {
+    const spy = mockJson({ model: 'llama3', message: { content: 'ok' } });
+    const messages: Array<{ role: string; content: string; name?: string }> = [{ role: 'user', content: 'scan' }];
+    for (let i = 0; i < 24; i++) {
+      messages.push({ role: 'tool', name: `test_${i}`, content: `result-${i} `.repeat(2200) });
+    }
+    await localModel('http://localhost:11434/api').chat(messages as never);
+    const body = JSON.parse((spy.mock.calls[0][1] as { body: string }).body);
+    const chars = body.messages.reduce((sum: number, message: { content: string }) => sum + message.content.length, 0);
+    expect(chars).toBeLessThanOrEqual(24_000);
+    expect(body.options.num_ctx).toBe(32_768);
+  });
+
+  it('surfaces a redacted Ollama HTTP error body for fallback diagnostics', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      statusText: 'Bad Request',
+      text: async () => '{"error":"context length exceeded","token":"secret-value-1234567890"}',
+    }));
+    await expect(localModel('http://localhost:11434/api').prompt('scan'))
+      .rejects.toThrow('Local LLM HTTP 400 Bad Request: {"error":"context length exceeded","token":"[redacted]"}');
   });
 
   it('merges caller system prompts into one leading system message for vLLM templates', async () => {
