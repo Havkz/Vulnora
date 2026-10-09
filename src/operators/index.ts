@@ -5,6 +5,7 @@
  * Each operator is specialized for a specific phase of the kill chain.
  */
 
+import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
 import type { PackBoard } from '../pack/board.js';
@@ -313,7 +314,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   private agentLoop?: AgentLoop;
   /** Shared pack board (Phase-2). Attached only when swarm coordination is on; absent = solo baseline. */
   private board?: PackBoard;
-  private cooldownTimer: NodeJS.Timeout | null = null;
+  private activeTask?: { task: Task; controller: AbortController };
   private findings: Finding[] = [];
   private credentials: Credential[] = [];
   /** White-box source excerpt (security-prioritized), set by TempestCommand.setWhiteboxSource */
@@ -381,15 +382,22 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       throw new Error(`Operator ${this.callsign} is not available (status: ${this._state.status})`);
     }
 
-    this.setStatus('tasked');
+    const controller = new AbortController();
+    const signal = controller.signal;
+    this.activeTask = { task, controller };
+    const isCurrent = () => this.activeTask?.controller === controller && !signal.aborted;
+    const cancelled = (): TaskResult => ({ success: false, error: `aborted: ${String(signal.reason || 'task replaced')}` });
     this._state.currentTask = task.id;
     this._state.lastActivityTime = Date.now();
-
+    this.setStatus('tasked');
+    if (!isCurrent()) return cancelled();
     this.emit('task:started', { task });
+    if (!isCurrent()) return cancelled();
 
     try {
       this.setStatus('executing');
-      const result = await this.executeTask(task, target);
+      const result = await this.executeTask(task, target, signal);
+      if (!isCurrent()) return cancelled();
 
       this._state.completedTasks++;
       this._state.currentTask = null;
@@ -397,10 +405,13 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       this.emit('task:completed', { task, result });
 
       // Apply cooldown after task
-      await this.applyCooldown();
+      await this.applyCooldown(signal);
+      if (!isCurrent()) return cancelled();
+      this.activeTask = undefined;
 
       return result;
     } catch (error) {
+      if (!isCurrent()) return cancelled();
       this._state.failedTasks++;
       this._state.currentTask = null;
 
@@ -410,15 +421,18 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       // failed task into smaller subtasks instead of giving up.
       const attempt = (task as any)._decomposeAttempt || 0;
       if (this.llm && attempt < this.config.maxRetries) {
-        const subtasks = await this.decomposeTask(task, errorMessage);
+        const subtasks = await this.decomposeTask(task, errorMessage, signal);
+        if (!isCurrent()) return cancelled();
         if (subtasks.length > 0) {
           this.emit('task:decomposed', { parent: task, subtasks, reason: errorMessage });
+          this.activeTask = undefined;
           this.setStatus('idle');
 
           const subResults: TaskResult[] = [];
           for (const sub of subtasks) {
             (sub as any)._decomposeAttempt = attempt + 1;
             const r = await this.assignTask(sub, target);
+            if (r.error?.startsWith('aborted:')) return r;
             subResults.push(r);
           }
 
@@ -433,7 +447,10 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
 
       this.emit('task:failed', { task, error: errorMessage });
       this.increaseDetectionRisk(0.1);
-      this.setStatus('idle');
+      if (isCurrent()) {
+        this.activeTask = undefined;
+        if (!this.isBurned()) this.setStatus('idle');
+      }
 
       return {
         success: false,
@@ -457,19 +474,20 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   /**
    * Execute a task with an optional target context
    */
-  async executeTask(task: Task, target?: Target): Promise<TaskResult> {
+  async executeTask(task: Task, target?: Target, signal?: AbortSignal): Promise<TaskResult> {
+    signal?.throwIfAborted();
     // If we have an agent loop (LLM + Arsenal), use autonomous ReAct execution.
     // Pass the white-box source excerpt (if any) so the model sees the target's
     // real source alongside the task; empty string keeps black-box behavior.
     if (this.agentLoop && this.llm) {
       const onThinking = ({ content }: { content: string }): void => {
-        this.emit('agent:thinking', { task, content });
+        if (!signal?.aborted) this.emit('agent:thinking', { task, content });
       };
       const onToolCall = ({ name, args, source }: { name: string; args: Record<string, unknown>; source?: 'agent' | 'backend_seeded' }): void => {
-        this.emit('agent:tool_call', { task, name, args, source });
+        if (!signal?.aborted) this.emit('agent:tool_call', { task, name, args, source });
       };
       const onToolResult = ({ name, result, source }: { name: string; result: ToolResult; source?: 'agent' | 'backend_seeded' }): void => {
-        this.emit('agent:tool_result', { task, name, result, source });
+        if (!signal?.aborted) this.emit('agent:tool_result', { task, name, result, source });
       };
       const canForwardAgentEvents =
         typeof this.agentLoop.on === 'function' &&
@@ -486,7 +504,8 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
         // operator sees teammates' verified leads/claims — it builds on them instead of running blind.
         this.board?.heartbeat(this.id, 'hunting', task.name);
         const sharedContext = this.board?.situationReport(this.id);
-        result = await this.agentLoop.run(task, this.profile.systemPrompt, target, this.whiteboxSource, sharedContext);
+        result = await this.agentLoop.run(task, this.profile.systemPrompt, target, this.whiteboxSource, sharedContext, signal);
+        signal?.throwIfAborted();
       } finally {
         if (canForwardAgentEvents) {
           this.agentLoop.off('agent:thinking', onThinking);
@@ -556,7 +575,8 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
     if (this.llm) {
       const prompt = this.buildTaskPrompt(task);
       const _p = getOperatorParams(this.archetype);
-      const response = await this.llm.prompt(prompt, this.profile.systemPrompt, { temperature: _p.temperature, maxTokens: _p.maxTokens });
+      const response = await this.llm.prompt(prompt, this.profile.systemPrompt, { temperature: _p.temperature, maxTokens: _p.maxTokens, signal });
+      signal?.throwIfAborted();
       return this.parseTaskResponse(response, task);
     }
 
@@ -578,7 +598,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
    * The operator asks its LLM to break the problem down — this is an
    * internal recovery strategy, never surfaced as a user-facing mode.
    */
-  private async decomposeTask(task: Task, failureReason: string): Promise<Task[]> {
+  private async decomposeTask(task: Task, failureReason: string, signal?: AbortSignal): Promise<Task[]> {
     if (!this.llm) return [];
     try {
       const prompt = `A task just FAILED. Your job is to decompose it into 2-4 smaller, independent subtasks that are each more likely to succeed.
@@ -592,7 +612,7 @@ FAILED TASK:
 Respond with ONLY a JSON array of subtask objects, each with "name" and "description" fields. Keep subtasks concrete and scoped — each should be completable on its own. Example:
 [{"name":"enumerate endpoints","description":"Map all HTTP endpoints on the target before attempting exploitation"},{"name":"check auth bypass","description":"Test for authentication bypass on the discovered endpoints"}]`;
 
-      const response = await this.llm.prompt(prompt, this.profile.systemPrompt, { maxTokens: 1024, temperature: 0.3 });
+      const response = await this.llm.prompt(prompt, this.profile.systemPrompt, { maxTokens: 1024, temperature: 0.3, signal });
       const match = response.match(/\[[\s\S]*\]/);
       if (!match) return [];
       const parsed: Array<{ name: string; description: string }> = JSON.parse(match[0]);
@@ -720,17 +740,14 @@ Respond in a structured format.`;
   /**
    * Apply cooldown after task
    */
-  private async applyCooldown(): Promise<void> {
+  private async applyCooldown(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
     this.setStatus('cooldown');
     this.emit('cooldown:started', { durationMs: this.config.cooldownMs });
-
-    await new Promise<void>(resolve => {
-      this.cooldownTimer = setTimeout(() => {
-        this.setStatus('idle');
-        this.emit('cooldown:ended');
-        resolve();
-      }, this.config.cooldownMs);
-    });
+    await delay(this.config.cooldownMs, undefined, { signal });
+    signal.throwIfAborted();
+    this.setStatus('idle');
+    this.emit('cooldown:ended');
   }
 
   /**
@@ -751,10 +768,8 @@ Respond in a structured format.`;
    * Burn the operator (mark as compromised)
    */
   burn(): void {
-    if (this.cooldownTimer) {
-      clearTimeout(this.cooldownTimer);
-      this.cooldownTimer = null;
-    }
+    this.activeTask?.controller.abort(new Error('Operator stopped'));
+    this.activeTask = undefined;
     this.setStatus('burned');
   }
 
@@ -762,47 +777,30 @@ Respond in a structured format.`;
    * Exfiltrate the operator (successful extraction)
    */
   exfiltrate(): void {
-    if (this.cooldownTimer) {
-      clearTimeout(this.cooldownTimer);
-      this.cooldownTimer = null;
-    }
+    this.activeTask?.controller.abort(new Error('Operator stopped'));
+    this.activeTask = undefined;
     this.setStatus('exfiltrated');
   }
 
-  /**
-   * Force-abort whatever this operator is doing and return it to idle.
-   *
-   * This is the recovery hatch for a WEDGED dispatch: the normal completion
-   * path clears `currentTask` and sets status via assignTask()'s resolve/reject,
-   * but if the underlying agent-loop promise never settles (a truly hung LLM
-   * call, a stuck subprocess, etc.) the operator stays pinned in
-   * `executing`/`tasked` forever and can never take new work. TempestCommand's
-   * per-dispatch wall-clock backstop calls this to free the operator so the
-   * mission can make progress.
-   *
-   * It does NOT touch the normal completion path — assignTask()'s own
-   * resolve/reject still run if/when the wedged promise eventually settles;
-   * they simply find the operator already idle (setStatus is idempotent) and
-   * their taskQueue.complete/fail call is a no-op because the task is already
-   * terminal. Only status-machine state is reset here; findings already
-   * recorded are preserved.
-   */
+  /** Cancel the task and prevent its late completion from changing a replacement task. */
   abortActiveTask(reason: string): void {
     // Nothing to abort if the operator isn't holding a task.
     if (this._state.status === 'idle' || this._state.status === 'burned' || this._state.status === 'exfiltrated') {
       return;
     }
-    if (this.cooldownTimer) {
-      clearTimeout(this.cooldownTimer);
-      this.cooldownTimer = null;
-    }
-    this._state.failedTasks++;
+    const task = this.activeTask?.task;
+    const coolingDown = this._state.status === 'cooldown';
+    this.activeTask?.controller.abort(new Error(reason));
+    this.activeTask = undefined;
+    if (this._state.currentTask) this._state.failedTasks++;
     this._state.currentTask = null;
     this._state.lastActivityTime = Date.now();
-    this.emit('task:failed', {
-      task: { id: 'unknown', name: reason } as unknown as Task,
-      error: `aborted: ${reason}`,
-    });
+    if (!coolingDown) {
+      this.emit('task:failed', {
+        task: task || { id: 'unknown', name: reason } as Task,
+        error: `aborted: ${reason}`,
+      });
+    }
     this.setStatus('idle');
   }
 

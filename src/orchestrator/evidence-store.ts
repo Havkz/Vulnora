@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { appendFile, readFile } from 'fs/promises';
 import type { EvidenceRecord } from './tool-orchestrator.js';
 
@@ -52,7 +54,7 @@ export class JsonlEvidenceStore extends MemoryEvidenceStore {
 export function evidenceStoreFromEnvironment(): EvidenceStore {
   const backend = String(process.env.T3MP3ST_EVIDENCE_STORE || 'memory').toLowerCase();
   if (backend === 'jsonl') {
-    return new JsonlEvidenceStore(process.env.T3MP3ST_EVIDENCE_JSONL_PATH || '/tmp/t3mp3st-evidence.jsonl');
+    return new JsonlEvidenceStore(process.env.T3MP3ST_EVIDENCE_JSONL_PATH || join(tmpdir(), 't3mp3st-evidence.jsonl'));
   }
   // SQLite is reserved by the interface but intentionally not required as a dependency.
   return new MemoryEvidenceStore();

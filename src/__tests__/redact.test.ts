@@ -33,6 +33,10 @@ describe('redactString — URL userinfo (basic-auth) scrub', () => {
 });
 
 describe('redactSecrets — approval-audit record shape', () => {
+  it('preserves cookie security attributes while masking session values', () => {
+    const out = redactSecrets({ 'set-cookie': 'session=private; Secure; HttpOnly; SameSite=Lax, csrf=second-private; Path=/' }) as Record<string, string>;
+    expect(out['set-cookie']).toBe('session=[redacted]; Secure; HttpOnly; SameSite=Lax, csrf=[redacted]; Path=/');
+  });
   it('scrubs a userinfo password in the audit target/action a gated credential tool would record', () => {
     // mirrors what Arsenal.execute() records for password_spray({ url: 'https://user:pass@host/login' })
     const record = {

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const configSource = readFileSync(join(process.cwd(), 'src/config/index.ts'), 'utf8');
-const serverSource = readFileSync(join(process.cwd(), 'src/server.ts'), 'utf8');
-const setupScript = readFileSync(join(process.cwd(), 'scripts/setup-api.sh'), 'utf8');
+const configSource = readFileSync(join(process.cwd(), 'src/config/index.ts'), 'utf8').replace(/\r\n/g, '\n');
+const serverSource = readFileSync(join(process.cwd(), 'src/server.ts'), 'utf8').replace(/\r\n/g, '\n');
+const setupScript = readFileSync(join(process.cwd(), 'scripts/setup-api.sh'), 'utf8').replace(/\r\n/g, '\n');
 
 function sourceBlock(startMarker: string, endMarker: string): string {
   const start = configSource.indexOf(startMarker);

@@ -15,7 +15,7 @@
 import { execFile, execFileSync, spawn } from 'child_process';
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
 import { homedir, tmpdir, userInfo } from 'os';
-import { join } from 'path';
+import { join, dirname, resolve } from 'path';
 
 // t3mp3st injects its OWN provider keys (from .env) into the server process. If we let those leak into
 // a spawned CLI, the CLI uses t3mp3st's key instead of the user's native login → 401. The entire point
@@ -277,21 +277,20 @@ export function resolveBin(bin: string): string | undefined {
   return bin;
 }
 
-/**
- * Windows-safe launcher for a resolved agent binary.
- *
- * A `.cmd`/`.bat` shim can't be spawned with shell:false on Windows. It must run through cmd.exe, but
- * hand-rolling `spawn('cmd.exe', ['/d','/s','/c', shim, ...args])` is unsafe because cmd.exe re-parses
- * the command tail with its own quoting rules. Letting Node launch the resolved shim with shell:true
- * uses Node's patched argument escaping path, so adversarial prompt text stays a literal argument.
- */
-function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
-  if (needsShell(resolvedBin)) return spawn(resolvedBin, args, { ...options, shell: true });
-  return spawn(resolvedBin, args, { ...options, shell: false });
+/** Launch npm's Windows agent shims through Node so prompts never enter cmd.exe. */
+function agentCommand(binary: string, args: string[]): { command: string; args: string[] } {
+  if (!isWin32() || !/\.(cmd|bat)$/i.test(binary)) return { command: binary, args };
+  const shim = readFileSync(binary, 'utf8');
+  const script = shim.match(/"%dp0%[\\/]([^"\r\n]+\.(?:cjs|mjs|js))"/i)?.[1];
+  if (!script || !/node\.exe|_prog=node/i.test(shim)) {
+    throw new Error(`Unsupported Windows agent shim: ${binary}. Use a native executable or a standard npm Node shim.`);
+  }
+  return { command: process.execPath, args: [resolve(dirname(binary), script), ...args] };
 }
 
-function needsShell(resolvedBin: string): boolean {
-  return isWin32() && /\.(cmd|bat)$/i.test(resolvedBin);
+export function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
+  const invocation = agentCommand(resolvedBin, args);
+  return spawn(invocation.command, invocation.args, { ...options, shell: false });
 }
 
 function authState(spec: AgentSpec): { authed: boolean; method?: string } {
@@ -331,7 +330,8 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
       });
     };
     try {
-      execFile(exe, spec.versionArgs, { timeout: 8000, shell: needsShell(exe) }, (err, stdout) => {
+      const invocation = agentCommand(exe, spec.versionArgs);
+      execFile(invocation.command, invocation.args, { timeout: 8000, shell: false }, (err, stdout) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
           resolve({ ...base, installed: false, authed: false, ready: false });
           return;
@@ -352,7 +352,8 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
     } catch {
       // Synchronous spawn failures (for example restricted child-process creation) should not reject
       // the whole detection batch; the binary exists, but its version could not be probed.
-      installedNoVersion();
+      if (isWin32() && /\.(cmd|bat)$/i.test(exe)) resolve({ ...base, installed: false, authed: false, ready: false });
+      else installedNoVersion();
     }
   });
 }
@@ -413,7 +414,9 @@ export function runLocalAgent(
   const resolvedBin = resolveBin(spec.bin) || spec.bin;
   return new Promise((resolve) => {
     // stdin:'ignore' so the agent doesn't stall waiting on piped input (e.g. `claude -p`'s 3s stdin wait).
-    const child = spawnAgent(resolvedBin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let child: import('child_process').ChildProcess;
+    try { child = spawnAgent(resolvedBin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) { resolve({ ok: false, latencyMs: Date.now() - t0, output: '', error: String(error) }); return; }
     let out = '';
     let errOut = '';
     let done = false;
@@ -451,7 +454,7 @@ export function pingLocalAgent(id: string, prompt?: string, timeoutMs?: number):
  * clean reply, hermes takes the prompt as an arg. Provider keys are stripped so each CLI uses its own
  * login (no API key needed). Throws on non-zero exit / timeout so the LLMBackbone retry/fallback fires.
  */
-export function localAgentChat(id: string, prompt: string, opts: { model?: string; timeoutMs?: number } = {}): Promise<string> {
+export function localAgentChat(id: string, prompt: string, opts: { model?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string> {
   const spec = getSpec(id);
   if (!spec) return Promise.reject(new Error(`unknown local agent: ${id}`));
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
@@ -477,7 +480,9 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   const cleanup = () => { if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* noop */ } } };
   const resolvedBin = resolveBin(spec.bin) || spec.bin;
   return new Promise((resolve, reject) => {
-    const child = spawnAgent(resolvedBin, args, { env, stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    let child: import('child_process').ChildProcess;
+    try { child = spawnAgent(resolvedBin, args, { env, signal: opts.signal, stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }); }
+    catch (error) { cleanup(); reject(error); return; }
     let out = '';
     let errOut = '';
     let done = false;
@@ -496,6 +501,9 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
         else reject(new Error((errOut.trim() || content || `exited with code ${code}`).slice(0, 800)));
       });
     });
-    if (viaStdin && child.stdin) { child.stdin.write(prompt); child.stdin.end(); }
+    if (viaStdin && child.stdin) {
+      child.stdin.on('error', error => finish(() => reject(error)));
+      child.stdin.end(prompt);
+    }
   });
 }

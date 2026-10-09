@@ -2,6 +2,12 @@
 
 Use this as the team-facing view of what a workstation needs. The UI and API remain useful without every binary installed, but local command readiness improves as these tools appear on `PATH`.
 
+The runtime requires **Node.js 22.12.0 or newer**, npm and Git. CI checks Windows and Linux. Windows resolves native binaries and command shims via `PATH` and `PATHEXT`; POSIX-only tools remain optional and require a compatible installation.
+
+Windows local agents use native executables or standard npm Node shims. npm shims launch their Node entrypoint directly, keeping prompts out of the command shell. Other `.cmd`/`.bat` wrappers are rejected; use a native executable for those installations.
+
+To isolate app settings, set `T3MP3ST_CONFIG_DIR` to an absolute directory. It holds `config.json` and the app's `.env`; home-directory env files are ignored while this override is set. Tests always use a temporary directory.
+
 | Lane | Tools | macOS | Linux Notes | Execution |
 | --- | --- | --- | --- | --- |
 | Core evidence | `file`, `curl`, `dig`, `host`, `whois`, `openssl` | Usually present or `brew install bind openssl@3` | Usually package-manager available | Mixed local and receipt-gated |

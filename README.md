@@ -61,6 +61,8 @@ Offensive security sits behind years of practice and expensive tooling. The bet 
 
 ## Quick start
 
+Requires **Node.js 22.12.0 or newer**, npm and Git (Windows, macOS or Linux).
+
 Fastest path to a running War Room (keyless, ~2 min to set up; mission time depends on the target):
 
 ```bash

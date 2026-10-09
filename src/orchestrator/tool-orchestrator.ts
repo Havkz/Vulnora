@@ -1,8 +1,10 @@
+import { commandPath } from '../command-path.js';
+import { redactSecrets } from '../redact.js';
+import { redactConfiguredSecrets } from '../arsenal/target-headers.js';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { resolve4 } from 'dns/promises';
-import { access, stat, statfs } from 'fs/promises';
-import { constants as fsConstants } from 'fs';
+import { stat, statfs } from 'fs/promises';
 import { promisify } from 'util';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 import { evidenceStoreFromEnvironment, type EvidenceStore } from './evidence-store.js';
@@ -658,9 +660,7 @@ export class ToolOrchestrator {
         dependency = undefined;
       }
       if (!dependency) {
-        const paths = (process.env.PATH || '').split(':').filter(Boolean).map(path => `${path}/${binary}`);
-        let executablePath: string | undefined;
-        for (const path of paths) { try { await access(path, fsConstants.X_OK); executablePath = path; break; } catch { /* next */ } }
+        const executablePath = await commandPath(binary);
         dependency = { available: !!executablePath, path: executablePath, checkedAt: Date.now() };
         if (executablePath) {
           try {
@@ -779,13 +779,15 @@ export class ToolOrchestrator {
     if (reservation.failure) { this.store(call, context, reservation.failure, 0, 'budget_exceeded', reservation.estimated); return reservation.failure; }
     const started = Date.now();
     const controller = new AbortController();
-    context.abortSignal = controller.signal;
+    context.abortSignal = context.abortSignal ? AbortSignal.any([controller.signal, context.abortSignal]) : controller.signal;
+    context.abortSignal.throwIfAborted();
     this.activeExecutions.set(call.normalizedSignature, { host: call.host, controller, supportsAbort: tool.supportsAbort === true });
     const execution = (async () => {
       try {
         const wildcard = /(?:subdomain_enum|subfinder|amass)/i.test(tool.name) ? await this.detectWildcard(call.host) : undefined;
+        context.abortSignal?.throwIfAborted();
         const raw = await this.runWithNetworkPolicy(call, runner);
-        if (controller.signal.aborted) return { ...raw, success: false, error: `Execution aborted: ${String(controller.signal.reason || 'policy stop')}`, metadata: { ...(raw.metadata || {}), aborted: true } };
+        if (context.abortSignal?.aborted) return { ...raw, success: false, error: `Execution aborted: ${String(context.abortSignal.reason || 'policy stop')}`, metadata: { ...(raw.metadata || {}), aborted: true } };
         if (wildcard?.detected) {
           return {
             ...raw,
@@ -795,7 +797,7 @@ export class ToolOrchestrator {
           };
         }
         return raw;
-      } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+      } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error), metadata: context.abortSignal?.aborted ? { aborted: true } : undefined }; }
     })();
     this.inFlight.set(call.equivalentSignature, execution);
     try {
@@ -810,7 +812,7 @@ export class ToolOrchestrator {
           : inferredRepeatReason.replace(/_/g, ' ');
         this.emit('REPEATED', reason, call);
       }
-      this.updateNetwork(record, duration);
+      this.updateNetwork(record, duration, result, call);
       this.resolveConflicts(record);
       if (!result.success) { this.metrics.toolFailures++; this.emit('FAILED', record.errorType || 'tool error', call); }
       else this.emit('EXECUTED', 'new evidence', call);
@@ -871,21 +873,28 @@ export class ToolOrchestrator {
       findingIds: enrichedFindings.map(finding => finding.findingId!),
       budgetCostEstimated, budgetCostActual, budgetCostSource,
     };
+    // Compute policy and hashes from the original response; retain only redacted evidence.
+    const scrub = <T>(value: T): T => redactSecrets(redactConfiguredSecrets(value)) as T;
+    record.target = scrub(record.target);
+    record.requestParameters = scrub(record.requestParameters);
+    record.rawOutput = scrub(record.rawOutput);
+    record.parsedOutput = scrub(record.parsedOutput);
+    record.responseHeaders = scrub(record.responseHeaders);
+    record.result = scrub(record.result);
     this.records.push(record);
     void this.evidenceStore.append(record).catch(() => {});
     return record;
   }
 
-  private updateNetwork(record: EvidenceRecord, latencyMs: number): void {
-    const call = normalizeToolCall(record.toolName, { parameters: record.requestParameters });
+  private updateNetwork(record: EvidenceRecord, latencyMs: number, raw: ToolResult, call: NormalizedToolCall): void {
+    const http = parseHttp(raw);
     const state = this.networkState(call.host); const now = Date.now();
-    const responseBody = typeof record.parsedOutput?.responseBody === 'string' ? record.parsedOutput.responseBody : '';
-    const edge = edgeFrom(record.responseHeaders, `${record.rawOutput} ${responseBody}`);
+    const edge = edgeFrom(http.headers, `${raw.output || ''} ${http.body || ''}`);
     if (edge.edge) { state.edgeSurface = true; state.edgeProvider = edge.provider; if (state.blockState === 'clear') state.blockState = 'defensive'; }
     state.latencyMs = state.latencyMs === undefined ? latencyMs : Math.round(state.latencyMs * 0.7 + latencyMs * 0.3);
     const priorRouteSuccess = state.recent.some(item => item.path === call.path && item.type === 'success');
     const repeatedBlockFingerprint = !!record.responseFingerprint && state.recent.some(item => item.fingerprint === record.responseFingerprint && item.path !== call.path && /^403_/.test(item.type));
-    const wafCookie = /(?:__cf_bm|cf_clearance|__ddg|incap_ses|visid_incap|sucuri)/i.test(String(record.responseHeaders?.['set-cookie'] || ''));
+    const wafCookie = /(?:__cf_bm|cf_clearance|__ddg|incap_ses|visid_incap|sucuri)/i.test(String(http.headers?.['set-cookie'] || ''));
     const latencyShift = state.latencyMs !== undefined && latencyMs > Math.max(1500, state.latencyMs * 3);
     const providerSignal = edge.edge || !!record.networkContext.edgeProvider;
     const strong403 = record.responseStatus === 403 && (edge.challenge || wafCookie || repeatedBlockFingerprint || priorRouteSuccess || latencyShift || providerSignal);

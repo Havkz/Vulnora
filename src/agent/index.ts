@@ -159,8 +159,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     _systemPrompt: string,
     target?: Target,
     sourceContext?: string,
-    sharedContext?: string
+    sharedContext?: string,
+    signal?: AbortSignal
   ): Promise<AgentResult> {
+    signal?.throwIfAborted();
     const startTime = Date.now();
     const steps: AgentStep[] = [];
     const allFindings: ToolFinding[] = [];
@@ -223,7 +225,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     const bootstrapCall = this.getLocalReconBootstrap(task, target, toolDefs);
     if (bootstrapCall) {
-      const toolStep = await this.executeTool(bootstrapCall, target, task, -1);
+      const toolStep = await this.executeTool(bootstrapCall, target, task, -1, signal);
       toolCallCounts.set(bootstrapCall.name, 1);
       totalToolCalls++;
       steps.push(toolStep);
@@ -269,10 +271,13 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           hitLimit = true;
           break;
         }
+        signal?.throwIfAborted();
         const response = await this.llm.chatWithTools(messages, callableToolDefs, {
           maxTokens: Math.min(profile.responseTokens, remainingTokens - estimatedInputTokens),
+          signal,
           temperature: 0.3, // Lower temperature for tool-using tasks
         });
+        signal?.throwIfAborted();
         consecutiveLlmFailures = 0;
 
         tokensUsed += response.usage?.totalTokens
@@ -330,7 +335,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
                 };
                 toolStep = { iteration: i, type: 'tool_call', toolName: toolCall.name, toolArgs: toolCall.arguments, toolResult: exhausted, timestamp: Date.now() };
               } else {
-                toolStep = await this.executeTool(toolCall, target, task, i);
+                toolStep = await this.executeTool(toolCall, target, task, i, signal);
                 toolCallCounts.set(toolCall.name, count + 1);
                 seenCalls.set(callHash, String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160));
               }
@@ -427,6 +432,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           break;
         }
       } catch (error) {
+        signal?.throwIfAborted();
         this.emit('agent:error', { error: error as Error, step: i });
 
         // On error, try to continue with a reduced context
@@ -448,6 +454,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       }
     }
 
+    signal?.throwIfAborted();
     // Hit iteration or token limit — ask LLM for a final summary
     hitLimit = true;
     messages.push({
@@ -473,8 +480,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           + 'Recommended next step: Review preserved evidence or start a separately authorized follow-up task.';
       } else try {
         const finalResponse = await this.llm.chat(messages, {
+          signal,
           maxTokens: Math.min(profile.finalResponseTokens, remainingTokens - estimatedFinalInput),
         });
+        signal?.throwIfAborted();
         summary = isContextCompactionNotice(finalResponse.content)
           ? 'RESULT\nStatus: inconclusive\n\nFinding: None validated.\nTarget: Preserved mission target.\nEvidence: The model returned only a history-compaction notice.\nImpact: No impact demonstrated.\nActions performed: Preserved completed tool steps.\nLimitations: No usable final model response.\nRecommended next step: Retry with the preserved mission prompt.'
           : finalResponse.content;
@@ -485,6 +494,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           mergeFinding(allFindings, f);
         }
       } catch (error) {
+        signal?.throwIfAborted();
         finalSummaryError = error instanceof Error ? error.message : String(error);
       }
     }
@@ -569,8 +579,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     toolCall: LLMToolCall,
     target: Target | undefined,
     task: Task,
-    iteration: number
+    iteration: number,
+    signal?: AbortSignal
   ): Promise<AgentStep> {
+    signal?.throwIfAborted();
     const source = iteration < 0 ? 'backend_seeded' : 'agent';
     const attemptId = `attempt-${randomUUID()}`;
     const sourceToolCallId = `tool-call-${randomUUID()}`;
@@ -592,8 +604,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         sourceToolCallId,
         repeatReason: task.executionPlan?.toolName === toolCall.name ? task.executionPlan.repeatReason : undefined,
         parameters: toolCall.arguments,
+        abortSignal: signal,
       });
     } catch (err) {
+      signal?.throwIfAborted();
       // A bad/hallucinated tool name must NOT crash the loop. Return the callable set so the
       // model self-corrects in-place instead of dying or looping on a tool that doesn't exist.
       const available = this.arsenal
@@ -609,6 +623,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       };
     }
 
+    signal?.throwIfAborted();
     this.emit('agent:tool_result', { name: toolCall.name, result: toolResult, source });
 
     return {

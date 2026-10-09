@@ -14,8 +14,8 @@
  * POSIX-focused, with a small Windows boundary assertion: unresolved Windows shims fail closed
  * instead of returning a bare name that would bypass the safe .cmd/.bat launch path.
  */
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveBin, detectLocalAgents, runLocalAgent, localAgentChat } from '../agent/local-agents.js';
@@ -43,12 +43,13 @@ function putExe(dir: string, name: string, content: string = FAKE_CLI): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   process.env.PATH = savedEnv.PATH;
   if (savedEnv.AGENT_HOME === undefined) delete process.env.T3MP3ST_AGENT_HOME; else process.env.T3MP3ST_AGENT_HOME = savedEnv.AGENT_HOME;
   for (const d of tmpDirs.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* noop */ } }
 });
 
-describe('resolveBin — macOS/POSIX well-known-dir resolution (issue #78)', () => {
+describe.skipIf(process.platform === 'win32')('resolveBin — macOS/POSIX well-known-dir resolution (issue #78)', () => {
   it('finds a CLI in ~/.local/bin even when PATH omits it (the reported bug)', () => {
     const home = scratch();
     const bin = putExe(join(home, '.local', 'bin'), 'faketool');
@@ -154,22 +155,10 @@ describe('resolveBin — macOS/POSIX well-known-dir resolution (issue #78)', () 
     expect(resolveBin('definitely-not-a-real-cli-xyz')).toBe('definitely-not-a-real-cli-xyz');
   });
 
-  it('does NOT scan POSIX dirs on win32 — unresolved shims fail closed', () => {
-    const home = scratch();
-    putExe(join(home, '.local', 'bin'), 'faketool');
-    process.env.T3MP3ST_AGENT_HOME = home;
-    process.env.PATH = '/usr/bin:/bin';
-    const orig = Object.getOwnPropertyDescriptor(process, 'platform') || { value: process.platform, configurable: true };
-    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
-    try {
-      expect(resolveBin('faketool')).toBeUndefined();
-    } finally {
-      Object.defineProperty(process, 'platform', orig);
-    }
-  });
+
 });
 
-describe('detectLocalAgents — wiring: a well-known-dir CLI is reported installed (issue #78)', () => {
+describe.skipIf(process.platform === 'win32')('detectLocalAgents — wiring: a well-known-dir CLI is reported installed (issue #78)', () => {
   it('reports Claude Code installed + versioned when `claude` lives in ~/.local/bin and PATH omits it', async () => {
     const home = scratch();
     const claudePath = putExe(join(home, '.local', 'bin'), 'claude');
@@ -187,7 +176,7 @@ describe('detectLocalAgents — wiring: a well-known-dir CLI is reported install
   });
 });
 
-describe('spawn call-sites use the resolved path (issue #78 — detected-but-unspawnable would be worse)', () => {
+describe.skipIf(process.platform === 'win32')('spawn call-sites use the resolved path (issue #78 — detected-but-unspawnable would be worse)', () => {
   // Behavioral, not a spawn spy: if the rewiring regressed to the bare `spec.bin`, spawn('claude')
   // under PATH=/usr/bin:/bin throws ENOENT → ok:false / reject. Success proves the resolved path ran.
   it('runLocalAgent launches the well-known-dir CLI (not the bare name)', async () => {
@@ -208,5 +197,87 @@ describe('spawn call-sites use the resolved path (issue #78 — detected-but-uns
     process.env.PATH = '/usr/bin:/bin';
 
     await expect(localAgentChat('claude', 'ping', { timeoutMs: 4000 })).resolves.toContain('1.2.3');
+  });
+});
+
+describe('resolveBin Windows boundary', () => {
+  it('does NOT scan POSIX dirs on win32 — unresolved shims fail closed', () => {
+    const home = scratch();
+    process.env.T3MP3ST_AGENT_HOME = home;
+    process.env.PATH = '/usr/bin:/bin';
+    const orig = Object.getOwnPropertyDescriptor(process, 'platform') || { value: process.platform, configurable: true };
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    try {
+      expect(resolveBin('faketool')).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, 'platform', orig);
+    }
+  });
+});
+
+describe.skipIf(process.platform !== 'win32')('Windows local agent command shims', () => {
+  function fixture(name = 'claude'): { home: string; cli: string } {
+    const home = scratch();
+    const directory = join(home, 'bin');
+    const script = join(directory, 'node_modules', 'fixture', 'cli.mjs');
+    mkdirSync(join(directory, 'node_modules', 'fixture'), { recursive: true });
+    writeFileSync(script, `import { writeFileSync } from 'node:fs';
+if (process.argv.includes('--version')) console.log('1.2.3');
+else if (process.argv.includes('-z')) {
+  const prompt = process.argv[process.argv.indexOf('-z') + 1];
+  if (prompt === 'stall') { writeFileSync(process.env.T3MP3ST_FIXTURE_PID_FILE, String(process.pid)); setInterval(() => {}, 1000); }
+  else console.log(JSON.stringify(prompt));
+}
+else { let prompt = ''; process.stdin.on('data', chunk => { prompt += chunk; }); process.stdin.on('end', () => console.log('1.2.3')); }`, 'utf8');
+    const cli = putExe(directory, name + '.cmd', '@echo off\r\nset "dp0=%~dp0"\r\nset "_prog=node"\r\n"%_prog%" "%dp0%\\node_modules\\fixture\\cli.mjs" %*\r\n');
+    process.env.T3MP3ST_AGENT_HOME = home;
+    process.env.PATH = `${directory};${join(process.env.SystemRoot || 'C:\\Windows', 'System32')}`;
+    return { home, cli };
+  }
+
+  it('detects and launches an isolated npm .cmd CLI from PATH', async () => {
+    const { cli } = fixture();
+    expect(resolveBin('claude')).toBe(cli);
+    const detection = (await detectLocalAgents()).find(agent => agent.id === 'claude');
+    expect(detection?.installed).toBe(true);
+    expect(detection?.path).toBe(cli);
+    expect(detection?.version).toBe('1.2.3');
+    await expect(localAgentChat('claude', 'ping', { timeoutMs: 4000 })).resolves.toBe('1.2.3');
+  });
+
+  it('passes shell metacharacters and multiline prompts literally to npm shims', async () => {
+    const { home } = fixture('hermes');
+    const marker = join(home, 'unexpected.txt');
+    const prompt = `literal " & echo injected > "${marker}" & rem "\nsecond line %TEMP% !VAR! | < > ^`;
+    const response = await localAgentChat('hermes', prompt, { timeoutMs: 4000 });
+    expect(JSON.parse(response)).toBe(prompt);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('rejects an opaque batch wrapper instead of interpreting the prompt in a shell', async () => {
+    const home = scratch();
+    putExe(home, 'hermes.cmd', '@echo off\r\necho %*\r\n');
+    process.env.PATH = `${home};${join(process.env.SystemRoot || 'C:\\Windows', 'System32')}`;
+    await expect(localAgentChat('hermes', 'unsafe & text')).rejects.toThrow('Unsupported Windows agent shim');
+  });
+
+  it('cancels the Node process behind an npm shim', async () => {
+    const { home } = fixture('hermes');
+    const pidFile = join(home, 'child.pid');
+    vi.stubEnv('T3MP3ST_FIXTURE_PID_FILE', pidFile);
+    const controller = new AbortController();
+    const request = localAgentChat('hermes', 'stall', { signal: controller.signal, timeoutMs: 4000 });
+    const rejected = expect(request).rejects.toThrow();
+    try {
+      await vi.waitFor(() => expect(existsSync(pidFile)).toBe(true));
+      const pid = Number(readFileSync(pidFile, 'utf8'));
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      controller.abort(new Error('stop child'));
+      await rejected;
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+    } finally {
+      controller.abort();
+      await rejected;
+    }
   });
 });

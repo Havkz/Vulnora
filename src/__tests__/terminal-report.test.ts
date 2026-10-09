@@ -1,7 +1,7 @@
+import { stripVTControlCharacters as stripAnsi } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { formatTerminalReport } from '../terminal-report.js';
 
-const stripAnsi = (value: string): string => value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '');
 
 describe('terminal report formatting', () => {
   it('removes markdown decoration while preserving readable report content', () => {

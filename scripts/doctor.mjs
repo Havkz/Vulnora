@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 import { access, readFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { commandExists } from './ops-preflight.mjs';
 import process from 'node:process';
 
-const execFileAsync = promisify(execFile);
 const baseUrl = (process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333').replace(/\/$/, '');
 const jsonMode = process.argv.includes('--json');
 const strictMode = process.argv.includes('--strict');
@@ -24,12 +22,7 @@ async function fileExists(path) {
 }
 
 async function commandPath(binary) {
-  try {
-    const { stdout } = await execFileAsync('which', [binary], { timeout: 1500 });
-    return stdout.trim();
-  } catch {
-    return '';
-  }
+  return await commandExists(binary) ? 'available on PATH' : '';
 }
 
 async function apiGet(path) {
@@ -56,12 +49,14 @@ function scriptExists(pkg, scriptName) {
 
 async function main() {
   const startedAt = new Date().toISOString();
-  const major = Number(process.versions.node.split('.')[0]);
-  check('Node runtime is supported', major >= 18, `node ${process.version}`);
 
   const packageJsonExists = await fileExists('package.json');
   check('package.json exists', packageJsonExists);
   const pkg = packageJsonExists ? JSON.parse(await readFile('package.json', 'utf8')) : {};
+  const minimum = String(pkg.engines?.node || '>=22.12.0').replace(/^>=/, '').split('.').map(Number);
+  const current = process.versions.node.split('.').map(Number);
+  const supported = current[0] > minimum[0] || (current[0] === minimum[0] && (current[1] > minimum[1] || (current[1] === minimum[1] && current[2] >= minimum[2])));
+  check('Node runtime is supported', supported, `node ${process.version}; required ${pkg.engines?.node}`);
   for (const script of ['doctor', 'server', 'typecheck', 'test', 'arsenal:smoke', 'field:drill', 'exploit:smoke', 'prompt:audit']) {
     check(`npm script: ${script}`, scriptExists(pkg, script), pkg.scripts?.[script] || 'missing');
   }
@@ -98,7 +93,7 @@ async function main() {
   ];
   for (const [binary, detail] of commandChecks) {
     const path = await commandPath(binary);
-    const required = ['git', 'node', 'npm', 'file', 'curl'].includes(binary);
+    const required = ['git', 'node', 'npm', 'curl'].includes(binary);
     check(`command: ${binary}`, Boolean(path), path || `missing - ${detail}`, required ? 'block' : 'warn');
   }
 

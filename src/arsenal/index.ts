@@ -4,6 +4,8 @@
  * Tool registry and execution management.
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { commandPath } from '../command-path.js';
 import { EventEmitter } from 'eventemitter3';
 import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
@@ -120,8 +122,9 @@ import type { CVEEntry } from '../stubs/index.js';
 type PortProbeState = 'open' | 'closed' | 'filtered/timeout' | 'unreachable';
 
 async function probePort(host: string, port: number, timeout: number = 2000): Promise<PortProbeState> {
+  fetchContext.getStore()?.signal?.throwIfAborted();
   return new Promise((resolve) => {
-    const socket = new net.Socket();
+    const socket = new net.Socket({ signal: fetchContext.getStore()?.signal });
     socket.setTimeout(timeout);
 
     socket.on('connect', () => {
@@ -162,75 +165,9 @@ export function normalizePortScanTimeout(raw: unknown): number {
 // TARGET HEADER INJECTION
 // =============================================================================
 
-interface TargetHeaderConfig {
-  origin: string;
-  headers: Headers;
-}
+import { parseTargetHeaderConfig, targetHeadersForUrl, redactConfiguredSecrets } from './target-headers.js';
 
-const FORBIDDEN_TARGET_HEADERS = new Set([
-  'connection', 'content-length', 'host', 'proxy-authenticate', 'proxy-authorization',
-  'te', 'trailer', 'transfer-encoding', 'upgrade',
-]);
-
-/** Parse an exact-origin binding and its default headers. Invalid configuration fails closed. */
-function parseTargetHeaderConfig(): TargetHeaderConfig | null {
-  const rawOrigin = process.env.TEMPEST_TARGET_ORIGIN?.trim();
-  const rawHeaders = process.env.TEMPEST_TARGET_HEADERS?.trim();
-  if (!rawOrigin || !rawHeaders) return null;
-
-  try {
-    const target = new URL(rawOrigin);
-    if (!['http:', 'https:'].includes(target.protocol)
-      || target.username || target.password
-      || target.pathname !== '/' || target.search || target.hash) {
-      return null;
-    }
-
-    const parsed: unknown = JSON.parse(rawHeaders);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-
-    const headers = new Headers();
-    for (const [name, value] of Object.entries(parsed)) {
-      if (typeof value !== 'string' || FORBIDDEN_TARGET_HEADERS.has(name.toLowerCase())) return null;
-      headers.set(name, value);
-    }
-    return headers.keys().next().done ? null : { origin: target.origin, headers };
-  } catch {
-    return null;
-  }
-}
-
-function targetHeadersForUrl(url: string | URL, explicit?: RequestInit['headers']): Headers | undefined {
-  const merged = new Headers();
-  const config = parseTargetHeaderConfig();
-  try {
-    if (config && new URL(url).origin === config.origin) {
-      config.headers.forEach((value, name) => merged.set(name, value));
-    }
-  } catch {
-    // Let fetch or curl report malformed URLs; they simply receive no configured secrets.
-  }
-  new Headers(explicit).forEach((value, name) => merged.set(name, value));
-  return merged.keys().next().done ? undefined : merged;
-}
-
-function redactConfiguredSecrets(result: ToolResult): ToolResult {
-  const config = parseTargetHeaderConfig();
-  const secrets = config ? [...config.headers.values()].filter(Boolean) : [];
-  if (secrets.length === 0) return result;
-
-  const redact = (value: unknown): unknown => {
-    if (typeof value === 'string') {
-      return secrets.reduce((text, secret) => text.split(secret).join('[REDACTED]'), value);
-    }
-    if (Array.isArray(value)) return value.map(redact);
-    if (value && typeof value === 'object') {
-      return Object.fromEntries(Object.entries(value).map(([key, nested]) => [key, redact(nested)]));
-    }
-    return value;
-  };
-  return redact(result) as ToolResult;
-}
+const fetchContext = new AsyncLocalStorage<{ scope: ArsenalScope | null; signal?: AbortSignal }>();
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const CROSS_ORIGIN_CREDENTIAL_HEADERS = ['authorization', 'cookie', 'cookie2', 'proxy-authorization'];
@@ -239,25 +176,34 @@ const CROSS_ORIGIN_CREDENTIAL_HEADERS = ['authorization', 'cookie', 'cookie2', '
 async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<Response> {
   const config = parseTargetHeaderConfig();
   let currentUrl = new URL(url);
-  if (!config || currentUrl.origin !== config.origin) return globalThis.fetch(url, init);
+  const context = fetchContext.getStore();
+  const signals = [init.signal, context?.signal].filter((signal): signal is AbortSignal => !!signal);
+  const signal = signals.length ? AbortSignal.any(signals) : undefined;
 
   const explicitHeaders = new Headers(init.headers);
   let method = (init.method || 'GET').toUpperCase();
   let body = init.body;
 
   for (let redirects = 0; redirects <= 20; redirects++) {
+    signal?.throwIfAborted();
+    const denied = scopeViolation(context?.scope || null, { parameters: { url: currentUrl.href } });
+    if (denied && !await isResolvedAddressOfAllowedHost(context?.scope || null, denied)) {
+      throw new Error(`SCOPE DENIED: redirect target '${denied}' is not authorized`);
+    }
     const headers = targetHeadersForUrl(currentUrl, explicitHeaders);
-    const response = await globalThis.fetch(currentUrl, { ...init, method, body, headers, redirect: 'manual' });
+    const response = await globalThis.fetch(currentUrl, { ...init, method, body, headers, signal, redirect: 'manual' });
     const location = response.headers.get('location');
-    if (!REDIRECT_STATUS.has(response.status) || !location) return response;
+    if (!REDIRECT_STATUS.has(response.status) || !location || init.redirect === 'manual') return response;
+    await response.body?.cancel();
+    if (init.redirect === 'error') throw new Error('Target request redirect is forbidden');
     if (redirects === 20) throw new Error('Target request exceeded 20 redirects');
 
     const nextUrl = new URL(location, currentUrl);
     if (nextUrl.origin !== currentUrl.origin) {
-      config.headers.forEach((_value, name) => explicitHeaders.delete(name));
+      config?.headers.forEach((_value, name) => explicitHeaders.delete(name));
       CROSS_ORIGIN_CREDENTIAL_HEADERS.forEach(name => explicitHeaders.delete(name));
     }
-    if (response.status === 303 || ((response.status === 301 || response.status === 302) && method === 'POST')) {
+    if ((response.status === 303 && method !== 'GET' && method !== 'HEAD') || ((response.status === 301 || response.status === 302) && method === 'POST')) {
       method = 'GET';
       body = undefined;
       ['content-encoding', 'content-language', 'content-location', 'content-type'].forEach(name => explicitHeaders.delete(name));
@@ -280,7 +226,7 @@ async function nativeHttpRequest(
   const headers = mergedHeaders ? Object.fromEntries(mergedHeaders.entries()) : undefined;
   const transport = target.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
-    const request = transport.request(target, { method, headers }, response => {
+    const request = transport.request(target, { method, headers, signal: fetchContext.getStore()?.signal }, response => {
       const responseHeaders = Object.fromEntries(Object.entries(response.headers)
         .filter((entry): entry is [string, string | string[]] => entry[1] !== undefined));
       response.resume();
@@ -463,6 +409,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   });
 
   private async runToolHandler(toolName: string, context: ToolContext, handler: CustomTool['handler']): Promise<ToolResult> {
+    context.abortSignal?.throwIfAborted();
     const serialized = new Set(['nuclei_scan', 'nmap_scan', 'ffuf_fuzz', 'dir_bruteforce']);
     if (!serialized.has(toolName)) return handler(context);
 
@@ -476,6 +423,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
     await previous.catch(() => {});
     try {
+      context.abortSignal?.throwIfAborted();
       const cacheKey = toolName === 'nuclei_scan'
         ? JSON.stringify({
             host,
@@ -491,6 +439,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
         if (cached) return cached;
       }
       const result = await handler(context);
+      context.abortSignal?.throwIfAborted();
       if (cacheKey && result.success) this.nucleiResultCache.set(cacheKey, result);
       return result;
     } finally {
@@ -553,6 +502,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     toolName: string,
     context: ToolContext
   ): Promise<ToolResult> {
+    context.abortSignal?.throwIfAborted();
     const tool = this.tools.get(toolName);
     if (!tool) {
       throw new Error(`Tool "${toolName}" not found`);
@@ -610,7 +560,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       const result = redactConfiguredSecrets(await this.orchestrator.execute(
         tool,
         context,
-        () => this.runToolHandler(toolName, context, tool.handler)
+        () => fetchContext.run({ scope: this.scope, signal: context.abortSignal }, () => this.runToolHandler(toolName, context, tool.handler))
       ));
       const durationMs = Date.now() - startTime;
 
@@ -940,6 +890,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       // Check subdomains in parallel with concurrency limit
       const concurrency = 10;
       for (let i = 0; i < prefixes.length; i += concurrency) {
+        context.abortSignal?.throwIfAborted();
         const batch = prefixes.slice(i, i + concurrency);
         const checks = await Promise.all(
           batch.map(async (prefix) => {
@@ -1035,7 +986,8 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }
 
       return new Promise((resolve) => {
-        const socket = new net.Socket();
+        fetchContext.getStore()?.signal?.throwIfAborted();
+        const socket = new net.Socket({ signal: fetchContext.getStore()?.signal });
         let data = '';
 
         socket.setTimeout(30000);
@@ -1591,6 +1543,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       const host = context.parameters.host as string;
       const port = (context.parameters.port as number) || 443;
 
+      context.abortSignal?.throwIfAborted();
       return new Promise((resolve) => {
         const issues: string[] = [];
         const info: string[] = [];
@@ -1682,6 +1635,9 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           }
         });
 
+        const abort = () => socket.destroy(new Error('TLS request aborted'));
+        context.abortSignal?.addEventListener('abort', abort, { once: true });
+        socket.once('close', () => context.abortSignal?.removeEventListener('abort', abort));
         socket.on('error', (err) => {
           resolve({
             success: false,
@@ -3450,12 +3406,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
  * Check if a command-line tool is available on the system
  */
 export async function isToolAvailable(command: string): Promise<boolean> {
-  try {
-    await execFileAsync('which', [command], { timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
+  return Boolean(await commandPath(command));
 }
 
 /**
@@ -3468,18 +3419,20 @@ export async function runSubprocess(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const timeout = options?.timeout ?? 60000;
   const maxOutput = options?.maxOutput ?? 1024 * 1024; // 1MB
+  const signals = [options?.signal, fetchContext.getStore()?.signal].filter((signal): signal is AbortSignal => !!signal);
+  const signal = signals.length ? AbortSignal.any(signals) : undefined;
 
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       timeout,
       maxBuffer: maxOutput,
-      signal: options?.signal,
+      signal,
     });
     return { stdout, stderr, exitCode: 0 };
   } catch (error: unknown) {
     const err = error as { stdout?: string; stderr?: string; code?: number; killed?: boolean; name?: string };
-    if (options?.signal?.aborted || err.name === 'AbortError') {
-      return { stdout: err.stdout || '', stderr: `Process aborted: ${String(options?.signal?.reason || 'policy stop')}`, exitCode: -2 };
+    if (signal?.aborted || err.name === 'AbortError') {
+      return { stdout: err.stdout || '', stderr: `Process aborted: ${String(signal?.reason || 'policy stop')}`, exitCode: -2 };
     }
     if (err.killed) {
       return { stdout: err.stdout || '', stderr: 'Process killed (timeout)', exitCode: -1 };

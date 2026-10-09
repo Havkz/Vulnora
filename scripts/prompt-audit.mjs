@@ -2,8 +2,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+import { fileURLToPath } from 'node:url';
 
-const root = path.resolve(new URL('..', import.meta.url).pathname);
+const root = fileURLToPath(new URL('..', import.meta.url));
 const promptPath = path.join(root, 'src/prompts/index.ts');
 const resourcesPath = path.join(root, 'src/resources/index.ts');
 const serverPath = path.join(root, 'src/server.ts');

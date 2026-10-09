@@ -11,8 +11,8 @@
  * - Local (Ollama, etc.)
  */
 
+import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'eventemitter3';
-import { spawn } from 'child_process';
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { homedir, tmpdir } from 'os';
@@ -20,7 +20,7 @@ import { join } from 'path';
 import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
-import { localAgentChat } from '../agent/local-agents.js';
+import { localAgentChat, resolveBin, spawnAgent } from '../agent/local-agents.js';
 import { redactLedgerText, redactSecrets } from '../redact.js';
 
 // =============================================================================
@@ -52,6 +52,7 @@ export interface LLMProviderAdapter {
 }
 
 export interface ChatOptions {
+  signal?: AbortSignal;
   maxTokens?: number;
   temperature?: number;
   topP?: number;
@@ -275,7 +276,7 @@ class OpenRouterAdapter implements LLMProviderAdapter {
         'X-Title': siteName,
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(this.config.timeout || 60000),
+      signal: AbortSignal.any([AbortSignal.timeout(this.config.timeout || 60000), ...(options?.signal ? [options.signal] : [])]),
     });
 
     if (!response.ok) {
@@ -357,7 +358,7 @@ class OpenRouterAdapter implements LLMProviderAdapter {
         'X-Title': siteName,
       },
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
+      signal: AbortSignal.any([controller.signal, ...(options?.signal ? [options.signal] : [])]),
     });
 
     if (!response.ok) {
@@ -533,7 +534,7 @@ class AnthropicAdapter implements LLMProviderAdapter {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(this.config.timeout || 60000),
+      signal: AbortSignal.any([AbortSignal.timeout(this.config.timeout || 60000), ...(options?.signal ? [options.signal] : [])]),
     });
 
     if (!response.ok) {
@@ -659,7 +660,7 @@ class OpenAIAdapter implements LLMProviderAdapter {
         Authorization: `Bearer ${this.config.apiKey}`,
       },
       body: JSON.stringify(requestBody),
-      signal: AbortSignal.timeout(this.config.timeout || 60000),
+      signal: AbortSignal.any([AbortSignal.timeout(this.config.timeout || 60000), ...(options?.signal ? [options.signal] : [])]),
     });
 
     if (!response.ok) {
@@ -948,7 +949,7 @@ class LocalAdapter implements LLMProviderAdapter {
           ...(openaiWire ? { Authorization: `Bearer ${this.config.apiKey || 'local'}` } : {}),
         },
         body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(localTimeoutMs),
+        signal: AbortSignal.any([AbortSignal.timeout(localTimeoutMs), ...(options?.signal ? [options.signal] : [])]),
         dispatcher,
       } as unknown as RequestInit & { dispatcher: UndiciAgent });
 
@@ -1205,9 +1206,10 @@ class CodexAdapter implements LLMProviderAdapter {
 
     try {
       const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawn(command, args, {
+        const child = spawnAgent(resolveBin(command) || command, args, {
           stdio: ['pipe', 'pipe', 'pipe'],
           env: { ...process.env, NO_COLOR: '1' },
+          signal: options?.signal,
         });
 
         let stdout = '';
@@ -1219,8 +1221,8 @@ class CodexAdapter implements LLMProviderAdapter {
           reject(new Error(`Codex CLI timed out while planning after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        child.stdout.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+        child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
+        child.stderr?.on('data', chunk => { stderr += chunk.toString(); });
         child.on('error', error => {
           clearTimeout(timer);
           reject(error);
@@ -1238,7 +1240,8 @@ class CodexAdapter implements LLMProviderAdapter {
             reject(new Error(`Codex CLI exited ${code}: ${diagnostic}`));
           }
         });
-        child.stdin.end(prompt);
+        child.stdin?.on('error', error => { clearTimeout(timer); reject(error); });
+        child.stdin?.end(prompt);
       });
 
       let content = '';
@@ -1291,7 +1294,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const agentId = this.config.model || 'codex';
     const prompt = this.formatPrompt(messages, options);
     const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
-    const content = (await localAgentChat(agentId, prompt, { timeoutMs })).trim();
+    const content = (await localAgentChat(agentId, prompt, { timeoutMs, signal: options?.signal })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
@@ -1543,9 +1546,12 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       let response: LLMResponse | null = null;
       for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
         try {
+          options?.signal?.throwIfAborted();
           response = await adapter.chat(msgs, options);
+          options?.signal?.throwIfAborted();
           break;
         } catch (error) {
+          options?.signal?.throwIfAborted();
           lastError = error as Error;
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
           const permanent = error instanceof LLMApiError &&
@@ -1558,7 +1564,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             delayMs = Math.max(delayMs, Math.min(error.retryAfterMs, 120_000));
           }
           this.emit('request:retry', { attempt, maxAttempts: this.retryAttempts, error: lastError });
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await delay(delayMs, undefined, { signal: options?.signal });
         }
       }
 

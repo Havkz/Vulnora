@@ -40,3 +40,32 @@ Dockerfile*
 # Documentation (built at runtime if needed)
 docs/.vitepress/cache
 docs/.vitepress/dist
+
+# Local credentials, embargoed findings and regenerated target corpora
+.keys.local
+.keys.bounty.json
+scripts/.export-denylist.local
+**/*.pem
+**/*.key
+bench/wild-hunt
+docs/disclosures
+docs/V6_PLAN.md
+bench/decomposition-results
+bench/refusal-frontier
+bench/nyu
+bench/cybench/corpus-stage
+bench/cybench/service-stage
+bench/cybench/challenges
+bench/xbow/stage
+bench/xbow/challenges
+**/*.stale-*
+**/release_unpacked
+**/__pycache__
+.aiwg
+server.pid
+graphify-out
+**/.env
+**/.env.*
+!.env.example
+**/.keys.local
+**/.keys.bounty.json

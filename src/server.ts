@@ -9,6 +9,7 @@
  * - LLM integration for intelligent analysis
  */
 
+import { commandPath } from './command-path.js';
 import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import { execFile, spawn } from 'child_process';
@@ -28,7 +29,7 @@ import { AGENT_PROMPT_PACKS, FOREFRONT_PRESSURE_LANES, OPERATOR_RUNBOOKS, RESOUR
 import { AI_REDTEAM_PLAYBOOK, AI_REDTEAM_TECHNIQUE_IDS, aiRedTeamBriefing } from './resources/ai-redteam-playbook.js';
 import { OPERATOR_SYSTEM_PROMPTS, PLINIAN_OPERATOR_DOCTRINE, THE_FIXER_SYSTEM_PROMPT } from './prompts/index.js';
 import { createTargetFromUrl, createTargetFromIP } from './target/index.js';
-import type { OperatorArchetype, FallbackEntry } from './types/index.js';
+import type { OperatorArchetype, FallbackEntry, LLMConfig } from './types/index.js';
 import { listOperatorPrompts, setOperatorOverride, resetOperatorOverride, type OperatorOverride } from './operators/index.js';
 import { ingestRepoToSourceContext, runWhiteboxAnalysis, resolveRepoSourceForAnalysis, RepoCloneError, RepoPathError } from './recon/whitebox.js';
 import { redactCredential } from './evidence/index.js';
@@ -312,37 +313,32 @@ function getTempestCommand(): TempestCommand | null {
   return tempestCommand;
 }
 
-function createTempestCommandInstance(missionName: string, apiKey: string | undefined, provider: string, model: string): TempestCommand {
+function createTempestCommandInstance(missionName: string, llm: LLMConfig): TempestCommand {
   // Tear down previous instance
   if (tempestCommand) {
     tempestCommand.stop();
   }
 
-  tempestCommand = new TempestCommand({
+  const command = new TempestCommand({
     name: missionName,
-    llm: {
-      provider: provider as any,
-      model,
-      apiKey,
-      maxTokens: 4096,
-      temperature: 0.7,
-    },
+    llm,
   });
+  tempestCommand = command;
 
   // Wire all events to SSE broadcast
-  tempestCommand.connectBroadcast(broadcastEvent);
+  command.connectBroadcast(broadcastEvent);
 
   // Mirror each discovered mission finding into the persistent findingsLedger so the
   // Evidence Vault (/api/findings) reflects the run instead of showing 0 afterward.
-  tempestCommand.on('finding:discovered', ({ finding }) => {
+  command.on('finding:discovered', ({ finding }) => {
     try {
-      upsertMissionFindingToLedger(finding as any, tempestCommand?.mission.getActiveMission()?.id);
+      upsertMissionFindingToLedger(finding as any, command.mission.getActiveMission()?.id);
     } catch (err) {
       console.error('[T3MP3ST] failed to persist mission finding to ledger:', err instanceof Error ? err.message : err);
     }
   });
 
-  return tempestCommand;
+  return command;
 }
 
 // =============================================================================
@@ -362,6 +358,7 @@ interface ParsedCommand {
 }
 
 const SHELL_META = /[|&;$<>`\\]/;
+// eslint-disable-next-line no-control-regex -- Reject control characters at the command boundary.
 const COMMAND_CONTROL = /[\x00-\x1F\x7F-\x9F\u2028\u2029]/;
 const CURL_TRANSPORT_OVERRIDE_FLAGS = new Set([
   '--resolve',
@@ -4464,14 +4461,15 @@ async function inspectToolAvailability(): Promise<Array<{ id: string; name: stri
   }];
   return Promise.all(adapters.map(async adapter => {
     try {
-      const { stdout } = await execFileAsync('which', [adapter.binary], { timeout: 1500 });
+      const resolvedPath = await commandPath(adapter.binary);
+      if (!resolvedPath) throw new Error('Command not found on PATH');
       return {
         id: adapter.id,
         name: adapter.binary,
         displayName: adapter.name,
         binary: adapter.binary,
         available: true,
-        path: stdout.trim(),
+        path: resolvedPath,
         category: adapter.category,
         risk: adapter.risk,
         execution: adapter.execution,
@@ -6238,7 +6236,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
   }
 
   try {
-    const cmd = createTempestCommandInstance(name, effectiveKey, missionLLMConfig.provider, missionLLMConfig.model);
+    const cmd = createTempestCommandInstance(name, { ...missionLLMConfig, apiKey: effectiveKey });
 
     // Add targets
     for (const t of targets) {
@@ -6697,7 +6695,7 @@ function providerRunsKeyless(provider: string): boolean {
 
 function readPositiveTimeoutEnv(name: string): number | undefined {
   const raw = process.env[name];
-  if (raw == null || raw.trim() === '') return undefined;
+  if (raw === null || raw === undefined || raw.trim() === '') return undefined;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
@@ -6763,9 +6761,9 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
  */
 function bringUpMissionFromPlan(
   execConfig: { missionName: string; targets: string[]; operators: string[] },
-  generalConfig: { apiKey?: string; provider: any; model: string },
+  generalConfig: LLMConfig,
 ): { spawnedOps: Array<{ id: string; callsign: string; archetype: string }>; status: any } {
-  const cmd = createTempestCommandInstance(execConfig.missionName, generalConfig.apiKey, generalConfig.provider, generalConfig.model);
+  const cmd = createTempestCommandInstance(execConfig.missionName, generalConfig);
   for (const target of execConfig.targets) {
     if (target.startsWith('http://') || target.startsWith('https://')) cmd.targetEnv.addTarget(createTargetFromUrl(target));
     else if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(target)) cmd.targetEnv.addTarget(createTargetFromIP(target));
@@ -7023,9 +7021,7 @@ app.post('/api/general/execute', async (req: Request, res: Response): Promise<vo
     // Create TempestCommand instance from the plan
     const cmd = createTempestCommandInstance(
       execConfig.missionName,
-      generalConfig.apiKey,
-      generalConfig.provider,
-      generalConfig.model
+      generalConfig
     );
 
     // Add targets from the plan
@@ -7168,9 +7164,7 @@ app.post('/api/general/auto', async (req: Request, res: Response): Promise<void>
 
     const cmd = createTempestCommandInstance(
       execConfig.missionName,
-      generalConfig.apiKey,
-      generalConfig.provider,
-      generalConfig.model
+      generalConfig
     );
 
     for (const target of execConfig.targets) {

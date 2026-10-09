@@ -65,3 +65,6 @@ scripts/.export-denylist.local
 !.aiwg/addons/**
 
 server.pid
+
+# Generated project graph stays local, including links to private research outputs.
+graphify-out/

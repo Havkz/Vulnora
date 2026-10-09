@@ -12,8 +12,8 @@ export const SECRET_PATTERNS: Record<string, { pattern: RegExp; severity: string
   gcp_api_key: { pattern: /AIza[0-9A-Za-z\-_]{35}/g, severity: 'high', provider: 'GCP' },
   github_token: { pattern: /ghp_[A-Za-z0-9]{36}/g, severity: 'critical', provider: 'GitHub' },
   github_oauth: { pattern: /gho_[A-Za-z0-9]{36}/g, severity: 'critical', provider: 'GitHub' },
-  anthropic_api_key: { pattern: /sk-ant-api\d{2}-[A-Za-z0-9_\-]{16,}/g, severity: 'critical', provider: 'Anthropic' },
-  openai_api_key: { pattern: /sk-[A-Za-z0-9_\-]{20,}/g, severity: 'critical', provider: 'OpenAI' },
+  anthropic_api_key: { pattern: /sk-ant-api\d{2}-[A-Za-z0-9_-]{16,}/g, severity: 'critical', provider: 'Anthropic' },
+  openai_api_key: { pattern: /sk-[A-Za-z0-9_-]{20,}/g, severity: 'critical', provider: 'OpenAI' },
   gitlab_token: { pattern: /glpat-[A-Za-z0-9\-_]{20}/g, severity: 'critical', provider: 'GitLab' },
   jwt: { pattern: /eyJ[A-Za-z0-9-_]+\.eyJ[A-Za-z0-9-_]+\.[A-Za-z0-9-_.+/=]*/g, severity: 'high', provider: 'JWT' },
   stripe_live: { pattern: /sk_live_[0-9a-zA-Z]{24}/g, severity: 'critical', provider: 'Stripe' },
@@ -60,7 +60,13 @@ export function redactSecrets(value: unknown, seen = new WeakSet<object>()): unk
 
   const result: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    if (/(api[_-]?key|authorization|cookie|credential|password|secret|token)/i.test(key)) {
+    if (key.toLowerCase() === 'set-cookie') {
+      // Keep names and security attributes for cached cookie analysis, never session values.
+      const cookie = (text: unknown): unknown => typeof text === 'string'
+        ? redactString(text.replace(/(^|,\s*)([^=;,\s]+)=([^;,\r\n]*)/g, '$1$2=[redacted]'))
+        : '[redacted]';
+      result[key] = Array.isArray(nested) ? nested.map(cookie) : cookie(nested);
+    } else if (/(api[_-]?key|authorization|cookie|credential|password|secret|token)/i.test(key)) {
       result[key] = '[redacted]';
     } else {
       result[key] = redactSecrets(nested, seen);
