@@ -16,7 +16,7 @@ import { EventEmitter } from 'eventemitter3';
 import { appendFile, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { homedir, tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
@@ -107,7 +107,7 @@ async function appendFallbackAudit(entry: FallbackAuditEntry): Promise<void> {
   const path = fallbackAuditPath();
   if (!path) return;
   try {
-    const directory = path.slice(0, Math.max(path.lastIndexOf('/'), 0)) || '.';
+    const directory = dirname(path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const record = redactSecrets({
       schema: 't3mp3st.model-fallback/v1',
@@ -917,6 +917,7 @@ class LocalAdapter implements LLMProviderAdapter {
           model: this.config.model,
           messages: wireMessages,
           stream: false,
+          ...(process.env.TEMPEST_LOCAL_KEEP_ALIVE ? { keep_alive: process.env.TEMPEST_LOCAL_KEEP_ALIVE } : {}),
           options: {
             num_predict: maxTokens,
             temperature,

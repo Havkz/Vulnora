@@ -47,8 +47,7 @@ both human contributors and coding agents.
    npm run doctor
    ```
 
-   For docs-only changes, note why code tests were skipped. For UI-only
-   `docs/index.html` changes, extract or otherwise parse-check the page scripts.
+   For docs-only changes, note why code tests were skipped.
    For benchmark or headline-claim changes, also run:
 
    ```bash

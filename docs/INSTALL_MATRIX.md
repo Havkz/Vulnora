@@ -1,6 +1,6 @@
 # T3MP3ST Install Matrix
 
-Use this as the team-facing view of what a workstation needs. The UI and API remain useful without every binary installed, but local command readiness improves as these tools appear on `PATH`.
+Use this as the team-facing view of what a workstation needs. The CLI and API remain useful without every binary installed, but local command readiness improves as these tools appear on `PATH`.
 
 The runtime requires **Node.js 22.12.0 or newer**, npm and Git. CI checks Windows and Linux. Windows resolves native binaries and command shims via `PATH` and `PATHEXT`; POSIX-only tools remain optional and require a compatible installation.
 

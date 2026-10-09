@@ -570,7 +570,7 @@ async function smokeImprovementAndLearning(context) {
 // removed from src/server.ts on 2026-06-30 as deprecated dead theater.
 // The old smokePlinySpecials() drill that asserted on those 9 routes was
 // retired here — there is nothing left to smoke. The client-side "Pliny
-// Specials" demos in docs/index.html remain, but are clearly [SIMULATED].
+// Special demos remain clearly [SIMULATED].
 
 async function smokeToolsAndRuntime(context) {
   const tools = await get('/api/tools');

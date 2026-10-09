@@ -3,7 +3,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 
 const serverSource = readFileSync(join(process.cwd(), 'src/server.ts'), 'utf8').replace(/\r\n/g, '\n');
-const uiSource = readFileSync(join(process.cwd(), 'docs/index.html'), 'utf8').replace(/\r\n/g, '\n');
 
 function sourceBlock(startMarker: string, endMarker: string): string {
   const start = serverSource.indexOf(startMarker);
@@ -36,14 +35,6 @@ describe('local API authorization hardening invariants', () => {
 
     expect(health).toContain('providerRunsKeyless(llmConfig.provider)');
     expect(llmStatus).toContain('providerRunsKeyless(llmConfig.provider)');
-  });
-
-  it('War Room no-key/no-agent backend dispatch defers to the server-configured LLM', () => {
-    expect(uiSource).toContain("serverLLM: null");
-    expect(uiSource).toContain('this.serverLLM = data.llm');
-    expect(uiSource).toContain('No browser API key — using the server-configured LLM backend');
-    expect(uiSource).toContain('LLM backend: server default — no browser API key sent');
-    expect(uiSource).not.toMatch(/let provider = ['"]openrouter['"];\s*\n\s*let model = state\.settings\.selectedModel/);
   });
 
   it('/api/events does not grant wildcard CORS and rejects foreign browser origins before opening SSE', () => {

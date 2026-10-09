@@ -7716,14 +7716,8 @@ app.get('/api/agents/local/status', async (req: Request, res: Response): Promise
 });
 
 // =============================================================================
-// STATIC FILE SERVING
+// HTTP API (the interactive interface is the CLI)
 // =============================================================================
-
-// Bare root → land on the UI. Registered right beside the /ui mount so it only
-// matches the exact '/' path and never shadows the /api/* routes above.
-app.get('/', (_req: Request, res: Response) => res.redirect('/ui/'));
-
-app.use('/ui', express.static('docs'));
 
 // =============================================================================
 // ERROR HANDLING

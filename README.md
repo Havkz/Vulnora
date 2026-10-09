@@ -24,7 +24,7 @@
 
 **Your AI coding agent is already a hacker — T3MP3ST hands it an arsenal.**
 
-Point it at an authorized target and the kill chain runs itself: **recon → exploit → report**, from a browser War Room or the CLI, driven by the agent you're *already* signed into — Claude Code, Codex, Hermes — or a model you run **fully offline** (Ollama, LM Studio, vLLM). No new API keys, no cloud tenant, no second bill. Your agent is the brain; T3MP3ST is the war machine bolted around it. **Self-hosted storm. Keyless warfare.** ⚡
+Point it at an authorized target and the kill chain runs itself: **recon → exploit → report**, from the interactive CLI, driven by the agent you're *already* signed into — Claude Code, Codex, Hermes — or a model you run **fully offline** (Ollama, LM Studio, vLLM). No new API keys, no cloud tenant, no second bill. Your agent is the brain; T3MP3ST is the war machine bolted around it. **Self-hosted storm. Keyless warfare.** ⚡
 
 And it won't ask you to take its word for it. On **XBOW's own 104-challenge suite it scores 90.1% pass@1** — above XBOW's self-reported 85% — alongside hint-free CTF solves and a **cold hunt on real, post-cutoff CVEs the model had never seen**. Every number in this README recomputes from committed data with one command (`npm run verify-claims`). Loud about the mission, honest about the build — the [status table](#what-ships-today) says exactly what's live, what's scaffolding, and what's still roadmap; full receipts in [Benchmarks](#benchmarks).
 
@@ -63,14 +63,27 @@ Offensive security sits behind years of practice and expensive tooling. The bet 
 
 Requires **Node.js 22.12.0 or newer**, npm and Git (Windows, macOS or Linux).
 
-Fastest path to a running War Room (keyless, ~2 min to set up; mission time depends on the target):
+Start the interactive CLI:
 
 ```bash
-npm install
-npm run server        # War Room → http://127.0.0.1:3333/ui/
+npm ci
+npm run build
+npm start
 ```
 
-In the War Room, open **Settings** and connect a local agent (Claude Code / Codex / Hermes). Then describe a target to **Op Admiral** in plain English and launch. The agent you connected is the brain. No key required.
+Use **Settings** to choose a provider, then **Start New Operation**. Codex uses your existing CLI login (`codex login`); no API key is required. The browser interface has been removed.
+
+For Codex with an Ollama fallback, put these settings in `~/.t3mp3st/.env`:
+
+```dotenv
+LLM_PROVIDER=codex
+TEMPEST_DEFAULT_PROVIDER=codex
+TEMPEST_MODEL_FALLBACK=local
+TEMPEST_LOCAL_BASE_URL=http://127.0.0.1:11434/api
+TEMPEST_LOCAL_MODEL=your-installed-model
+```
+
+With Ollama running, the interactive CLI loads that model before showing the menu and keeps it resident throughout the session, including after fallback requests. **Exit** or **Ctrl+C** unloads it. `npm start -- test` checks the LLM connection. Force-killing the process bypasses cleanup; use `ollama stop your-installed-model` in that case.
 
 Prefer to bring a key? Set one and skip the connect step:
 
@@ -181,7 +194,6 @@ Add your own patterns in `scripts/update-protected.local.txt` (optional local ov
 These live outside the project tree — an update never reads or writes them:
 
 - `%APPDATA%\t3mp3st-nodejs\Config\config.json` (or the macOS/Linux `conf` store path) — saved by `npm run setup`
-- War Room browser **localStorage** on the War Room origin
 - Local agent auth (`~/.codex`, `%LOCALAPPDATA%\hermes`, etc.)
 
 ## What ships today
@@ -192,7 +204,7 @@ The framework is an 8-operator kill chain, and this table won't blow smoke about
 |---|---|---|
 | Re-derivable measurement (`verify-claims`) | ✅ Stable | every headline recomputes from committed artifacts |
 | Recon engine | ✅ Stable | drives nmap / DNS / HTTP / fingerprinting; every finding traces to real tool output |
-| Mission engine + War Room + Op Admiral | ✅ Stable | keyless through a connected local agent |
+| Mission engine + CLI + Op Admiral | ✅ Stable | keyless through Codex or a configured local agent |
 | Arsenal, MCP server, HTTP API | ✅ Stable | 35 built-in tools by default; 108 with the opt-in `T3MP3ST_FULL_ARSENAL` (+73 adapters, with dangerous/catalog-only drivers — metasploit, hydra, pacu, frida — behind narrow approved paths rather than generic execution) — both counts re-derive via `verify-claims`. `security_recon` over MCP |
 | Egress-scope containment | ✅ Stable (on by default) | once a mission target is set, built-in networked tools refuse off-scope public hosts — not the target/subdomains, not loopback/private (`SCOPE DENIED`) — a tightened default, not a bare tool runner |
 | Coordinated-disclosure pipeline | ✅ Stable | OSV novelty + live PoC + refuter panel + CVSS; drafts only, a human sends |

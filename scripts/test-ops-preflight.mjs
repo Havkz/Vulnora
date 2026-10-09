@@ -131,7 +131,7 @@ await test('resolves command candidates portably without invoking a shell', asyn
   assert.equal(posixFound, true);
 });
 
-await test('passes a healthy idle War Room using server-authoritative backend state', async () => {
+await test('passes a healthy idle API server using server-authoritative backend state', async () => {
   await withServer(healthyRoutes(), async url => {
     const { code, result, stderr } = await runPreflight(url);
     assert.equal(stderr, '');

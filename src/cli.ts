@@ -35,6 +35,7 @@ import {
 } from './config/index.js';
 
 import { LLMBackbone } from './llm/index.js';
+import { createOllamaSession } from './llm/ollama-session.js';
 import { redactLedgerText } from './redact.js';
 import { formatTerminalReport } from './terminal-report.js';
 
@@ -616,7 +617,7 @@ ${chalk.gray('OPENROUTER_API_KEY=your-key-here')}`,
   showBox(
     'Welcome to T3MP3ST',
     `Configured providers: ${providers.map(p => chalk.cyan(p)).join(', ')}
-Default: ${chalk.cyan(config.get('defaultProvider'))} / ${chalk.cyan(config.get('defaultModel'))}`,
+Default: ${chalk.cyan(config.getLLMConfig().provider)} / ${chalk.cyan(config.getLLMConfig().model)}`,
     'cyan'
   );
 
@@ -1084,11 +1085,12 @@ program
   .action(async () => {
     showBanner();
 
-    const provider = config.get('defaultProvider');
+    const provider = config.getLLMConfig().provider;
 
-    if (!hasApiKey(provider as any)) {
+    if (!['codex', 'local', 'local-agent', 'mock'].includes(provider) && !config.getLLMConfig().apiKey) {
       showError(`No API key configured for ${provider}`);
       showInfo('Run "npx t3mp3st setup" to configure API keys');
+      process.exitCode = 1;
       return;
     }
 
@@ -1105,6 +1107,7 @@ program
     } catch (error) {
       spinner.fail('Connection failed');
       showError(`${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
     }
   });
 
@@ -1136,5 +1139,29 @@ program
     console.log('');
   });
 
-// Run CLI
-program.parse();
+// Wait for async commands so the model remains loaded until the CLI actually exits.
+let ollamaSession: ReturnType<typeof createOllamaSession> | undefined;
+program.hook('preAction', async (_program, command) => {
+  if (!['interactive', 'test'].includes(command.name())) return;
+  ollamaSession = createOllamaSession(config.getLLMConfig());
+  showInfo('Preparing configured local fallback...');
+  await ollamaSession.start();
+});
+
+async function releaseOllama(): Promise<void> {
+  try { await ollamaSession?.stop(); }
+  catch (error) { showWarning(`Could not unload Ollama: ${error instanceof Error ? error.message : String(error)}`); }
+}
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.once(signal, () => { void releaseOllama().finally(() => process.exit(signal === 'SIGINT' ? 130 : 143)); });
+}
+
+try { await program.parseAsync(); }
+catch (error) {
+  if (error instanceof Error && error.name === 'ExitPromptError') process.exitCode = 130;
+  else {
+    showError(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
+} finally { await releaseOllama(); }

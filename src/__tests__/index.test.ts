@@ -298,15 +298,15 @@ describe('OpGeneral v2 Campaign Control', () => {
     const general = generalWithResponse({
       codename: 'IRON CURRENT',
       summary: 'Authorized local web/API weird-machine hunt.',
-      targets: [{ address: 'http://127.0.0.1:3333/ui/', expectedType: 'web_application', priority: 1, rationale: 'Local T3MP3ST UI' }],
+      targets: [{ address: 'http://127.0.0.1:3333/api/health', expectedType: 'web_application', priority: 1, rationale: 'Local T3MP3ST API' }],
       objectives: [{ description: 'Find boundary failures in the local control plane', priority: 1, successCriteria: 'Evidence-backed hypotheses and retests', phase: 'reconnaissance' }],
       operators: [{ archetype: 'scanner', count: 2, deployPhase: 'reconnaissance', briefing: 'Probe local UI/API edges safely' }],
-      roe: { scope: ['http://127.0.0.1:3333/ui/'], exclusions: ['external targets'], maxDetections: 1, destructiveAllowed: false, requireApproval: [] },
+      roe: { scope: ['http://127.0.0.1:3333/api/health'], exclusions: ['external targets'], maxDetections: 1, destructiveAllowed: false, requireApproval: [] },
       complexity: 'moderate',
       rationale: 'Start local, preserve evidence, and require receipts before active external action.',
     });
 
-    const plan = await general.planOperation({ objective: 'Run an authorized local web/API zero-day hunt against http://127.0.0.1:3333/ui/' });
+    const plan = await general.planOperation({ objective: 'Run an authorized local web/API zero-day hunt against http://127.0.0.1:3333/api/health' });
     const review = general.reviewPlan(plan);
 
     expect(plan.missionFamily).toBe('web_api');

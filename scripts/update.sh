@@ -248,7 +248,6 @@ fi
 
 rule 'Never touched (outside repo)'
 plan_line '-' '$HOME/.config or AppData t3mp3st config'
-plan_line '-' 'War Room browser localStorage'
 plan_line '-' 'Codex / Hermes local agent auth'
 
 local_sha='(no commits yet)'

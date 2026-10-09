@@ -9,7 +9,6 @@
 
   Config outside this repo is never touched:
     %APPDATA%\t3mp3st-nodejs\Config\config.json  (npm run setup wizard)
-    Browser localStorage "t3mp3st" on the War Room origin
     Local agent auth (~/.codex, %LOCALAPPDATA%\hermes, etc.)
 
 .PARAMETER DryRun
@@ -623,7 +622,6 @@ if ($protected.Count -eq 0) {
 
 Write-Rule 'Never touched (outside repo)'
 Write-PlanLine '-' '%APPDATA%\t3mp3st-nodejs\Config\config.json'
-Write-PlanLine '-' 'War Room browser localStorage'
 Write-PlanLine '-' 'Codex / Hermes local agent auth'
 
 $localSha = '(no git yet)'

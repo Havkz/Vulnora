@@ -65,7 +65,7 @@ async function main() {
     'README.md',
     'SECURITY.md',
     'CONTRIBUTING.md',
-    'docs/index.html',
+    'src/cli.ts',
     'docs/TEAM_PREVIEW.md',
     'docs/ARSENAL_ACTIVATION_PLAN.md',
     'docs/INSTALL_MATRIX.md',

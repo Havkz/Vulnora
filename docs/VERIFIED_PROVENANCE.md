@@ -21,8 +21,7 @@ tool-backed evidence.
 
 ## Keyless And Local-Agent Runs
 
-For keyless runs, connect a local agent in the War Room Settings first: Claude
-Code, Codex, Hermes, or another supported local-agent backend.
+For keyless runs, choose Codex in the CLI Settings after `codex login`, or configure another supported local-agent backend.
 
 The local agent must request tools through T3MP3ST. If it only writes a final
 answer in prose, the harness has no tool output to attach and findings should stay
@@ -30,11 +29,11 @@ unverified/model-asserted.
 
 For a quick sanity check:
 
-1. Start the War Room with `npm run server`.
-2. Connect a local agent in Settings.
+1. Start the CLI with `npm start`.
+2. Choose the provider in Settings and start an operation.
 3. Use a local or explicitly authorized target.
 4. Run a harmless reconnaissance path.
-5. Open the evidence/finding view and check that at least one finding cites a
+5. Generate a report and check that at least one finding cites a
    tool name and captured output.
 
 If every finding remains `Provenance: none`, the run may still be useful as a

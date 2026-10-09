@@ -26,9 +26,6 @@ COPY . .
 # Build TypeScript
 RUN npm run build
 
-# Ensure docs directory exists for /ui static files
-RUN mkdir -p docs
-
 # Docker environment marker (tells server.ts to bind to 0.0.0.0)
 ENV DOCKER=true
 

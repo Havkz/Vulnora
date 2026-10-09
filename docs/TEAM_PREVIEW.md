@@ -2,40 +2,31 @@
 
 This preview is for prompt engineers, red-teamers, bug bounty operators, cyber researchers, and builders who want to pressure-test T3MP3ST before a broader release.
 
-The useful mental model: T3MP3ST is an evidence-first adversarial AI command center. It is not only a scanner UI. It routes a mission into specialist agent lanes, binds tool output to evidence, promotes evidence into findings, retests claims, and only then proposes durable learning.
+The useful mental model: T3MP3ST is an evidence-first adversarial AI command center. The CLI combines planning, tool execution, and reporting. It routes a mission into specialist agent lanes, binds tool output to evidence, promotes evidence into findings, retests claims, and only then proposes durable learning.
 
 ## Ten-Minute First Run
 
 ```bash
 npm install
 npm run doctor
-npm run server
+npm run build
+npm start
 ```
 
-Open `http://127.0.0.1:3333/ui/`.
+In the CLI, choose **Settings** to configure the provider, then **Start New Operation**. Codex uses the existing `codex login` account. Use **View Status**, **Chat with AI**, and **Generate Report** during an operation, and **Exit** to finish.
 
-In the UI:
-
-1. Click `preflight`.
-2. Click `sync arsenal`.
-3. Click `activation`.
-4. Pick a guided start.
-5. Run `plan tools`.
-6. Log one evidence item, seed a hypothesis, and use the Watch Loop `pulse` to see what is missing.
-7. Click Watch Loop `nudge` to split the hypothesis into work orders, complete one task, promote it, and queue one retest.
-8. Run `gate` and `bundle`.
-9. Run `review run` in the Learning Capsule.
+An Ollama primary or fallback is preloaded for the interactive session and unloaded on exit. The optional HTTP API remains available through `npm run server`; it does not serve a browser interface.
 
 Expected state on a fresh machine:
 
-- The UI should load even without an LLM key.
+- The CLI supports keyless Codex and local Ollama providers.
 - LLM calls should fail closed with a clear message.
 - The arsenal should distinguish catalog tools, wired adapters, and locally installed tools.
 - Missing binaries should be shown as activation work, not hidden as success.
 
 ## What Is Real Today
 
-- Express API server and static command-center UI.
+- Interactive CLI and optional Express API server.
 - Mission drafts, route previews, mission bundles, and mission gates.
 - Resource packs, agent prompt packs, operator runbooks, and forefront pressure lanes.
 - Tool adapter catalog with execution modes, evidence kinds, install hints, and receipt gates.

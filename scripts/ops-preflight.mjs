@@ -189,7 +189,7 @@ export async function main() {
   } else if (!localAgentShapeValid) {
     backendDetail = `server LLM unavailable; local-agent status ${localAgent.ok ? 'has invalid shape' : apiFailure(localAgent)}`;
   } else {
-    backendDetail = 'no server LLM or connected local agent - configure War Room Settings';
+    backendDetail = 'no server LLM or connected local agent - configure the provider in ~/.t3mp3st/.env';
   }
   check('LLM backend available', backendAvailable, backendDetail, 'warn');
 

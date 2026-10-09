@@ -8,11 +8,9 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const promptPath = path.join(root, 'src/prompts/index.ts');
 const resourcesPath = path.join(root, 'src/resources/index.ts');
 const serverPath = path.join(root, 'src/server.ts');
-const docsPath = path.join(root, 'docs/index.html');
 const source = fs.readFileSync(promptPath, 'utf8');
 const resourcesSource = fs.readFileSync(resourcesPath, 'utf8');
 const serverSource = fs.readFileSync(serverPath, 'utf8');
-const docsSource = fs.readFileSync(docsPath, 'utf8');
 const promptPackIds = [...resourcesSource.matchAll(/id: '(prompt-[^']+)'/g)].map(match => match[1]);
 const evidenceContractCount = [...resourcesSource.matchAll(/evidenceContract:/g)].length;
 const escalationRuleCount = [...resourcesSource.matchAll(/escalationRules:/g)].length;
@@ -98,30 +96,6 @@ const checks = [
     passed: serverSource.includes('THE_FIXER_SYSTEM_PROMPT') && serverSource.includes('reflexAgents') && serverSource.includes("codename: 'WOLF'"),
   },
   {
-    name: 'ui default prompts inherit Plinian doctrine',
-    passed: docsSource.includes('PLINIAN_UI_DOCTRINE') && docsSource.includes('hardenOperatorPromptConfig') && docsSource.includes('## PLINIAN AUTHORITY AND EVIDENCE CONTRACT'),
-  },
-  {
-    name: 'ui default prompts inherit hacker mindset',
-    passed: docsSource.includes('## HACKER MINDSET') && docsSource.includes('late-night builder instinct') && docsSource.includes('field researcher, not a scanner wrapper'),
-  },
-  {
-    name: 'ui default prompts inherit creative agency',
-    passed: docsSource.includes('## CREATIVE AGENCY AND META-PROMPTING') && docsSource.includes('Build contrast sets') && docsSource.includes('run a taste pass'),
-  },
-  {
-    name: 'ui self-heal is named the fixer',
-    passed: docsSource.includes('<span>The Fixer</span>') && docsSource.includes('WOLF standby') && docsSource.includes('FIXER_SYSTEM_PROMPT'),
-  },
-  {
-    name: 'ui legacy cleanup prompt removed',
-    passed: !docsSource.includes('Clear event logs: wevtutil cl Security') && !docsSource.includes('Clear logs: truncate -s 0 /var/log/auth.log') && !docsSource.includes('3. CLEANUP: Actions taken'),
-  },
-  {
-    name: 'ui optimizer is receipt-aware',
-    passed: docsSource.includes('approval receipts for risky actions') && docsSource.includes('Do not add instructions to hide activity'),
-  },
-  {
     name: 'old unconditional autonomy phrase removed',
     passed: !source.includes("You don't ask for permission or clarification"),
   },
@@ -165,7 +139,6 @@ const report = {
   promptPath,
   resourcesPath,
   serverPath,
-  docsPath,
   promptPackIds,
   runbookFamilyCount,
   forefrontLaneCount,
