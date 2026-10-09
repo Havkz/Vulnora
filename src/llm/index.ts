@@ -827,7 +827,7 @@ class LocalAdapter implements LLMProviderAdapter {
   // re-parsed as a fresh live call (defeats termination). Its TEXT reply is parsed
   // back into tool calls after the round-trip.
   private buildMessages(messages: LLMMessage[], options?: ChatOptions): { role: string; content: string }[] {
-    const contract = renderToolContract(options?.tools);
+    const contract = renderToolContract(options?.tools, true);
     const preamble = 'You are the planning brain for T3MP3ST, an authorized security-assessment harness.'
       + (contract
         ? ' Request tools through the action contract; the harness executes them and returns real results.' + contract
@@ -861,6 +861,7 @@ class LocalAdapter implements LLMProviderAdapter {
     const bounded = [{ role: 'system', content: systemParts.join('\n\n') }, ...out]
       .filter(message => message.content.trim())
       .map((message, index) => {
+        if (index === 0) return message;
         // The initial mission turn is deliberately compact already. Preserve it in
         // full so scope, objective, evidence and output format survive compaction.
         if (index === 1 && /\bROLE\b[\s\S]*\bMISSION\b[\s\S]*\bOUTPUT\b/.test(message.content)) return message;
@@ -877,7 +878,10 @@ class LocalAdapter implements LLMProviderAdapter {
       if (previous?.role === message.role) previous.content += `\n\n${message.content}`;
       else merged.push({ ...message });
     }
-    for (const message of merged) message.content = compactContent(message.content, perMessageLimit);
+    for (let i = 1; i < merged.length; i++) {
+      if (i === 1 && /\bROLE\b[\s\S]*\bMISSION\b[\s\S]*\bOUTPUT\b/.test(merged[i].content)) continue;
+      merged[i].content = compactContent(merged[i].content, perMessageLimit);
+    }
 
     const configuredBudget = Number(process.env.TEMPEST_LOCAL_CONTEXT_CHARS || 24_000);
     const contextBudget = Number.isFinite(configuredBudget) && configuredBudget >= 8_000
@@ -886,6 +890,9 @@ class LocalAdapter implements LLMProviderAdapter {
     if (merged.reduce((sum, message) => sum + message.content.length, 0) <= contextBudget) return merged;
 
     const head = merged.slice(0, 2);
+    if (head.reduce((sum, message) => sum + message.content.length, 0) > contextBudget) {
+      throw new Error('Local LLM context length exceeded: mission and tool contract do not fit; reduce the selected tool set.');
+    }
     const kept = [...head];
     let used = head.reduce((sum, message) => sum + message.content.length, 0);
     const tail: { role: string; content: string }[] = [];
@@ -1021,18 +1028,25 @@ class LocalAdapter implements LLMProviderAdapter {
 // abstained without ever running the Arsenal (the keyless-path bug). Fix: describe
 // the Arsenal + a strict JSON action-contract in the prompt, then parse the agent's
 // text reply back into LLMToolCall[] so `arsenal.execute` actually runs the tools.
-function renderToolContract(tools?: LLMToolDefinition[]): string {
+export function renderToolContract(tools?: LLMToolDefinition[], compact = false): string {
   if (!tools?.length) return '';
   const lines = ['\n## ARSENAL — tools the HARNESS runs for you (you REQUEST them, it EXECUTES + returns the output):'];
-  for (const t of tools) {
-    const props = (t.parameters?.properties || {}) as Record<string, { type?: string }>;
+  const brief = (value: string | undefined, limit: number): string => (value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+  for (const t of new Map(tools.map(tool => [tool.name, tool])).values()) {
+    const props = (t.parameters?.properties || {}) as Record<string, { type?: string; description?: string; default?: unknown; enum?: unknown[] }>;
     const req = new Set(t.parameters?.required || []);
-    const sig = Object.entries(props).map(([k, v]) => `${k}${req.has(k) ? '*' : ''}: ${v.type || 'any'}`).join(', ');
-    lines.push(`- ${t.name}(${sig})`);
+    const sig = Object.entries(props).map(([k, v]) => {
+      const choices = v.enum ? ` enum=${JSON.stringify(v.enum)}` : '';
+      const fallback = v.default !== undefined ? ` default=${JSON.stringify(v.default)}` : '';
+      const meaning = brief(v.description, compact ? 65 : 180);
+      return `${k}${req.has(k) ? '*' : ''}: ${v.type || 'any'}${choices}${fallback}${meaning ? ` (${meaning})` : ''}`;
+    }).join(', ');
+    lines.push(`- ${t.name}(${sig}): ${brief(t.description, compact ? 100 : 350)}`);
   }
   lines.push(
     '',
     '## ACTION CONTRACT — follow EXACTLY:',
+    '* marks a required argument. Omitted optional arguments use their stated defaults.',
     '• To run one or more tools, reply with ONLY this fenced block, nothing else:',
     '```json',
     '{"tool_calls":[{"name":"<tool>","arguments":{ ... }}]}',
@@ -1280,7 +1294,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const parts = [
       'You are the local-agent planning brain for T3MP3ST, an authorized offensive-security harness.',
     ];
-    const contract = renderToolContract(options?.tools);
+    const contract = renderToolContract(options?.tools, true);
     if (contract) {
       parts.push('You drive a ReAct loop: REQUEST tools, the harness runs them and returns results, you reason until the surface is exhausted.');
       parts.push(contract);

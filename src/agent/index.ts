@@ -10,6 +10,7 @@ import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
 import { isContextCompactionNotice, type LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
+import { normalizeToolCall } from '../orchestrator/tool-orchestrator.js';
 import {
   buildMissionPrompt,
   resolveAgentPromptProfile,
@@ -184,10 +185,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     // Get tool definitions from Arsenal (the operator's role toolkit: name allowlist wins,
     // then category filter, then all).
-    const availableToolDefs = this.arsenal.getToolDefinitions(
+    const availableToolDefs = await this.arsenal.getReadyToolDefinitions(
       this.options.toolCategories.length > 0 ? this.options.toolCategories : undefined,
       this.options.tools.length > 0 ? this.options.tools : undefined
     );
+    // Recovery plans are issued by the orchestrator, independently of role defaults.
+    if (task.executionPlan) {
+      const planned = this.arsenal.getToolDefinitions(undefined, [task.executionPlan.toolName])[0];
+      if (planned && !availableToolDefs.some(definition => definition.name === planned.name)) availableToolDefs.unshift(planned);
+    }
     const targetReceipt = target?.metadata?.authorizationReceipt
       || target?.metadata?.scopeReceipt
       || target?.metadata?.receipt;
@@ -199,10 +205,18 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       credentialToolsAllowed: this.options.securityContext.credentialToolsAllowed ?? hasReceipt,
     };
     const toolDefs = selectRelevantTools(availableToolDefs, task, profile, securityContext, !!target?.address);
-    if (task.executionPlan && !toolDefs.some(definition => definition.name === task.executionPlan!.toolName)) {
-      const planned = availableToolDefs.find(definition => definition.name === task.executionPlan!.toolName);
-      if (planned) toolDefs.push(planned);
-    }
+    const evidenceTarget = target ? normalizeToolCall('http_request', { parameters: { url: target.address } }).host : undefined;
+    const storedEvidence = task.operatorType === 'analyst'
+      ? [...new Map(this.arsenal.getOrchestrator().getEvidence()
+        .filter(record => !evidenceTarget || normalizeToolCall('http_request', { parameters: { url: record.target } }).host === evidenceTarget)
+        .map(record => [record.normalizedSignature, record])).values()]
+        .slice(-profile.findingLimit)
+        .map(record => `Evidence ${record.id}: ${record.toolName} status=${record.errorType || record.executionStatus}; ${String(record.result.error || record.rawOutput).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}`)
+        .join('\n')
+      : '';
+    const coverageGaps = task.operatorType === 'analyst'
+      ? this.arsenal.getOrchestrator().getMetrics().incompleteAreas.join('; ')
+      : '';
 
     // Build initial messages
     const messages: LLMMessage[] = [
@@ -218,12 +232,20 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           tools: toolDefs,
           profile,
           security: securityContext,
-          sourceContext: [sourceContext, sharedContext].filter(Boolean).join('\n'),
+          sourceContext: [coverageGaps ? `Coverage gaps: ${coverageGaps}` : '', storedEvidence, sourceContext, sharedContext].filter(Boolean).join('\n'),
         }),
       },
     ];
 
     const bootstrapCall = this.getLocalReconBootstrap(task, target, toolDefs);
+    if (task.executionPlan && !bootstrapCall) {
+      const result: AgentResult = {
+        success: false, summary: `Recovery blocked: ${task.executionPlan.toolName} is unavailable or not permitted.`,
+        steps, findings: [], iterations: 0, tokensUsed: 0, durationMs: Date.now() - startTime, hitLimit: false,
+      };
+      this.emit('agent:complete', result);
+      return result;
+    }
     if (bootstrapCall) {
       const toolStep = await this.executeTool(bootstrapCall, target, task, -1, signal);
       toolCallCounts.set(bootstrapCall.name, 1);
@@ -239,6 +261,17 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         for (const tf of toolStep.toolResult.findings) {
           mergeFinding(allFindings, { ...tf, provenance: 'tool', toolName: bootstrapCall.name, toolOutput: out || tf.details });
         }
+      }
+
+      if (task.executionPlan) {
+        const result: AgentResult = {
+          success: toolStep.toolResult?.success === true,
+          summary: this.formatToolResult(toolStep.toolResult),
+          steps, findings: allFindings, iterations: 0, tokensUsed: 0,
+          durationMs: Date.now() - startTime, hitLimit: false,
+        };
+        this.emit('agent:complete', result);
+        return result;
       }
 
       messages.push({

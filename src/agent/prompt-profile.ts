@@ -107,6 +107,7 @@ export function selectRelevantTools(
   security: PromptSecurityContext = {},
   hasTarget = true
 ): LLMToolDefinition[] {
+  if (task.operatorType === 'analyst') return [];
   const byName = new Map(definitions.map(definition => [definition.name, definition]));
   const priority = TOOL_PRIORITY[task.operatorType] || TOOL_PRIORITY.default;
   const selected: LLMToolDefinition[] = [];
@@ -123,6 +124,7 @@ export function selectRelevantTools(
     selected.push(definition);
   };
 
+  if (task.executionPlan) consider(byName.get(task.executionPlan.toolName));
   for (const name of priority) consider(byName.get(name));
   for (const definition of definitions) consider(definition);
   return selected;
@@ -254,13 +256,14 @@ export function buildMissionPrompt(args: {
     '',
     'MISSION',
     `Objective: ${oneLine(task.description, profile.name === 'small_model_30b' ? 320 : 600)}`,
-    'Success condition: One reproducible, in-scope result supported by a real tool response.',
+    task.operatorType === 'analyst' ? 'Success condition: An evidence-backed report with explicit limitations and coverage gaps.' : 'Success condition: One reproducible, in-scope result supported by a real tool response.',
     'Stop condition: Validated, not exploitable, inconclusive, blocked, or two steps without new relevant evidence.',
     '',
     'KNOWN EVIDENCE',
     ...evidence,
     '',
     'CONSTRAINT',
+    task.operatorType === 'analyst' ? 'Reporting is evidence-store only. Summarize supplied evidence and coverage gaps; do not request tools or new scans. Missing evidence means inconclusive.' : '',
     contradiction,
     !allowedHosts.length ? 'Scope is missing. Do not request network, intrusive, or credential-based tools.' : '',
     !hasReceipt ? 'No receipt is present. Do not request intrusive or credential-based tools.' : '',
@@ -276,8 +279,8 @@ export function buildMissionPrompt(args: {
     'WORKFLOW',
     '1. Check scope and authorization.',
     '2. Check which findings are actually testable.',
-    '3. Select exactly one best next test.',
-    '4. Request the most specific available tool.',
+    task.operatorType === 'analyst' ? '3. Summarize supplied observations and findings.' : '3. Select exactly one best next test.',
+    task.operatorType === 'analyst' ? '4. State missing evidence and recommend follow-up checks without executing them.' : '4. Request the most specific available tool.',
     '5. Evaluate only the real tool result.',
     '6. Never invent results or impact.',
     '7. Do not repeat equivalent tests.',

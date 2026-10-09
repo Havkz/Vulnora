@@ -541,6 +541,8 @@ export function adapterToCustomTool(adapter: ToolAdapter, deps: AdapterToolDeps)
 
   return {
     name: toolNameFor(adapter),
+    binary: adapter.binary,
+    supportedPlatforms: adapter.supportedPlatforms,
     supportsAbort: true,
     description: `${adapter.name}: ${adapter.notes} (Kali+ adapter; ${adapter.execution}, risk=${adapter.risk})`,
     category: adapter.category,

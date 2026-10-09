@@ -991,13 +991,13 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * Evaluate evidence, then seed exactly one deterministic recovery action when useful.
    * Returning true means phase advancement must wait for the newly queued task.
    */
-  private ensureCoverageBeforeAdvance(mission: import('./types/index.js').Mission, taskQueue: TaskQueue): boolean {
+  private async ensureCoverageBeforeAdvance(mission: import('./types/index.js').Mission, taskQueue: TaskQueue): Promise<boolean> {
     const required = mission.currentPhase === KillChainPhase.RECON
       ? RECON_COVERAGE
       : mission.currentPhase === KillChainPhase.WEAPONIZE ? VALIDATION_COVERAGE : [];
     if (!required.length) return false;
 
-    const availableTools = new Set(this.arsenal.getAllTools().map(tool => tool.name));
+    const availableTools = new Set((await this.arsenal.getReadyToolDefinitions()).map(tool => tool.name));
     for (const target of this.targetEnv.getAllTargets()) {
       const snapshot = evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence());
       this.coverageSnapshots.set(target.address, snapshot);
@@ -1122,7 +1122,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         this.emit('command:paused');
         return;
       }
-      if (this.ensureCoverageBeforeAdvance(mission, taskQueue)) return;
+      if (await this.ensureCoverageBeforeAdvance(mission, taskQueue)) return;
       const failedCurrentPhase = allMissionTasks.filter(
         t => t.phase === mission.currentPhase && t.status === 'failed'
       );

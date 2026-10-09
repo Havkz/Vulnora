@@ -13,6 +13,7 @@
  *   node scripts/arsenal-doctor.mjs --json     machine-readable
  *   node scripts/arsenal-doctor.mjs --fix      print only the install commands for missing tools
  *   node scripts/arsenal-doctor.mjs --strict   exit 1 unless every command-ready tool is installed
+ *   node scripts/arsenal-doctor.mjs --offline read the built catalog locally; no API server needed
  */
 import process from 'node:process';
 
@@ -20,6 +21,7 @@ const baseUrl = (process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333').replace
 const jsonMode = process.argv.includes('--json');
 const fixMode = process.argv.includes('--fix');
 const strict = process.argv.includes('--strict');
+const offline = process.argv.includes('--offline');
 
 async function apiGet(path) {
   const controller = new AbortController();
@@ -36,7 +38,8 @@ async function apiGet(path) {
 function main(status) {
   const tools = Array.isArray(status.tools) ? status.tools : [];
   // command-ready = the agent can actually execute it (safe_command | receipt_required)
-  const ready = tools.filter(t => t.execution === 'safe_command' || t.execution === 'receipt_required');
+  const unsupported = tools.filter(t => t.supportedPlatforms && !t.supportedPlatforms.includes(process.platform));
+  const ready = tools.filter(t => (t.execution === 'safe_command' || t.execution === 'receipt_required') && !unsupported.includes(t));
   const installed = ready.filter(t => t.status === 'installed');
   const missing = ready.filter(t => t.status !== 'installed');
 
@@ -57,6 +60,7 @@ function main(status) {
       total: tools.length,
       commandReady: ready.length,
       installed: installed.length,
+      unsupported: unsupported.map(t => ({ id: t.id, supportedPlatforms: t.supportedPlatforms })),
       missing: missing.map(t => ({ id: t.id, binary: t.binary, category: t.category, installHint: t.installHint })),
       pct: ready.length ? Math.round((installed.length / ready.length) * 100) : 0,
     }, null, 2));
@@ -86,20 +90,35 @@ function main(status) {
       seen.add(key);
       console.log(`    ${t.binary.padEnd(14)} ${hint}`);
     }
-    console.log(`\n  Reproducible alternative — the full Kali+ image:  npm run tools:build  (then --tools-image cybench-tools:latest)`);
+    console.log('\n  Dedicated Linux CLI setup: docs/WINDOWS_ARSENAL.md; Linux installer: bash scripts/install-linux-arsenal.sh');
   } else {
-    console.log('\n  ✅ every command-ready tool is installed — full arsenal armed.');
+    console.log('\n  Every command-ready tool supported on this OS is installed.');
   }
   console.log('');
+  if (unsupported.length) console.log(`Unsupported on ${process.platform}: ${unsupported.map(t => t.id).join(', ')}`);
   process.exitCode = strict && missing.length ? 1 : 0;
 }
 
 (async () => {
   try {
+    if (offline) {
+      const { TOOL_ADAPTERS } = await import('../dist/arsenal/catalog.js');
+      const { commandPath } = await import('../dist/command-path.js');
+      const tools = await Promise.all(TOOL_ADAPTERS.map(async tool => ({
+        ...tool, status: await commandPath(tool.binary) ? 'installed' : 'missing',
+      })));
+      main({ tools });
+      return;
+    }
     const res = await apiGet('/api/arsenal/status');
     if (!res.ok) throw new Error(`status ${res.status}`);
     main(res.data);
   } catch (e) {
+    if (offline) {
+      console.error(`arsenal-doctor: offline readiness failed (${e.message}). Run npm run build first.`);
+      process.exitCode = 1;
+      return;
+    }
     console.error(`arsenal-doctor: API offline at ${baseUrl} (${e.message}). Start it with \`npm run server\` for live readiness.`);
     console.error('Install reference: docs/INSTALL_MATRIX.md  ·  quick host setup: bash scripts/install-tools.sh --web');
     process.exitCode = 1;

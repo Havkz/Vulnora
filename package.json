@@ -24,6 +24,8 @@
     "exploit:smoke": "node scripts/exploit-chain-smoke.mjs",
     "arsenal:smoke": "node scripts/arsenal-smoke.mjs",
     "arsenal:doctor": "node scripts/arsenal-doctor.mjs",
+    "arsenal:test-linux": "node scripts/test-linux-arsenal.mjs",
+    "providers:verify": "node scripts/verify-cli-providers.mjs",
     "prompt:audit": "node scripts/prompt-audit.mjs",
     "cve:bench": "node scripts/cve-hunt-bench.mjs",
     "cve:bench:live": "node scripts/cve-hunt-bench.mjs --live",

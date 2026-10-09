@@ -441,7 +441,7 @@ function attachLiveLogs(tempest: Tempest): void {
     if (!controller.enabled) return;
     printLiveLine(
       'OPERATION DONE',
-      `All phases completed · ${mission.name}`,
+      `${mission.status} · ${mission.name}`,
       chalk.bgGreen.black.bold,
       '',
       mission.completedAt ?? Date.now(),

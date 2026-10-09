@@ -19,7 +19,7 @@ import * as tls from 'tls';
 import * as http from 'http';
 import * as https from 'https';
 import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
-import { ToolOrchestrator, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
+import { ToolOrchestrator, TOOL_BINARIES, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -211,6 +211,21 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
     currentUrl = nextUrl;
   }
   throw new Error('Target request redirect handling failed');
+}
+
+function discoveryFingerprint(response: Response, body: string): string {
+  return createHash('sha256').update(JSON.stringify([
+    response.status, response.headers.get('content-type'), response.headers.get('location'), body,
+  ])).digest('hex');
+}
+
+async function discoveryBaseline(baseUrl: string, timeout: number): Promise<string | undefined> {
+  try {
+    const response = await targetFetch(`${baseUrl}/tempest-not-found-${randomUUID()}`, {
+      signal: AbortSignal.timeout(timeout), redirect: 'manual',
+    });
+    return discoveryFingerprint(response, await response.text());
+  } catch { return undefined; }
 }
 
 async function nativeHttpRequest(
@@ -607,6 +622,17 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   /**
    * Convert registered tools to LLM tool definitions for function calling
    */
+  async getReadyToolDefinitions(categories?: string[], names?: string[]): Promise<LLMToolDefinition[]> {
+    const definitions = this.getToolDefinitions(categories, names);
+    const readiness = await Promise.all(definitions.map(async definition => {
+      const tool = this.getTool(definition.name);
+      if (tool?.supportedPlatforms && !tool.supportedPlatforms.includes(process.platform)) return false;
+      const binary = tool?.binary || TOOL_BINARIES[definition.name];
+      return !binary || Boolean(await commandPath(binary));
+    }));
+    return definitions.filter((_definition, index) => readiness[index]);
+  }
+
   getToolDefinitions(categories?: string[], names?: string[]): LLMToolDefinition[] {
     let tools = this.getAllTools();
     // A per-operator NAME allowlist (the archetype's role toolkit) is the precise gate and
@@ -1185,6 +1211,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       };
 
       const words = wordlists[wordlistType] || wordlists.common;
+      const baseline = await discoveryBaseline(baseUrl, timeout);
       const found: { path: string; status: number; size?: number }[] = [];
       const interesting = [200, 201, 301, 302, 307, 308, 401, 403];
 
@@ -1202,11 +1229,12 @@ export const BUILTIN_TOOLS: CustomTool[] = [
                 redirect: 'manual',
               });
               const contentLength = response.headers.get('content-length');
+              const body = await response.text();
               return {
                 path: `/${path}`,
                 status: response.status,
                 size: contentLength ? parseInt(contentLength, 10) : undefined,
-                interesting: interesting.includes(response.status),
+                interesting: interesting.includes(response.status) && discoveryFingerprint(response, body) !== baseline,
               };
             } catch {
               return { path: `/${path}`, status: 0, interesting: false };
@@ -2507,7 +2535,8 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       };
 
       const endpoints = wordlists[wordlistType] || wordlists.common;
-      const found: { path: string; status: number; contentType: string; size: number }[] = [];
+      const baseline = await discoveryBaseline(baseUrl, 5000);
+      const found: { path: string; status: number; contentType: string; size: number; documentation: boolean }[] = [];
       const interesting = [200, 201, 204, 301, 302, 307, 308, 401, 403, 405];
 
       const concurrency = 5;
@@ -2529,10 +2558,11 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
                 status: resp.status,
                 contentType,
                 size: bodyText.length,
-                interesting: interesting.includes(resp.status),
+                documentation: resp.status === 200 && /(?:"openapi"\s*:|"swagger"\s*:|swagger-ui|SwaggerUI|graphiql|<redoc)/i.test(bodyText),
+                interesting: interesting.includes(resp.status) && discoveryFingerprint(resp, bodyText) !== baseline,
               };
             } catch {
-              return { path, status: 0, contentType: '', size: 0, interesting: false };
+              return { path, status: 0, contentType: '', size: 0, documentation: false, interesting: false };
             }
           })
         );
@@ -2544,6 +2574,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
               status: result.status,
               contentType: result.contentType,
               size: result.size,
+              documentation: result.documentation,
             });
           }
         }
@@ -2561,7 +2592,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       ).join('\n');
 
       const apiEndpoints = found.filter(f => f.contentType.includes('json') || f.contentType.includes('xml') || f.path.includes('api') || f.path.includes('graphql'));
-      const docEndpoints = found.filter(f => f.path.includes('swagger') || f.path.includes('openapi') || f.path.includes('docs') || f.path.includes('graphiql') || f.path.includes('playground'));
+      const docEndpoints = found.filter(f => f.documentation);
 
       return {
         success: true,

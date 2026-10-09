@@ -411,6 +411,9 @@ export type RiskTier = 'local_read' | 'passive' | 'active' | 'intrusive' | 'cred
 
 export interface CustomTool {
   name: string;
+  /** Executable dependency, when this tool is backed by an external command. */
+  binary?: string;
+  supportedPlatforms?: NodeJS.Platform[];
   description: string;
   category: string;
   handler: (context: ToolContext) => Promise<ToolResult>;

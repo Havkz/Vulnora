@@ -28,6 +28,7 @@ export type ToolExecutionMode = 'safe_command' | 'receipt_required' | 'import_on
 
 export interface ToolAdapter {
   id: string;
+  supportedPlatforms?: NodeJS.Platform[];
   binary: string;
   name: string;
   category: ToolCategory;
@@ -1016,6 +1017,7 @@ export const TOOL_ADAPTERS: ToolAdapter[] = [
   },
   {
     id: 'class-dump',
+    supportedPlatforms: ['darwin'],
     binary: 'class-dump',
     name: 'class-dump',
     category: 'mobile',

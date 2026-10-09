@@ -6,7 +6,7 @@ import {
   resolveAgentPromptProfile,
   selectRelevantTools,
 } from '../agent/prompt-profile.js';
-import { classifySoftFailure, isContextCompactionNotice, LLMBackbone } from '../llm/index.js';
+import { classifySoftFailure, isContextCompactionNotice, LLMBackbone, renderToolContract } from '../llm/index.js';
 import { KillChainPhase, type LLMToolDefinition, type Target, type Task } from '../types/index.js';
 
 const task = (description = 'Validate whether the target permits authentication bypass or data access.'): Task => ({
@@ -37,6 +37,37 @@ const arsenal = [
 ].map(name => definition(name));
 
 describe('agent prompt profiles', () => {
+  it('prioritizes planned recovery without exceeding the cap or offering equivalent tools', () => {
+    const planned = { ...task(), operatorType: 'recon', executionPlan: { toolName: 'gobuster_tool', parameters: {} } } as Task;
+    const selected = selectRelevantTools(arsenal, planned, AGENT_PROMPT_PROFILES.small_model_30b);
+    expect(selected[0].name).toBe('gobuster_tool');
+    expect(selected).toHaveLength(12);
+    expect(selected.some(tool => tool.name === 'ffuf_fuzz')).toBe(false);
+    planned.executionPlan!.toolName = 'password_spray';
+    expect(selectRelevantTools(arsenal, planned, AGENT_PROMPT_PROFILES.small_model_30b).some(tool => tool.name === 'password_spray')).toBe(false);
+  });
+
+  it('offers no scan tools for reporting and explains the evidence-only workflow', () => {
+    const report = { ...task(), operatorType: 'analyst' } as Task;
+    const tools = selectRelevantTools(arsenal, report, AGENT_PROMPT_PROFILES.small_model_30b);
+    expect(tools).toEqual([]);
+    expect(buildMissionPrompt({ task: report, tools, profile: AGENT_PROMPT_PROFILES.small_model_30b })).toContain('Reporting is evidence-store only');
+  });
+
+  it('keeps descriptions, required arguments, enums and defaults in a compact, deduplicated contract', () => {
+    const tool = definition('http_request', 'Read a URL. ' + 'Extra explanation. '.repeat(30));
+    tool.parameters.properties = {
+      url: { type: 'string', description: 'Absolute URL including scheme.' },
+      method: { type: 'string', description: 'HTTP method.', enum: ['GET', 'HEAD'], default: 'GET' },
+    };
+    tool.parameters.required = ['url'];
+    const compact = renderToolContract([tool, tool], true);
+    expect(compact.match(/- http_request\(/g)).toHaveLength(1);
+    expect(compact).toContain('url*: string');
+    expect(compact).toContain('Absolute URL including scheme');
+    expect(compact).toContain('enum=["GET","HEAD"] default="GET"');
+    expect(compact.length).toBeLessThan(renderToolContract([tool]).length);
+  });
   it('uses the bounded 30B budget', () => {
     expect(AGENT_PROMPT_PROFILES.small_model_30b).toMatchObject({
       maxTools: 12, maxToolCalls: 12, maxIterations: 12, maxTotalTokens: 8_000,
@@ -150,6 +181,23 @@ describe('agent prompt profiles', () => {
 describe('local context compaction', () => {
   const originalFetch = global.fetch;
   afterEach(() => { global.fetch = originalFetch; vi.restoreAllMocks(); });
+
+  it('keeps the complete tool contract even when it exceeds the per-message history cap', async () => {
+    let sent = '';
+    global.fetch = vi.fn(async (_url, init) => {
+      sent = String(init?.body || '');
+      return new Response(JSON.stringify({ message: { content: 'RESULT' } }), { headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch;
+    const tools = Array.from({ length: 12 }, (_, index) => ({
+      ...definition(`fixture_${index}`, 'A'.repeat(100)),
+      parameters: { type: 'object', properties: Object.fromEntries(Array.from({ length: 9 }, (_, argument) => [`arg_${argument}`, { type: 'string', description: 'B'.repeat(65) }])), required: ['arg_0'] },
+    })) as LLMToolDefinition[];
+    const contract = renderToolContract(tools, true);
+    expect(contract.length).toBeGreaterThan(8000);
+    await new LLMBackbone({ provider: 'local', model: 'qwen3:30b', baseUrl: 'http://localhost:11434/api' } as never)
+      .chatWithTools([{ role: 'user', content: 'Summarize fixture' }], tools);
+    expect(JSON.parse(sent).messages[0].content).toContain(contract);
+  });
 
   it('preserves the mission contract and removes transport compaction notices', async () => {
     let sent = '';

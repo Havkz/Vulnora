@@ -108,7 +108,7 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
     expect(prompt).toContain('ACTION CONTRACT');
     expect(prompt).toContain('nmap_scan');
     expect(prompt).toContain('nmap_scan(target*: string)');
-    expect(prompt).not.toContain('port scan a host');
+    expect(prompt).toContain('port scan a host');
     expect(prompt.match(/nmap_scan\(/g)).toHaveLength(1);
   });
 

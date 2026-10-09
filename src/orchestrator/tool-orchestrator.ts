@@ -159,7 +159,7 @@ const CONTENT_TOOLS = /^(?:dir_bruteforce|api_endpoint_discovery|ffuf_fuzz|ffuf_
 const ACTIVE_TOOLS = /(?:nuclei|sqli|xss|ssti|lfi|redirect|cors|http_methods|nikto|sqlmap)/i;
 const EXPLOIT_TOOLS = /(?:exploit|metasploit|msf|password_spray|hydra|command_exec|shell)/i;
 const AGGRESSIVE_TOOLS = /(?:nuclei|ffuf|gobuster|ferox|katana|nikto|sqlmap|nmap|naabu|port_scan|dir_bruteforce)/i;
-const TOOL_BINARIES: Record<string, string> = {
+export const TOOL_BINARIES: Record<string, string> = {
   nmap_scan: 'nmap', nmap_tool: 'nmap', nuclei_scan: 'nuclei', ffuf_fuzz: 'ffuf',
   ffuf_tool: 'ffuf', curl_request: 'curl', curl_tool: 'curl', gobuster_tool: 'gobuster',
   feroxbuster_tool: 'feroxbuster', katana_tool: 'katana', naabu_tool: 'naabu',
@@ -652,7 +652,7 @@ export class ToolOrchestrator {
         return { success: false, error: `ORCHESTRATOR configuration_error: ${key} must be a positive number.`, metadata: { orchestrationStatus: 'configuration_error' } };
       }
     }
-    const binary = TOOL_BINARIES[tool.name];
+    const binary = tool.binary || TOOL_BINARIES[tool.name];
     if (binary) {
       let dependency = this.dependencyStatus.get(binary);
       if (dependency && Date.now() - dependency.checkedAt > this.preflightTtlMs) {

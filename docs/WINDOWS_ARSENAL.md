@@ -1,0 +1,45 @@
+# Windows CLI with a dedicated Linux arsenal
+
+The local `tempest` launcher uses the WSL 2 distribution `Tempest-Arsenal`. Its disk and
+verified Kali rootfs live in `%USERPROFILE%\.t3mp3st\sandbox`. The application runs as
+the Linux user `tempest` in `/home/tempest/app`, from an archive of the committed repository.
+It opens the terminal CLI. No web UI or API server is started.
+Passwordless sudo is granted during installation and removed after the installer succeeds.
+
+Windows must restart after enabling Windows Subsystem for Linux and Virtual Machine Platform.
+The first `tempest` invocation then imports the staged rootfs and installs the arsenal using
+`scripts/setup-windows-arsenal.ps1`. Package installation can take substantial time and disk
+space. A failed install stops with an error and never writes the readiness marker. It can be
+retried by running `tempest` again.
+
+Kali packages provide the common binaries. Go, isolated Python environments and vendor
+installers cover the remaining tools. Nuclei templates and the directory-discovery wordlist
+are installed. `node scripts/arsenal-doctor.mjs --offline --strict` checks every command-ready
+catalog entry supported on Linux, without an API server. `class-dump` needs macOS; it is
+reported as unsupported and is not offered to the model. Import-only/catalog-only entries
+are not callable tools, and cloud accounts or connected mobile devices still require their
+own target configuration.
+
+The launcher starts native Windows Ollama bound to `127.0.0.1:11434` if needed. WSL mirrored
+networking lets the Linux application reach that same loopback address. Existing custom
+kernel settings are preserved; the previous `.wslconfig` is backed up in the sandbox folder.
+The Linux VM is limited to 4 GB RAM plus 4 GB swap to leave memory for the Windows model.
+
+Codex remains the primary provider. The existing file-based Codex login is copied with
+private Linux file permissions; Windows hooks and global CLI configuration are not copied.
+The first interactive launch checks a harmless Base64 harness call with Codex, then injects
+a missing Codex executable to verify Ollama fallback with the same tool. This check must pass
+before the provider-verification marker is written. The interactive session loads the local
+model, holds it until exit, and unloads it afterwards. The launcher stops only an Ollama
+service it started itself.
+
+Regular agents receive installed, relevant, non-equivalent tools. Ollama receives concise
+descriptions, required argument markers, defaults and enums. Codex gets longer descriptions
+for the same selected tools. Compaction preserves complete tool contracts and the mission
+prompt. Fixed coverage recovery executes directly and records the actual tool result.
+Reporting uses supplied findings, stored observations and explicit coverage gaps without
+advertising new scan tools. Uniform catch-all responses do not count as discovered paths.
+
+This is a separate Linux execution environment, not a hardened hostile-code sandbox.
+To check the installer manifest locally, run `npm run build` and `npm run arsenal:test-linux`.
+The first installation and interactive Linux behavior must be verified after the reboot.

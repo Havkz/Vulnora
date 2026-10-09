@@ -12,7 +12,9 @@ import { JsonlEvidenceStore } from '../orchestrator/evidence-store.js';
 import { OperatorAgent } from '../operators/index.js';
 import { LLMBackbone } from '../llm/index.js';
 import { commandPath } from '../command-path.js';
+import { AgentLoop } from '../agent/index.js';
 import type { Task, TaskResult, LLMConfig } from '../types/index.js';
+import { KillChainPhase } from '../types/index.js';
 
 const servers: Server[] = [];
 const ts: typeof import('typescript') = createRequire(import.meta.url)('typescript');
@@ -44,6 +46,69 @@ afterEach(async () => {
 });
 
 describe('audit security regressions', () => {
+  it.each(['dir_bruteforce', 'api_endpoint_discovery'])('rejects uniform SPA and authentication responses in %s discovery', async name => {
+    for (const status of [200, 401]) {
+      const origin = await listen(createServer((_req, res) => {
+        res.writeHead(status, { 'content-type': 'text/html' });
+        res.end('<html>Same page for every path</html>');
+      }));
+      const tool = BUILTIN_TOOLS.find(tool => tool.name === name)!;
+      const result = await tool.handler(createToolContext(undefined, { url: origin, wordlist: 'common' }));
+      expect(result.success).toBe(true);
+      expect(result.findings).toBeUndefined();
+      expect(result.output).toMatch(/No (?:interesting paths|API endpoints) found/);
+    }
+  });
+
+  it('requires documentation content rather than a promising path name', async () => {
+    const origin = await listen(createServer((req, res) => {
+      if (req.url === '/swagger') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('Ordinary page'); }
+      else if (req.url === '/openapi.json') { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"openapi":"3.0.0","paths":{}}'); }
+      else { res.writeHead(404); res.end('missing'); }
+    }));
+    const tool = BUILTIN_TOOLS.find(tool => tool.name === 'api_endpoint_discovery')!;
+    const result = await tool.handler(createToolContext(undefined, { url: origin }));
+    const documentation = result.findings?.find(finding => finding.title === 'API Documentation Exposed');
+    expect(documentation?.details).toContain('/openapi.json');
+    expect(documentation?.details).not.toContain('/swagger');
+  });
+
+  it.each([true, false])('executes recovery outside role defaults once, with actual success=%s and no model call', async success => {
+    const arsenal = new Arsenal();
+    const handler = vi.fn(async () => ({ success, output: success ? 'TLS observation' : undefined, error: success ? undefined : 'TLS unavailable' }));
+    arsenal.register({ name: 'ssl_scan', description: 'TLS', category: 'recon', handler });
+    const llm = new LLMBackbone({ provider: 'local', model: 'test' });
+    const chat = vi.spyOn(llm, 'chatWithTools');
+    const loop = new AgentLoop(llm, arsenal, { tools: ['dns_lookup'] });
+    const task: Task = { id: 'recovery', missionId: 'test', name: 'Coverage Recovery', description: 'TLS', operatorType: 'recon', phase: KillChainPhase.RECON, status: 'in_progress', priority: 1, dependencies: [], createdAt: 1, executionPlan: { toolName: 'ssl_scan', parameters: { host: '127.0.0.1' } } };
+    const result = await loop.run(task, '', { id: 'local', address: '127.0.0.1' } as never);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(chat).not.toHaveBeenCalled();
+    expect(result.success).toBe(success);
+    expect(result.steps).toHaveLength(1);
+  });
+
+  it('does not advertise absent executables while preserving built-in tools', async () => {
+    vi.stubEnv('PATH', await scratch());
+    const arsenal = new Arsenal();
+    arsenal.register({ name: 'nmap_scan', description: 'Nmap', category: 'recon', handler: async () => ({ success: true }) });
+    arsenal.register(httpTool);
+    expect((await arsenal.getReadyToolDefinitions()).map(tool => tool.name)).toEqual(['http_request']);
+  });
+
+  it('reports stored HTTP evidence and gaps for the matching host without requesting tools', async () => {
+    const arsenal = new Arsenal();
+    await arsenal.getOrchestrator().execute(httpTool, { parameters: { url: 'https://target.test/api/config' } }, async () => ({ success: true, output: 'Observed fixture response' }));
+    arsenal.getOrchestrator().markIncompleteArea('target.test: service_detection');
+    const llm = new LLMBackbone({ provider: 'local', model: 'test' });
+    const chat = vi.spyOn(llm, 'chatWithTools').mockResolvedValue({ content: 'RESULT\nStatus: inconclusive', model: 'test' });
+    const report = { id: 'report', name: 'Report', description: 'Summarize supplied evidence', operatorType: 'analyst' } as Task;
+    await new AgentLoop(llm, arsenal).run(report, '', { id: 'fixture', address: 'target.test' } as never);
+    const [messages, tools] = chat.mock.calls[0];
+    expect(tools).toEqual([]);
+    expect(messages.map(message => message.content).join('\n')).toContain('Observed fixture response');
+    expect(messages.map(message => message.content).join('\n')).toContain('service_detection');
+  });
   it.each([false, true])('blocks a real out-of-scope redirect with configured authentication = %s', async authentication => {
     let outsideRequests = 0;
     const destination = await listen(createServer((_req, res) => { outsideRequests++; res.end('outside'); }), '127.0.0.2');
