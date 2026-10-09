@@ -161,7 +161,6 @@ function toolDisplayName(toolName?: string): string {
     open_redirect_test: 'Redirect test',
     clickjacking_test: 'Clickjacking',
     http_methods_test: 'HTTP methods',
-    network_trace: 'Network trace',
   };
   return labels[toolName || ''] || (toolName || 'Tool').replace(/_/g, ' ');
 }

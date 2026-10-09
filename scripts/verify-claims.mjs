@@ -159,7 +159,7 @@ check('VERIFY gate implemented', /VERIFY gate|never appeared in tool output/.tes
 check('REFLECT gate implemented', /REFLECT gate/.test(bench), 'forced mid-run pivot');
 
 // ── CLAIM 4: capability breadth ─────────────────────────────────────────────
-console.log('\nCLAIM 4 — capability: 108 tools, 8-operator kill-chain');
+console.log('\nCLAIM 4 — capability: 55 website/API tools, 8-operator kill-chain');
 // DISTINCT tools = external-binary adapters (catalog.ts TOOL_ADAPTERS id:) + custom
 // built-in/external tools (index.ts top-level name:). NOT a name:/id: regex count
 // (that double-counts each tool's id+name AND every parameter name).
@@ -170,7 +170,7 @@ const builtinTools = (indexSrc.match(/^    name: '/gm) || []).length;
 const tools = adapters + builtinTools;
 const ops = fs.existsSync(R('src/operators/index.ts'))
   ? (fs.readFileSync(R('src/operators/index.ts'), 'utf8').match(/name: '[^']*(Operator|Scanner|Specialist|Coordinator|Analyst)'/g) || []).length : 0;
-check('arsenal tool count ≥ 80 (adapters + built-ins)', tools >= 80, `${tools} tools (${adapters} adapters + ${builtinTools} built-in)`);
+check('web arsenal: 55 tools (23 adapters + 32 built-ins)', tools === 55 && adapters === 23 && builtinTools === 32, `${tools} tools (${adapters} adapters + ${builtinTools} built-in)`);
 check('kill-chain operators ≥ 8 (recon→exfil→persistence)', ops >= 8, `${ops} operators`);
 
 // ── CLAIM 5: CVE-Zero — real post-cutoff CVE discovery ──────────────────────

@@ -264,25 +264,25 @@ describe('Operator Contracts', () => {
 });
 
 describe('Tool Adapter Catalog', () => {
-  it('should expose a broad command-ready and catalog-only arsenal', () => {
+  it('should expose a callable website/API arsenal', () => {
     const summary = summarizeToolCatalog();
-    expect(TOOL_ADAPTERS.length).toBeGreaterThanOrEqual(30);
-    expect(summary.commandReady).toBeGreaterThanOrEqual(20);
-    expect(summary.catalogOnly).toBeGreaterThanOrEqual(2);
+    expect(TOOL_ADAPTERS.length).toBe(23);
+    expect(summary.commandReady).toBe(23);
+    expect(summary.catalogOnly).toBe(0);
     expect(summary.unmodeled).toBe(false);
     expect(TOOL_ADAPTERS.length).toBeLessThanOrEqual(FRONTIER_ARSENAL_MILESTONE);
     expect(SAFE_COMMANDS).toContain('nuclei');
-    expect(SAFE_COMMANDS).toContain('semgrep');
+    expect(SAFE_COMMANDS).not.toContain('semgrep');
     expect(SAFE_COMMANDS).not.toContain('msfconsole');
   });
 
-  it('should give core mission families first-class adapter coverage', () => {
+  it('should keep adapters scoped to website/API testing', () => {
     expect(adaptersForFamily('web_api').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['nmap', 'nuclei', 'ffuf', 'katana']));
-    expect(adaptersForFamily('code_supply_chain').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['semgrep', 'gitleaks', 'trivy', 'syft']));
-    expect(adaptersForFamily('ai_red_team').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['garak', 'promptfoo']));
-    expect(adaptersForFamily('smart_contract').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['slither', 'mythril', 'foundry-forge', 'solhint']));
-    expect(adaptersForFamily('crypto_secrets').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['openssl', 'john', 'hashcat', 'foundry-cast']));
-    expect(adaptersForFamily('reverse_binary').map(adapter => adapter.id)).toEqual(expect.arrayContaining(['binwalk', 'radare2', 'apktool', 'jadx']));
+    expect(adaptersForFamily('code_supply_chain')).toEqual([]);
+    expect(adaptersForFamily('ai_red_team')).toEqual([]);
+    expect(adaptersForFamily('smart_contract')).toEqual([]);
+    expect(adaptersForFamily('crypto_secrets')).toEqual([]);
+    expect(adaptersForFamily('reverse_binary')).toEqual([]);
   });
 });
 

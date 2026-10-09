@@ -146,10 +146,6 @@ async function probePort(host: string, port: number, timeout: number = 2000): Pr
   });
 }
 
-async function checkPort(host: string, port: number, timeout: number = 2000): Promise<boolean> {
-  return (await probePort(host, port, timeout)) === 'open';
-}
-
 /** Models commonly supply small timeout values as seconds even though the original
  * schema said milliseconds. Treat 1..60 as seconds, otherwise milliseconds, and
  * clamp pathological values so a typo cannot create instant false negatives or a
@@ -730,7 +726,6 @@ export function createToolContext(
  */
 export const SPICY_BUILTIN_TIERS: Readonly<Record<string, RiskTier>> = {
   password_spray: 'credential',
-  hash_crack: 'credential',
   sqli_scan: 'intrusive',
   xss_scan: 'intrusive',
 };
@@ -1821,114 +1816,6 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       };
     },
   },
-  {
-    name: 'hash_crack',
-    description: 'Attempt to crack a password hash using dictionary attack',
-    category: 'auth',
-    parameters: [
-      { name: 'hash', type: 'string', description: 'Hash to crack', required: true },
-      { name: 'type', type: 'string', description: 'Hash type: md5, sha1, sha256, ntlm (auto-detect if not specified)', required: false, default: 'auto' },
-    ],
-    handler: async (context) => {
-      const { createHash } = await import('crypto');
-      const hash = (context.parameters.hash as string).toLowerCase();
-      const hashType = context.parameters.type as string || 'auto';
-
-      // Detect hash type based on length and format
-      let detectedType = 'Unknown';
-      const possibleTypes: string[] = [];
-
-      if (hash.length === 32 && /^[a-f0-9]+$/.test(hash)) {
-        detectedType = 'MD5 or NTLM';
-        possibleTypes.push('md5', 'ntlm');
-      } else if (hash.length === 40 && /^[a-f0-9]+$/.test(hash)) {
-        detectedType = 'SHA1';
-        possibleTypes.push('sha1');
-      } else if (hash.length === 64 && /^[a-f0-9]+$/.test(hash)) {
-        detectedType = 'SHA256';
-        possibleTypes.push('sha256');
-      } else if (hash.length === 128 && /^[a-f0-9]+$/.test(hash)) {
-        detectedType = 'SHA512';
-        possibleTypes.push('sha512');
-      }
-
-      if (hashType !== 'auto') {
-        possibleTypes.length = 0;
-        possibleTypes.push(hashType.toLowerCase());
-        detectedType = hashType.toUpperCase();
-      }
-
-      // Common passwords dictionary for cracking
-      const wordlist = [
-        'password', '123456', '12345678', 'qwerty', 'abc123', 'monkey', 'letmein',
-        'dragon', 'master', 'admin', 'root', 'toor', 'login', 'welcome', 'shadow',
-        'sunshine', 'princess', 'football', 'baseball', 'iloveyou', 'trustno1',
-        'password1', 'password123', 'pass123', 'Password1', 'Password123',
-        '123456789', '12345', '1234567', '1234567890', 'qwerty123', 'qwertyuiop',
-        'passw0rd', 'p@ssword', 'p@ssw0rd', 'secret', 'test', 'testing', 'user',
-        'guest', 'administrator', 'default', 'changeme', 'summer', 'winter',
-        '111111', '000000', '123123', '654321', 'superman', 'batman', 'michael',
-        'jennifer', 'jordan', 'hunter', 'ranger', 'buster', 'charlie', 'thomas',
-      ];
-
-      // Function to compute hash
-      const computeHash = (plaintext: string, type: string): string => {
-        if (type === 'ntlm') {
-          // NTLM hash: MD4 of UTF-16LE encoded password
-          const utf16 = Buffer.from(plaintext, 'utf16le');
-          return createHash('md4').update(utf16).digest('hex');
-        }
-        return createHash(type).update(plaintext).digest('hex');
-      };
-
-      let crackedPassword: string | null = null;
-      let crackedType: string | null = null;
-      let attempts = 0;
-
-      // Try cracking with each hash type
-      for (const type of possibleTypes) {
-        for (const word of wordlist) {
-          attempts++;
-          try {
-            const computed = computeHash(word, type);
-            if (computed === hash) {
-              crackedPassword = word;
-              crackedType = type.toUpperCase();
-              break;
-            }
-          } catch {
-            // Skip unsupported hash types
-          }
-        }
-        if (crackedPassword) break;
-      }
-
-      const output = crackedPassword
-        ? `Hash crack attempt:
-Hash: ${hash}
-Detected type: ${detectedType}
-Status: ✓ CRACKED
-Plaintext: ${crackedPassword}
-Hash type: ${crackedType}
-Attempts: ${attempts}`
-        : `Hash crack attempt:
-Hash: ${hash}
-Detected type: ${detectedType}
-Status: ✗ Not cracked
-Attempts: ${attempts} (tried ${wordlist.length} common passwords)
-Note: Consider using larger wordlists (rockyou.txt) or hashcat for better results`;
-
-      return {
-        success: true,
-        output,
-        findings: crackedPassword ? [{
-          title: 'Weak Password Hash Cracked',
-          severity: 'critical',
-          details: `Hash cracked to plaintext: "${crackedPassword}" using ${crackedType}`,
-        }] : undefined,
-      };
-    },
-  },
 
   // =============================================================================
   // UTILITY TOOLS
@@ -2280,97 +2167,6 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           error: `Version detection failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
-    },
-  },
-  {
-    name: 'network_trace',
-    description: 'Simple traceroute-like probe using incremental TTL TCP connects',
-    category: 'recon',
-    parameters: [
-      { name: 'host', type: 'string', description: 'Target hostname or IP', required: true },
-      { name: 'port', type: 'number', description: 'Target port', required: false, default: 80 },
-      { name: 'max_hops', type: 'number', description: 'Maximum hops', required: false, default: 15 },
-    ],
-    handler: async (context) => {
-      const host = context.parameters.host as string;
-      const port = (context.parameters.port as number) || 80;
-      const maxHops = Math.max(1, Math.min((context.parameters.max_hops as number) || 15, 30));
-
-      // Resolve host to IP first
-      let targetIp: string;
-      try {
-        const addresses = await dnsResolve4(host);
-        targetIp = addresses[0];
-      } catch {
-        targetIp = host; // Assume it's already an IP
-      }
-
-      const hops: { hop: number; ip: string; rtt: number }[] = [];
-      const timeouts: number[] = [];
-
-      for (let ttl = 1; ttl <= maxHops; ttl++) {
-        const startTime = Date.now();
-        try {
-          const result = await new Promise<{ ip: string; reached: boolean }>((resolve) => {
-            const socket = new net.Socket();
-            // Note: Node.js net.Socket doesn't directly support TTL on all platforms,
-            // but we can attempt a TCP connect and measure timing
-            socket.setTimeout(2000);
-
-            socket.on('connect', () => {
-              socket.destroy();
-              resolve({ ip: targetIp, reached: true });
-            });
-
-            socket.on('timeout', () => {
-              socket.destroy();
-              resolve({ ip: '*', reached: false });
-            });
-
-            socket.on('error', () => {
-              socket.destroy();
-              resolve({ ip: '*', reached: false });
-            });
-
-            socket.connect(port, host);
-          });
-
-          const rtt = Date.now() - startTime;
-
-          if (result.reached) {
-            hops.push({ hop: ttl, ip: result.ip, rtt });
-            break; // Reached destination
-          } else {
-            timeouts.push(ttl);
-            hops.push({ hop: ttl, ip: '*', rtt });
-          }
-        } catch {
-          hops.push({ hop: ttl, ip: '*', rtt: -1 });
-        }
-
-        // For TCP-based trace, stop after first successful connection
-        if (hops.length > 0 && hops[hops.length - 1].ip !== '*') break;
-
-        // If we get 3 timeouts in a row after hop 1, try direct connection
-        if (timeouts.length >= 3) {
-          const directStart = Date.now();
-          const isReachable = await checkPort(host, port, 3000);
-          const directRtt = Date.now() - directStart;
-          if (isReachable) {
-            hops.push({ hop: ttl + 1, ip: targetIp, rtt: directRtt });
-          }
-          break;
-        }
-      }
-
-      const output = hops.map(h =>
-        h.ip === '*' ? `  ${h.hop}  *  (timeout)` : `  ${h.hop}  ${h.ip}  ${h.rtt}ms`
-      ).join('\n');
-
-      return {
-        success: true,
-        output: `Network trace to ${host}:${port} (resolved: ${targetIp}):\n${output}\n\n${hops.some(h => h.ip !== '*') ? 'Target is reachable' : 'Target may be unreachable or filtered'}`,
-      };
     },
   },
 
@@ -3349,82 +3145,6 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           error: `URL ${mode} failed: ${error instanceof Error ? error.message : String(error)}`,
         };
       }
-    },
-  },
-  {
-    name: 'cidr_expand',
-    description: 'Expand a CIDR notation into individual IP addresses (limited to /24 max)',
-    category: 'util',
-    parameters: [
-      { name: 'cidr', type: 'string', description: 'CIDR notation (e.g., "192.168.1.0/24")', required: true },
-    ],
-    handler: async (context) => {
-      const cidr = context.parameters.cidr as string;
-
-      const cidrMatch = cidr.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})$/);
-      if (!cidrMatch) {
-        return {
-          success: false,
-          error: `Invalid CIDR notation: ${cidr}. Expected format: x.x.x.x/prefix (e.g., 192.168.1.0/24)`,
-        };
-      }
-
-      const ipStr = cidrMatch[1];
-      const prefix = parseInt(cidrMatch[2], 10);
-
-      if (prefix < 0 || prefix > 32) {
-        return {
-          success: false,
-          error: `Invalid prefix length: /${prefix}. Must be between 0 and 32.`,
-        };
-      }
-
-      if (prefix < 24) {
-        return {
-          success: false,
-          error: `Prefix /${prefix} would generate ${Math.pow(2, 32 - prefix)} IPs. Maximum supported is /24 (256 IPs) to prevent excessive output.`,
-        };
-      }
-
-      // Parse the base IP to a 32-bit integer
-      const octets = ipStr.split('.').map(o => parseInt(o, 10));
-      if (octets.some(o => o < 0 || o > 255)) {
-        return {
-          success: false,
-          error: `Invalid IP address: ${ipStr}. Each octet must be 0-255.`,
-        };
-      }
-
-      const ipInt = (octets[0] << 24) + (octets[1] << 16) + (octets[2] << 8) + octets[3];
-      const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
-      const network = (ipInt & mask) >>> 0;
-      const broadcast = (network | (~mask >>> 0)) >>> 0;
-      const totalHosts = broadcast - network + 1;
-
-      const ips: string[] = [];
-      for (let ip = network; ip <= broadcast; ip++) {
-        ips.push(
-          `${(ip >>> 24) & 255}.${(ip >>> 16) & 255}.${(ip >>> 8) & 255}.${ip & 255}`
-        );
-      }
-
-      const networkIp = ips[0];
-      const broadcastIp = ips[ips.length - 1];
-      const usableRange = totalHosts > 2
-        ? `${ips[1]} - ${ips[ips.length - 2]}`
-        : 'N/A (point-to-point or host)';
-
-      return {
-        success: true,
-        output: `CIDR Expansion for ${cidr}:\n` +
-          `Network:    ${networkIp}\n` +
-          `Broadcast:  ${broadcastIp}\n` +
-          `Subnet Mask: ${((mask >>> 24) & 255)}.${((mask >>> 16) & 255)}.${((mask >>> 8) & 255)}.${mask & 255}\n` +
-          `Total IPs:  ${totalHosts}\n` +
-          `Usable Range: ${usableRange}\n` +
-          `Usable Hosts: ${Math.max(0, totalHosts - 2)}\n\n` +
-          `All IPs:\n${ips.map(ip => `  ${ip}`).join('\n')}`,
-      };
     },
   },
 ];

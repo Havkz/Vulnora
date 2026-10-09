@@ -44,7 +44,7 @@ function main(status) {
   const missing = ready.filter(t => t.status !== 'installed');
 
   if (fixMode) {
-    // de-dupe install hints (several tools share one, e.g. foundry forge/cast)
+    // De-duplicate install hints shared by tools from the same package.
     const seen = new Set();
     for (const t of missing) {
       const hint = (t.installHint || '').trim();

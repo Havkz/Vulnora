@@ -20,11 +20,12 @@ import {
   type SubprocessResult,
 } from '../arsenal/adapter-tools.js';
 import { TOOL_ADAPTERS } from '../arsenal/catalog.js';
+import { LEGACY_ADAPTERS } from './fixtures/legacy-adapters.js';
 import type { ToolAdapter } from '../arsenal/catalog.js';
 import type { CustomTool, ToolContext } from '../types/index.js';
 
 function adapter(id: string): ToolAdapter {
-  const a = TOOL_ADAPTERS.find(x => x.id === id);
+  const a = [...TOOL_ADAPTERS, ...LEGACY_ADAPTERS].find(x => x.id === id);
   if (!a) throw new Error(`test fixture: adapter '${id}' not found in catalog`);
   return a;
 }
@@ -341,19 +342,15 @@ describe('invocation-honesty guard — every mintable adapter is classified, non
 
   // `<binary> <target>` is genuinely a correct, useful invocation for these.
   const POSITIONAL_TARGET_OK = new Set([
-    'file', 'strings', 'binwalk', 'radamsa', 'jadx', 'class-dump', 'solhint', 'echidna', 'john',
+    'file',
   ]);
   // No single safe default exists: the operator supplies the full command (cloud CLIs, model-config
   // red-team harnesses, device-runtime tools, project-scaffolded RE, or a target-executing debugger).
   const OPERATOR_DRIVEN = new Set([
-    'prowler', 'scoutsuite', 'cloudfox', 'pmapper', 'aws-cli', 'az-cli', 'gcloud-cli',
-    'garak', 'promptfoo', 'foundry-forge', 'foundry-cast', 'openssl', 'afl-fuzz', 'ghidra',
-    'gdb', 'objection', 'drozer',
   ]);
   // KNOWN DEBT: the positional default is broken/degraded and these SHOULD get a template later.
   // Tracked honestly here rather than hidden — a good follow-up PR shrinks this set.
   const KNOWN_DEBT = new Set([
-    'osv-scanner', 'hashcat', 'apktool', 'yara',
   ]);
 
   const mintable = TOOL_ADAPTERS.filter(isMintable);

@@ -69,7 +69,7 @@ const TOOL_PRIORITY: Record<string, string[]> = {
   recon: [
     'dns_lookup', 'whois_lookup', 'subdomain_enum', 'nmap_scan', 'http_request',
     'technology_detect', 'robots_txt_fetch', 'header_analysis', 'ssl_scan',
-    'api_endpoint_discovery', 'waybackurls_tool', 'network_trace',
+    'api_endpoint_discovery', 'waybackurls_tool',
   ],
   scanner: [
     'nuclei_scan', 'http_request', 'header_analysis', 'ssl_scan', 'csp_analysis',
@@ -79,7 +79,7 @@ const TOOL_PRIORITY: Record<string, string[]> = {
   exploiter: [
     'curl_request', 'sqli_scan', 'xss_scan', 'ssti_test', 'lfi_test',
     'open_redirect_test', 'nuclei_scan', 'http_methods_test', 'api_endpoint_discovery',
-    'jwt_decode', 'header_analysis', 'technology_detect', 'password_spray', 'hash_crack',
+    'jwt_decode', 'header_analysis', 'technology_detect', 'password_spray',
   ],
   analyst: [
     'cve_lookup', 'ssl_scan', 'header_analysis', 'csp_analysis', 'cors_check',

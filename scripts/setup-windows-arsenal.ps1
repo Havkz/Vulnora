@@ -35,4 +35,4 @@ Invoke-TempestWsl -arguments @('-d', 'Tempest-Arsenal', '--user', 'root', '--exe
 Invoke-TempestWsl -arguments @('-d', 'Tempest-Arsenal', '--user', 'tempest', '--exec', '/home/tempest/.local/bin/codex', 'login', 'status')
 Invoke-TempestWsl -arguments @('-d', 'Tempest-Arsenal', '--user', 'tempest', '--exec', 'test', '-f', '/home/tempest/.tempest-arsenal-ready')
 [IO.File]::WriteAllText($readyPath, (Get-Date -Format o))
-Write-Host 'Tempest Linux arsenal installed. macOS class-dump is not supported on Linux.'
+Write-Host 'Tempest website/API arsenal installed and checked.'

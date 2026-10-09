@@ -58,7 +58,7 @@ describe('Arsenal.execute() — approval gate', () => {
     // existed must keep that behavior — they carry NO riskTier, so isGatedRisk() never fires on them.
     const all = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS];
     const tier = (name: string): string | undefined => all.find((t) => t.name === name)?.riskTier;
-    for (const n of ['sqli_scan', 'xss_scan', 'password_spray', 'hash_crack', 'dir_bruteforce']) {
+    for (const n of ['sqli_scan', 'xss_scan', 'password_spray', 'dir_bruteforce']) {
       expect(tier(n), `${n} must stay ungated (zero regression)`).toBeUndefined();
     }
   });

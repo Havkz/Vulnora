@@ -264,7 +264,6 @@ import {
   isToolAvailable,
 } from './arsenal/index.js';
 import { buildAdapterTools } from './arsenal/adapter-tools.js';
-import { buildPostExTools } from './arsenal/post-ex.js';
 import { ApprovalController, type ApprovalRequest } from './arsenal/approval.js';
 import { TOOL_ADAPTERS } from './arsenal/catalog.js';
 import { OpsecController, createBalancedOpsecConfig } from './opsec/index.js';
@@ -475,7 +474,6 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       };
       const existing = new Set(this.arsenal.getAllTools().map((t) => t.name));
       this.arsenal.registerMany(buildAdapterTools(TOOL_ADAPTERS, deps, existing));
-      this.arsenal.registerMany(buildPostExTools(deps)); // metasploit_module (dangerous) + hydra_bruteforce (credential)
     }
 
     // Advanced modules

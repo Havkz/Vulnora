@@ -12,13 +12,13 @@ The first `tempest` invocation then imports the staged rootfs and installs the a
 space. A failed install stops with an error and never writes the readiness marker. It can be
 retried by running `tempest` again.
 
-Kali packages provide the common binaries. Go, isolated Python environments and vendor
-installers cover the remaining tools. Nuclei templates and the directory-discovery wordlist
-are installed. `node scripts/arsenal-doctor.mjs --offline --strict` checks every command-ready
-catalog entry supported on Linux, without an API server. `class-dump` needs macOS; it is
-reported as unsupported and is not offered to the model. Import-only/catalog-only entries
-are not callable tools, and cloud accounts or connected mobile devices still require their
-own target configuration.
+The arsenal contains 32 default tools and 23 optional external adapters, all for website/API
+testing and supporting DNS, subdomain, TLS and web-server service discovery. Mobile/desktop
+app analysis, cloud-account audits, smart contracts, binary analysis, offline hash cracking
+and general post-exploitation tools are excluded from registration and model tool contracts.
+Kali packages provide common binaries; Go covers the remaining web tools. Nuclei templates
+and the directory-discovery wordlist are installed. The installer also installs Node and Codex.
+`node scripts/arsenal-doctor.mjs --offline --strict` checks all 23 adapters without an API server.
 
 The launcher starts native Windows Ollama bound to `127.0.0.1:11434` if needed. WSL mirrored
 networking lets the Linux application reach that same loopback address. Existing custom

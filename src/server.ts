@@ -2312,7 +2312,7 @@ async function buildSelfHealReport(params: Record<string, unknown>): Promise<Rec
   const staleWatch = !latestCycle || watchSignalSignature(latestCycle.signals) !== watchSignalSignature(currentSignals);
   const arsenalStatus = await buildArsenalStatus(family);
   const missingCommandReady = Array.isArray(arsenalStatus.missingCommandReady) ? arsenalStatus.missingCommandReady.map(String) : [];
-  const highValueMissing = missingCommandReady.filter(tool => ['nmap', 'nuclei', 'ffuf', 'subfinder', 'httpx', 'katana', 'semgrep', 'gitleaks', 'trivy', 'promptfoo', 'garak', 'slither'].includes(tool));
+  const highValueMissing = missingCommandReady.filter(tool => ['nmap', 'nuclei', 'ffuf', 'subfinder', 'httpx', 'katana'].includes(tool));
   const gate = buildMissionGate(operationDraft);
   const actions: SelfHealActionRecord[] = [];
   let appliedWatchCycle: WatchCycleRecord | null = null;
@@ -4441,24 +4441,8 @@ async function inspectToolAvailability(): Promise<Array<{ id: string; name: stri
     curl: ['api_smoke', 'http_probe'],
     dig: ['dns_recon'],
     nmap: ['port_recon'],
-    git: ['repo_context'],
   };
-  const adapters = [...TOOL_ADAPTERS, {
-    id: 'git',
-    binary: 'git',
-    name: 'Git',
-    category: 'core' as const,
-    families: ['code_supply_chain' as const],
-    risk: 'local_read' as const,
-    execution: 'safe_command' as const,
-    networked: false,
-    evidenceKinds: ['repo_context'],
-    outputFormats: ['text'],
-    installHint: 'Install Git from Xcode command line tools or your package manager.',
-    commandHint: 'git status --short',
-    parserStatus: 'text' as const,
-    notes: 'Repository context for local evidence and provenance.',
-  }];
+  const adapters = TOOL_ADAPTERS;
   return Promise.all(adapters.map(async adapter => {
     try {
       const resolvedPath = await commandPath(adapter.binary);
@@ -4503,11 +4487,11 @@ async function inspectToolAvailability(): Promise<Array<{ id: string; name: stri
 async function buildPreflightReport(): Promise<Record<string, unknown>> {
   const tools = await inspectToolAvailability();
   const llmConfig = config.getLLMConfig();
-  const requiredTools = new Set(['file', 'curl', 'git']);
+  const requiredTools = new Set(['file', 'curl']);
   const missingRequired = tools.filter(tool => requiredTools.has(tool.name) && !tool.available).map(tool => tool.name);
   const missingRecon = tools.filter(tool => ['nmap', 'dig'].includes(tool.name) && !tool.available).map(tool => tool.name);
   const missingHighValue = tools.filter(tool =>
-    ['nmap', 'nuclei', 'ffuf', 'subfinder', 'httpx', 'katana', 'semgrep', 'gitleaks', 'trivy', 'garak', 'promptfoo', 'slither', 'forge', 'radamsa'].includes(tool.name) &&
+    ['nmap', 'nuclei', 'ffuf', 'subfinder', 'httpx', 'katana'].includes(tool.name) &&
     !tool.available
   ).map(tool => tool.name);
   const commandReadyTools = tools.filter(tool => tool.id !== 'git' && ['safe_command', 'receipt_required'].includes(tool.execution));
@@ -4519,9 +4503,9 @@ async function buildPreflightReport(): Promise<Record<string, unknown>> {
     { id: 'api', label: 'API server', status: 'ok', detail: `mode=${currentMode()}` },
     { id: 'storage', label: 'State storage', status: 'ok', detail: stateRoot() },
     { id: 'llm', label: 'LLM provider', status: llmConfig.apiKey ? 'ok' : 'warn', detail: llmConfig.apiKey ? `${llmConfig.provider}:${llmConfig.model}` : 'No API key configured; local contracts and drills still work.' },
-    { id: 'tools-core', label: 'Core tools', status: missingRequired.length ? 'block' : 'ok', detail: missingRequired.length ? `Missing ${missingRequired.join(', ')}` : 'file, curl, and git detected' },
+    { id: 'tools-core', label: 'Core tools', status: missingRequired.length ? 'block' : 'ok', detail: missingRequired.length ? `Missing ${missingRequired.join(', ')}` : 'file and curl detected' },
     { id: 'tools-recon', label: 'Recon tools', status: missingRecon.length ? 'warn' : 'ok', detail: missingRecon.length ? `Missing ${missingRecon.join(', ')}` : 'nmap and dig detected' },
-    { id: 'arsenal-catalog', label: 'Tool adapter catalog', status: TOOL_ADAPTERS.length >= 45 ? 'ok' : 'warn', detail: `${TOOL_ADAPTERS.length}/${FRONTIER_ARSENAL_MILESTONE} wired / ${installedCommandReady}/${commandReadyTools.length} installed / ${missingHighValue.length} high-value missing` },
+    { id: 'arsenal-catalog', label: 'Tool adapter catalog', status: TOOL_ADAPTERS.length >= FRONTIER_ARSENAL_MILESTONE ? 'ok' : 'warn', detail: `${TOOL_ADAPTERS.length}/${FRONTIER_ARSENAL_MILESTONE} wired / ${installedCommandReady}/${commandReadyTools.length} installed / ${missingHighValue.length} high-value missing` },
     { id: 'resources', label: 'Knowledge packs', status: RESOURCE_PACKS.length >= 14 ? 'ok' : 'warn', detail: `${RESOURCE_PACKS.length} packs / ${WORKFLOW_PRESETS.length} guided starts` },
     { id: 'prompt-packs', label: 'Agent prompt packs', status: AGENT_PROMPT_PACKS.length >= 5 ? 'ok' : 'warn', detail: `${AGENT_PROMPT_PACKS.length} family prompts with evidence contracts` },
     { id: 'runbooks', label: 'Operator runbooks', status: OPERATOR_RUNBOOKS.length >= 5 ? 'ok' : 'warn', detail: `${OPERATOR_RUNBOOKS.length} mission families with next-action guidance` },
