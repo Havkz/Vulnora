@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEBIAN_FRONTEND=noninteractive
 export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
-sudo apt-get update
+sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
 sudo apt-get install -y ca-certificates curl git build-essential pkg-config libpcap-dev \
   golang nodejs npm dirb
 node -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Node 22 or newer required")'

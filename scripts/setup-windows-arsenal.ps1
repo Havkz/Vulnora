@@ -17,7 +17,7 @@ function ConvertTo-LinuxPath([string] $path) {
 }
 function Invoke-TempestWsl([string[]] $arguments) {
     & wsl.exe @arguments
-    if ($LASTEXITCODE -ne 0) { throw 'Tempest Linux setup failed. If Windows features were just enabled, restart Windows first. The environment is not marked ready.' }
+    if ($LASTEXITCODE -ne 0) { throw "Tempest Linux setup failed (exit $LASTEXITCODE). See the WSL/network/package error above. The environment is not marked ready." }
 }
 $distributions = (& wsl.exe --list --quiet) -replace "`0", '' | ForEach-Object { $_.Trim() }
 if ($distributions -notcontains 'Tempest-Arsenal') {

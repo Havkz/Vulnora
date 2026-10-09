@@ -4,7 +4,15 @@ set -euo pipefail
 archive=$1
 windows_config=$2
 windows_codex=$3
-apt-get update
+if ! ip route show default | grep -q '^default'; then
+  echo 'Tempest WSL network unavailable: no default route. Check WSL mirrored networking before installing packages.' >&2
+  exit 1
+fi
+if ! timeout 20 getent ahosts http.kali.org >/dev/null; then
+  echo 'Tempest WSL DNS unavailable: cannot resolve http.kali.org. Repair WSL networking before installing packages.' >&2
+  exit 1
+fi
+apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
 DEBIAN_FRONTEND=noninteractive apt-get install -y sudo ca-certificates
 if ! id tempest >/dev/null 2>&1; then useradd --create-home --shell /bin/bash tempest; fi
 printf 'tempest ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/tempest
