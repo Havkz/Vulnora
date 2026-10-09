@@ -810,10 +810,6 @@ async function addTarget(tempest: Tempest): Promise<void> {
       choices: [
         'web_application',
         'api',
-        'network',
-        'host',
-        'database',
-        'cloud',
       ],
     },
     {
