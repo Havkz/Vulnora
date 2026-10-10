@@ -19,7 +19,9 @@ done
 sudo apt-get install -y --no-install-recommends "${available[@]}"
 mkdir -p "$HOME/.local/bin"
 if [[ -x /usr/bin/httpx-toolkit ]]; then ln -sf /usr/bin/httpx-toolkit "$HOME/.local/bin/httpx"; fi
-if [[ -f /usr/share/testssl.sh/testssl.sh ]]; then
+if [[ -x /usr/bin/testssl ]]; then
+  ln -sf /usr/bin/testssl "$HOME/.local/bin/testssl.sh"
+elif [[ -f /usr/share/testssl.sh/testssl.sh ]]; then
   ln -sf /usr/share/testssl.sh/testssl.sh "$HOME/.local/bin/testssl.sh"
 fi
 
