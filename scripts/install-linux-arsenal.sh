@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 export DEBIAN_FRONTEND=noninteractive
 export PATH="$HOME/.local/bin:$HOME/go/bin:$PATH"
 sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
-sudo apt-get install -y ca-certificates curl git build-essential pkg-config libpcap-dev \
+sudo apt-get install -y --no-install-recommends ca-certificates curl git build-essential pkg-config libpcap-dev \
   golang nodejs npm dirb
 node -e 'if(Number(process.versions.node.split(".")[0])<22)throw Error("Node 22 or newer required")'
 
@@ -16,7 +16,7 @@ available=()
 for package in "${packages[@]}"; do
   if apt-cache show "$package" >/dev/null 2>&1; then available+=("$package"); fi
 done
-sudo apt-get install -y "${available[@]}"
+sudo apt-get install -y --no-install-recommends "${available[@]}"
 mkdir -p "$HOME/.local/bin"
 if [[ -x /usr/bin/httpx-toolkit ]]; then ln -sf /usr/bin/httpx-toolkit "$HOME/.local/bin/httpx"; fi
 if [[ -f /usr/share/testssl.sh/testssl.sh ]]; then

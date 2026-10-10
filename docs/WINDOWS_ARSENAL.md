@@ -18,6 +18,9 @@ networking fails with `0x8007054f`, inspect the Windows TCP dynamic port ranges:
 range can block WSL's guest port reservation. See [Microsoft's diagnosis](https://github.com/microsoft/WSL/issues/41251).
 Back up custom ranges before restoring defaults (`startport=49152 numberofports=16384` for
 IPv4/IPv6 TCP), then restart WSL. This repair is not applied automatically by the launcher.
+The CLI distribution masks the X11 tmpfiles rule for WSLg's read-only socket mount, avoiding
+the [systemd package configuration failure](https://github.com/microsoft/WSL/issues/41488).
+APT installs required dependencies without optional desktop recommendations.
 
 The arsenal contains 32 default tools and 23 optional external adapters, all for website/API
 testing and supporting DNS, subdomain, TLS and web-server service discovery. Mobile/desktop

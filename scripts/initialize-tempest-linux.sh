@@ -12,8 +12,13 @@ if ! timeout 20 getent ahosts http.kali.org >/dev/null; then
   echo 'Tempest WSL DNS unavailable: cannot resolve http.kali.org. Repair WSL networking before installing packages.' >&2
   exit 1
 fi
+# WSLg's read-only sockets must not be chmodded by systemd package configuration.
+if mountpoint -q /tmp/.X11-unix; then
+  install -d /etc/tmpfiles.d
+  ln -sf /dev/null /etc/tmpfiles.d/x11.conf
+fi
 apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=3 update
-DEBIAN_FRONTEND=noninteractive apt-get install -y sudo ca-certificates
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends sudo ca-certificates
 if ! id tempest >/dev/null 2>&1; then useradd --create-home --shell /bin/bash tempest; fi
 printf 'tempest ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/tempest
 chmod 440 /etc/sudoers.d/tempest
