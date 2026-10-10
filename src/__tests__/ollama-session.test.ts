@@ -23,11 +23,23 @@ describe('Ollama CLI session lifecycle', () => {
     const llm = new LLMBackbone({ provider: 'local', model: 'test-model', baseUrl: 'http://127.0.0.1:11434/api' });
     expect((await llm.chat([{ role: 'user', content: 'connection check' }])).content).toBe('ready');
     expect(bodies[0]).toMatchObject({ model: 'test-model', keep_alive: -1, options: { num_ctx: 32768 } });
-    expect(bodies[1]).toMatchObject({ keep_alive: '-1', options: { num_ctx: 32768 } });
+    expect(bodies[1]).toMatchObject({ keep_alive: -1, options: { num_ctx: 32768 } });
     await Promise.all([session.stop(), session.stop()]);
     expect(bodies).toHaveLength(3);
     expect(bodies[2]).toEqual({ model: 'test-model', stream: false, keep_alive: 0 });
     expect(process.env.TEMPEST_LOCAL_KEEP_ALIVE).toBe('5m');
+  });
+
+  it.each([['-1', -1], ['0', 0], ['30', 30], ['5m', '5m']])('sends keep-alive %s in Ollama wire format', async (setting, expected) => {
+    vi.stubEnv('TEMPEST_LOCAL_KEEP_ALIVE', String(setting));
+    const fetch = vi.fn(async (_url, init) => {
+      expect(JSON.parse(init.body).keep_alive).toBe(expected);
+      return new Response(JSON.stringify({ message: { content: 'ready' }, done: true }));
+    });
+    vi.stubGlobal('fetch', fetch);
+    const llm = new LLMBackbone({ provider: 'local', model: 'test-model', baseUrl: 'http://127.0.0.1:11434/api' });
+    await llm.chat([{ role: 'user', content: 'connection check' }]);
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it.each([

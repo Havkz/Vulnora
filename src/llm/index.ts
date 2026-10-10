@@ -918,13 +918,14 @@ class LocalAdapter implements LLMProviderAdapter {
     const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
+    const keepAlive = process.env.TEMPEST_LOCAL_KEEP_ALIVE;
     const requestBody = openaiWire
       ? { model: this.config.model, messages: wireMessages, max_tokens: maxTokens, temperature, stream: false }
       : {
           model: this.config.model,
           messages: wireMessages,
           stream: false,
-          ...(process.env.TEMPEST_LOCAL_KEEP_ALIVE ? { keep_alive: process.env.TEMPEST_LOCAL_KEEP_ALIVE } : {}),
+          ...(keepAlive ? { keep_alive: /^-?\d+$/.test(keepAlive) ? Number(keepAlive) : keepAlive } : {}),
           options: {
             num_predict: maxTokens,
             temperature,
