@@ -36,7 +36,8 @@ export interface LLMEvents {
   'request:refusal': { provider: string; model: string; preview: string };
   /** Fallback hop fired. reason = the failure that triggered it (refusal/empty/
    *  rate_limit/auth/timeout/server_error/context_length/…) or recovered_after:*. */
-  'request:fallback': { fromModel: string; toModel: string | null; engaged: boolean; reason?: string };
+  'request:fallback': { fromModel: string; toModel: string | null; engaged: boolean; reason?: string;
+    fromProvider?: LLMProvider; toProvider?: LLMProvider };
   'request:progress': LocalAgentProgress & { provider: LLMProvider; model: string };
   'token:stream': { token: string };
 }
@@ -44,6 +45,16 @@ export interface LLMEvents {
 // =============================================================================
 // PROVIDER ADAPTERS
 // =============================================================================
+
+export class LLMUnavailableError extends Error {
+  constructor() { super('AI unavailable; only deterministic tool execution and saved evidence are available.'); this.name = 'LLMUnavailableError'; }
+}
+
+class DeterministicAdapter implements LLMProviderAdapter {
+  name = 'deterministic';
+  validateConfig() { return { valid: true }; }
+  async chat(): Promise<LLMResponse> { throw new LLMUnavailableError(); }
+}
 
 export interface LLMProviderAdapter {
   name: string;
@@ -1238,7 +1249,8 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const agentId = this.config.model || 'codex';
     const prompt = this.formatPrompt(messages, options);
     const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
-    const content = (await localAgentChat(agentId, prompt, { timeoutMs, signal: options?.signal, onProgress: options?.onProgress })).trim();
+    const command = agentId === 'codex' ? config.get('codex').command : undefined;
+    const content = (await localAgentChat(agentId, prompt, { command, timeoutMs, signal: options?.signal, onProgress: options?.onProgress })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
@@ -1373,12 +1385,14 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   private conversationHistory: LLMMessage[] = [];
   private retryAttempts: number = 3;
   private retryDelayMs: number = 1000;
+  private activeProvider: { provider: LLMProvider; model: string };
 
   constructor(config: LLMConfig) {
     super();
     this.config = config;
+    this.activeProvider = { provider: config.provider, model: config.model };
     this.adapter = this.createAdapter(config);
-    if (config.provider === 'codex') {
+    if (['codex', 'local-agent', 'deterministic'].includes(config.provider)) {
       this.retryAttempts = 1;
     }
   }
@@ -1405,6 +1419,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
         return new CodexAdapter(config);
       case 'mock':
         return new MockAdapter(config);
+      case 'deterministic':
+        return new DeterministicAdapter();
       case 'local':
         return new LocalAdapter(config);
       case 'local-agent':
@@ -1427,6 +1443,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   getModel(): string {
     return this.config.model;
   }
+
+  getActiveProvider(): { provider: LLMProvider; model: string } { return { ...this.activeProvider }; }
 
   /** Choose the compact profile whenever this request may reach a local model.
    * A Codex primary with an Ollama fallback must use one prompt both can handle. */
@@ -1481,6 +1499,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
 
     for (let rung = 0; rung < ladder.length; rung++) {
       const hop = ladder[rung];
+      this.activeProvider = { provider: hop.provider, model: hop.model };
       const onFallback = rung > 0;
       const hasNext = rung < ladder.length - 1;
       const adapter = onFallback ? this.createAdapter({ ...this.config, ...hop }) : this.adapter;
@@ -1502,8 +1521,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           options?.signal?.throwIfAborted();
           lastError = error as Error;
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
-          const permanent = error instanceof LLMApiError &&
-            (error.status === 401 || error.status === 403 || error.status === 404);
+          const permanent = error instanceof LLMUnavailableError || (error instanceof LLMApiError &&
+            (error.status === 401 || error.status === 403 || error.status === 404));
           if (permanent || attempt >= this.retryAttempts) break;
           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
           if (error instanceof LLMApiError && error.retryAfterMs) {
@@ -1543,7 +1562,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             sourceError: lastError?.message,
             durationMs: Date.now() - startTime,
           });
-          this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason });
+          this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model,
+            fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason });
           continue;
         }
         break; // bottom of the ladder, still failing → throw below
@@ -1579,7 +1599,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             sourceResponse: redactLedgerText(response.content || '', 30000),
             durationMs: Date.now() - startTime,
           });
-          this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model, engaged: true, reason: soft });
+          this.emit('request:fallback', { fromModel: hop.model, toModel: ladder[rung + 1].model,
+            fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason: soft });
           continue;
         }
         // bottom of the ladder: surface the best-effort / honest response, don't throw
@@ -1600,7 +1621,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           fallbackResponse: redactLedgerText(response.content || '', 30000),
           durationMs: Date.now() - startTime,
         });
-        this.emit('request:fallback', { fromModel: this.config.model, toModel: hop.model, engaged: true, reason: `recovered_after:${trail.join('>')}` });
+        this.emit('request:fallback', { fromModel: this.config.model, toModel: hop.model,
+          fromProvider: this.config.provider, toProvider: hop.provider, engaged: true, reason: `recovered_after:${trail.join('>')}` });
       }
       return response;
     }
@@ -1714,7 +1736,11 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
    * Update configuration
    */
   updateConfig(newConfig: Partial<LLMConfig>): void {
+    if (newConfig.provider && newConfig.provider !== this.config.provider) {
+      this.retryAttempts = ['codex', 'local-agent', 'deterministic'].includes(newConfig.provider) ? 1 : 3;
+    }
     this.config = { ...this.config, ...newConfig };
+    this.activeProvider = { provider: this.config.provider, model: this.config.model };
     this.adapter = this.createAdapter(this.config);
   }
 

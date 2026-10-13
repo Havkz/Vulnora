@@ -218,6 +218,7 @@ export interface ModelInfo {
 }
 
 export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
+  deterministic: [],
   venice: [
     {
       id: 'llama-3.3-70b',
@@ -837,6 +838,9 @@ class ConfigManager {
         break;
       case 'mock':
         actualModel = 'mock-model';
+        break;
+      case 'deterministic':
+        actualModel = 'evidence-only';
         break;
       case 'local':
         // Self-hosted, usually keyless. Defaults to Ollama; point VULNORA_LOCAL_BASE_URL at

@@ -42,6 +42,7 @@ export type { VulnoraSettings, TempestSettings, ModelInfo } from './config/index
 // LLM
 export {
   LLMBackbone,
+  LLMUnavailableError,
   createAnthropicBackbone,
   createOpenRouterBackbone,
   createOpenAIBackbone,

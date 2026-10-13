@@ -9,6 +9,7 @@ import { InteractiveApp, formatProjectLog, type InteractiveServices } from '../u
 import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
+import type { LLMConfig } from '../types/index.js';
 
 const directories: string[] = [];
 const surfaces: TerminalSurface[] = [];
@@ -19,7 +20,7 @@ afterEach(async () => {
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
-async function fixture() {
+async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) {
   const directory = await mkdtemp(join(tmpdir(), 'vulnora-ui-'));
   directories.push(directory);
   const input = Object.assign(new PassThrough(), { isTTY: true, isRaw: false, setRawMode(value: boolean) { this.isRaw = value; return this; } });
@@ -30,9 +31,9 @@ async function fixture() {
   surfaces.push(surface);
   const store = new ProjectStore(directory);
   let session: ProjectSession | undefined;
-  const open = vi.fn(async (id: string) => { session = await ProjectSession.open(store, id, { llm: { provider: 'mock', model: 'fixture' } }); return session; });
+  const open = vi.fn(async (id: string) => { session = await ProjectSession.open(store, id, { llm }); return session; });
   const configuration = { get: () => 'auto', set: vi.fn() } as unknown as InteractiveServices['configuration'];
-  const services: InteractiveServices = { configuration, store, open, llm: () => ({ provider: 'mock', model: 'fixture' }),
+  const services: InteractiveServices = { configuration, store, open, llm: () => llm,
     installedModels: async () => [], prepareProviders: async () => 'Fixture' };
   const app = new InteractiveApp(surface, services);
   const start = () => { const result = app.run().catch(error => error); running.push(result); return result; };
@@ -108,7 +109,7 @@ describe('durable interactive project flow', () => {
   });
 
   it('reopens the full saved report and exports it without another scan or provider request', async () => {
-    const f = await fixture();
+    const f = await fixture({ provider: 'deterministic', model: 'evidence-only' });
     const project = await f.store.create('Completed fixture', 'https://fixture.test');
     project.status = 'completed'; project.progress = 100;
     project.report = { markdown: '# Report\n\n' + 'Complete technical evidence\n'.repeat(1000) + 'END OF EVIDENCE', generatedAt: Date.now() };
@@ -119,6 +120,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\r');
     await f.wait('Saved report:');
     expect(f.session()?.command.isRunning()).toBe(false);
+    expect(f.session()?.command.llm.getProvider()).toBe('deterministic');
     expect(f.session()?.command.arsenal.getExecutions()).toEqual([]);
     expect(await readFile(join(f.store.directory, project.id + '.report.md'), 'utf8')).toBe(project.report.markdown);
     f.input.write('\x1b[F');

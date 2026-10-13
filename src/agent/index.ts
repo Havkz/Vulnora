@@ -8,7 +8,8 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
-import { isContextCompactionNotice, type LLMBackbone } from '../llm/index.js';
+import { isContextCompactionNotice, LLMUnavailableError, type LLMBackbone } from '../llm/index.js';
+import { KillChainPhase } from '../types/index.js';
 import { hostFromTargetValue, type Arsenal } from '../arsenal/index.js';
 import { normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
@@ -336,8 +337,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     if (!bootstrapCompleted) bootstrapCompleted = true;
     if (phase === 'bootstrap') await publish('planning');
+    const deterministic = this.llm.getProvider() === 'deterministic';
+    if (deterministic) { modelUnavailable = true; lastLlmError = new LLMUnavailableError().message; }
 
-    for (let i = iteration; phase !== 'summary' && (i < maxIterations || pendingCalls.length > 0); i++) {
+    for (let i = iteration; phase !== 'summary' && (!deterministic || pendingCalls.length > 0)
+      && (i < maxIterations || pendingCalls.length > 0); i++) {
       iteration = i;
       try {
         // Ask the LLM what to do next
@@ -544,6 +548,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         // On error, try to continue with a reduced context
         const errMsg = error instanceof Error ? error.message : String(error);
         lastLlmError = errMsg;
+        if (error instanceof LLMUnavailableError) { modelUnavailable = true; break; }
         consecutiveLlmFailures++;
         if (consecutiveLlmFailures >= 2) {
           // Repeating a dead primary+fallback request for every remaining ReAct
@@ -564,11 +569,13 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     signal?.throwIfAborted();
     // Hit iteration or token limit — ask LLM for a final summary
-    hitLimit = true;
+    hitLimit = !deterministic;
     if (phase !== 'summary') {
       messages.push({
         role: 'user',
-        content: 'The step budget is exhausted. Return the required RESULT format now. Use only collected evidence; do not add claims or request tools.',
+        content: modelUnavailable
+          ? 'AI planning is unavailable. Preserve completed tools and evidence; do not infer unverified vulnerabilities.'
+          : 'The step budget is exhausted. Return the required RESULT format now. Use only collected evidence; do not add claims or request tools.',
       });
     }
     await publish('summary');
@@ -578,8 +585,9 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     let finalSummaryError: string | undefined;
     if (modelUnavailable) {
       finalSummaryError = lastLlmError;
-      summary = `LLM planning stopped after ${consecutiveLlmFailures} consecutive primary/fallback failures. `
-        + `Preserved ${steps.length} completed step(s) and ${allFindings.length} tool-backed finding(s).`;
+      summary = `RESULT\nStatus: inconclusive\n\n${lastLlmError || 'AI planning unavailable.'}\n`
+        + `Evidence: Preserved ${steps.length} completed step(s) and ${allFindings.length} tool-backed finding(s).\n`
+        + 'Limitations: Deterministic checks cannot replace AI analysis; no unverified vulnerabilities or impact were inferred.';
     } else {
       const estimatedFinalInput = this.estimateModelInputTokens(messages);
       const remainingTokens = maxTotalTokens - tokensUsed;
@@ -616,7 +624,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       summary,
       steps,
       findings: allFindings,
-      iterations: maxIterations,
+      iterations: iteration,
       tokensUsed,
       durationMs: Date.now() - startTime,
       hitLimit,
@@ -640,9 +648,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         arguments: { ...task.executionPlan.parameters },
       };
     }
-    if (this.llm.getProvider() !== 'local-agent') return undefined;
+    const deterministic = this.llm.getProvider() === 'deterministic';
+    if (this.llm.getProvider() !== 'local-agent' && !deterministic) return undefined;
     if (!target?.address) return undefined;
-    if (task.phase !== 'reconnaissance' && task.operatorType !== 'recon') return undefined;
+    if (task.phase !== 'reconnaissance' && task.operatorType !== 'recon'
+      && !(deterministic && task.phase === KillChainPhase.WEAPONIZE)) return undefined;
 
     const hasTool = (name: string) => tools.some((tool) => tool.name === name);
     const taskName = task.name.toLowerCase();
@@ -654,6 +664,14 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         && hostFromTargetValue(target.metadata.url) === host ? target.metadata.url : undefined;
     const authority = host.includes(':') ? `[${host}]` : host;
     const url = originalUrl || `${target.protocol === 'http' ? 'http' : 'https'}://${authority}${target.port ? `:${target.port}` : ''}`;
+
+    if (deterministic && task.phase === KillChainPhase.WEAPONIZE) {
+      const endpoint = new URL(url);
+      if (taskName.includes('network') && endpoint.protocol === 'https:' && hasTool('ssl_scan')) {
+        return { id, name: 'ssl_scan', arguments: { host, port: Number(endpoint.port) || 443 } };
+      }
+      if (hasTool('header_analysis')) return { id, name: 'header_analysis', arguments: { url } };
+    }
 
     if (taskName.includes('dns') && hasTool('dns_lookup')) {
       return { id, name: 'dns_lookup', arguments: { domain: host, type: 'A' } };

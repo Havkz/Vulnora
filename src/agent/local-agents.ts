@@ -249,8 +249,11 @@ function wellKnownBinDirs(home: string): string[] {
  */
 export function resolveBin(bin: string): string | undefined {
   if (isWin32()) {
+    if (bin.includes('/') || bin.includes('\\')) {
+      try { return statSync(bin).isFile() ? resolve(bin) : undefined; } catch { return undefined; }
+    }
     try {
-      const out = execFileSync('where.exe', [bin], { encoding: 'utf8', timeout: 5000 });
+      const out = execFileSync('where.exe', [bin], { encoding: 'utf8', timeout: 5000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
       const hits = out.split(NEWLINE_RE).map((h) => h.trim()).filter(Boolean);
       return (
         hits.find((h) => /\.exe$/i.test(h)) ??
@@ -295,16 +298,16 @@ function agentCommand(binary: string, args: string[]): { command: string; args: 
 
 export function spawnAgent(resolvedBin: string, args: string[], options: import('child_process').SpawnOptions): import('child_process').ChildProcess {
   const invocation = agentCommand(resolvedBin, args);
-  return spawn(invocation.command, invocation.args, { ...options, shell: false });
+  return spawn(invocation.command, invocation.args, { windowsHide: true, ...options, shell: false });
 }
 
-async function authState(spec: AgentSpec, executable: string): Promise<{ authed: boolean; method?: string }> {
+async function authState(spec: AgentSpec, executable: string, signal?: AbortSignal): Promise<{ authed: boolean; method?: string }> {
   if (spec.id === 'codex' || spec.id === 'claude') {
     const args = spec.id === 'codex' ? ['login', 'status'] : ['auth', 'status'];
     return new Promise(resolve => {
       try {
         const invocation = agentCommand(executable, args);
-        const child = execFile(invocation.command, invocation.args, { env: childEnv(), timeout: 8000, maxBuffer: 65536, windowsHide: true, shell: false }, (error, stdout) => {
+        const child = execFile(invocation.command, invocation.args, { env: childEnv(), signal, timeout: 8000, maxBuffer: 65536, windowsHide: true, shell: false }, (error, stdout) => {
           if (error) { resolve({ authed: false }); return; }
           if (spec.id === 'codex') { resolve({ authed: true, method: 'cli_status' }); return; }
           try {
@@ -331,7 +334,7 @@ async function authState(spec: AgentSpec, executable: string): Promise<{ authed:
   return { authed: false };
 }
 
-function detectOne(spec: AgentSpec): Promise<AgentDetection> {
+function detectOne(spec: AgentSpec, signal?: AbortSignal): Promise<AgentDetection> {
   const base = {
     id: spec.id, label: spec.label, vendor: spec.vendor, bin: spec.bin,
     blurb: spec.blurb, invokeHint: spec.invokeHint,
@@ -346,24 +349,24 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
     }
     const installedNoVersion = () => {
       resolve({
-        ...base, installed: true, path: exe !== spec.bin ? exe : undefined, version: '?',
+        ...base, installed: true, path: exe, version: '?',
         authed: false, ready: false,
       });
     };
     try {
       const invocation = agentCommand(exe, spec.versionArgs);
-      const child = execFile(invocation.command, invocation.args, { env: childEnv(), timeout: 8000, windowsHide: true, shell: false }, async (err, stdout) => {
+      const child = execFile(invocation.command, invocation.args, { env: childEnv(), signal, timeout: 8000, windowsHide: true, shell: false }, async (err, stdout) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
           resolve({ ...base, installed: false, authed: false, ready: false });
           return;
         }
         // even a non-zero exit but no ENOENT means the binary exists
         const version = spec.parseVersion(String(stdout || ''));
-        const auth = !err && version !== '?' ? await authState(spec, exe) : { authed: false };
+        const auth = !err && version !== '?' ? await authState(spec, exe, signal) : { authed: false };
         resolve({
           ...base,
           installed: true,
-          path: exe !== spec.bin ? exe : undefined,
+          path: exe,
           version,
           authed: auth.authed,
           authMethod: auth.method,
@@ -381,12 +384,18 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
 }
 
 /** Detect every known local agent CLI (installed? authed? ready?). No tokens spent. */
+export function detectLocalAgent(id: string, command?: string, signal?: AbortSignal): Promise<AgentDetection> {
+  const spec = getSpec(id);
+  if (!spec) return Promise.reject(new Error(`Unknown local agent: ${id}`));
+  return detectOne(command ? { ...spec, bin: command } : spec, signal);
+}
+
 export async function detectLocalAgents(): Promise<AgentDetection[]> {
   // Test/CI hook: VULNORA_DISABLE_LOCAL_AGENTS=1 forces a backbone-less server (skip
   // local-agent auto-detection) so key-required / fail-closed paths can be exercised
   // deterministically — used by scripts/arsenal-smoke.mjs for a reproducible run.
   if (/^(1|true|yes|on)$/i.test((process.env.VULNORA_DISABLE_LOCAL_AGENTS || '').trim())) return [];
-  const settled = await Promise.allSettled(SPECS.map(detectOne));
+  const settled = await Promise.allSettled(SPECS.map(spec => detectOne(spec)));
   return settled.map((r, i) => {
     if (r.status === 'fulfilled') return r.value;
     const s = SPECS[i];
@@ -496,13 +505,15 @@ export function localAgentChat(id: string, prompt: string, opts: {
   let workDir: string | null = null;
   if (id === 'claude') {
     workDir = mkdtempSync(join(tmpdir(), 'vulnora-claudellm-'));
-    args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+    args = ['--safe-mode', '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence', '--max-turns', '1',
       ...(model ? ['--model', model] : [])];
   } else if (id === 'codex') {
     workDir = mkdtempSync(join(tmpdir(), 'vulnora-codexllm-'));
     outFile = join(workDir, 'reply.txt');
-    args = ['--ask-for-approval', 'never', 'exec', '-c', 'model_reasoning_effort="low"',
+    args = ['--ask-for-approval', 'never',
+      ...['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'browser_use', 'computer_use', 'in_app_browser'].flatMap(feature => ['--disable', feature]),
+      'exec', '-c', 'model_reasoning_effort="low"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
       '--ephemeral', '--skip-git-repo-check', '--json', '--color', 'never', '--sandbox', 'read-only',
       '-C', workDir, '--output-last-message', outFile, ...(model ? ['-m', model] : []), '-'];
   } else { // hermes — takes the prompt as an arg

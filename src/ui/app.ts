@@ -14,6 +14,7 @@ export interface InteractiveServices {
   open: (id: string, llm: LLMConfig) => Promise<ProjectSession>;
   llm: () => LLMConfig;
   installedModels: () => Promise<string[]>;
+  installedAgents?: () => Promise<string[]>;
   prepareProviders: () => Promise<string>;
 }
 
@@ -168,7 +169,7 @@ export class InteractiveApp {
     session.on('log', onLog); session.on('error', onError);
     const render = () => {
       const header = [`${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
-        session.project.target.input, `Configured provider: ${session.command.llm.getProvider()} · ${session.command.llm.getModel()}`];
+        session.project.target.input, `Provider: ${session.command.llm.getActiveProvider().provider} · ${session.command.llm.getActiveProvider().model}`];
       const heading = header.flatMap(line => wrapTerminalText(line, this.surface.columns - 4));
       const lines = logs.flatMap(line => wrapTerminalText(line, this.surface.columns - 4));
       const completed = session.project.status === 'completed';
@@ -233,10 +234,11 @@ export class InteractiveApp {
         const provider = providers[selected];
         let models: string[];
         if (provider === 'local') models = await this.services.installedModels();
-        else if (provider === 'local-agent') models = ['codex', 'claude'];
+        else if (provider === 'local-agent') models = await this.services.installedAgents?.() || [];
         else models = (await import('../config/index.js')).AVAILABLE_MODELS[provider].map(model => model.id);
         if (!models.length) { await this.notice('Model unavailable', 'No installed models found. No model was downloaded.'); continue; }
-        const model = await this.surface.menu('Default model', [...models, 'Enter model ID']);
+        const custom = provider !== 'local' && provider !== 'local-agent';
+        const model = await this.surface.menu('Default model', [...models, ...(custom ? ['Enter model ID'] : [])]);
         if (model === undefined) continue;
         const id = model < models.length ? models[model] : await this.surface.prompt('Model ID:');
         if (!id?.trim()) continue;
@@ -245,16 +247,23 @@ export class InteractiveApp {
         if (process.env.VULNORA_DEFAULT_PROVIDER && process.env.VULNORA_DEFAULT_PROVIDER !== provider) {
           await this.notice('Environment override', 'VULNORA_DEFAULT_PROVIDER overrides the saved selection for this process.');
         }
-        await this.services.prepareProviders();
+        await this.refreshProviders();
       } else {
         const providers: ApiKeyProvider[] = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local'];
         const selected = await this.surface.menu('API key provider', providers);
         if (selected === undefined) continue;
         const key = await this.surface.prompt('API key:', '', true);
-        if (key?.trim()) config.setApiKey(providers[selected], key.trim());
+        if (key?.trim()) {
+          config.setApiKey(providers[selected], key.trim());
+          await this.refreshProviders();
+        }
       }
-      if (this.session) this.session.command.llm.updateConfig(this.services.llm());
     }
+  }
+
+  private async refreshProviders(): Promise<void> {
+    try { await this.notice('Provider availability', await this.services.prepareProviders()); }
+    finally { if (this.session) this.session.command.llm.updateConfig(this.services.llm()); }
   }
 }
 
@@ -273,52 +282,26 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
   let configuration: Configuration | undefined;
   let store: ProjectStore | undefined;
   let open: InteractiveServices['open'] | undefined;
-  let localModel: string | undefined;
-  let localSession: ReturnType<typeof import('../llm/ollama-session.js').createOllamaSession> | undefined;
-  const interrupt = () => { controller.abort(new TerminalInterrupted()); void localSession?.stop().catch(() => {}); };
+  let providers: import('../llm/provider-session.js').ProviderSession | undefined;
+  const interrupt = () => { controller.abort(new TerminalInterrupted()); };
   const signal = () => surface.interrupt();
   surface.on('interrupt', interrupt);
   process.on('SIGINT', signal); process.on('SIGTERM', signal);
 
-  const installedModels = async (): Promise<string[]> => {
-    if (!configuration) throw new Error('Configuration unavailable.');
-    const local = configuration.getLLMConfig('local');
-    const base = (local.baseUrl || '').replace(/\/$/, '');
-    if (!base.endsWith('/api')) throw new Error('Installed model discovery requires an Ollama /api endpoint.');
-    const response = await fetch(`${base}/tags`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]) });
-    if (!response.ok) throw new Error(`Ollama discovery failed: HTTP ${response.status}`);
-    const data = await response.json() as { models?: { name?: unknown }[] };
-    if (!Array.isArray(data.models)) throw new Error('Invalid Ollama model response.');
-    return data.models.map(model => model.name).filter((name): name is string => typeof name === 'string' && !!name.trim());
-  };
   const llm = (): LLMConfig => {
-    if (!configuration) throw new Error('Configuration unavailable.');
-    const primary = configuration.getLLMConfig();
-    if (localModel && primary.provider === 'local') primary.model = localModel;
-    if (localModel && primary.provider !== 'local') {
-      const local = configuration.getLLMConfig('local', localModel);
-      primary.fallbackChain = [{ provider: 'local', model: local.model, baseUrl: local.baseUrl, apiKey: local.apiKey }];
-    }
-    return primary;
+    if (!providers) throw new Error('Provider environment unavailable.');
+    return providers.getConfig();
   };
   const prepareProviders = async (): Promise<string> => {
-    if (!configuration) throw new Error('Configuration unavailable.');
-    await localSession?.stop(); localSession = undefined; localModel = undefined;
-    const models = await installedModels();
-    const chosen = configuration.getLLMConfig('local').model;
-    localModel = models.includes(chosen) ? chosen : models.length === 1 ? models[0] : undefined;
-    if (!localModel) throw new Error(models.length ? 'Choose an installed Ollama model in Settings.' : 'No installed Ollama model found.');
-    const { createOllamaSession } = await import('../llm/ollama-session.js');
-    localSession = createOllamaSession(configuration.getLLMConfig('local', localModel));
-    controller.signal.throwIfAborted();
-    await localSession.start();
-    controller.signal.throwIfAborted();
-    return `${localModel} loaded; provider credentials still require validation`;
+    if (!providers) throw new Error('Provider environment unavailable.');
+    return providers.prepare();
   };
   try {
     const rows = await initializeTerminal(surface, [
       async () => {
         configuration = (await import('../config/index.js')).config;
+        const { ProviderSession } = await import('../llm/provider-session.js');
+        providers = new ProviderSession(configuration, controller.signal);
         return configuration.getConfigPath();
       },
       async () => {
@@ -326,9 +309,13 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
         const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS); arsenal.registerMany(EXTERNAL_TOOLS);
         const ready = await arsenal.getReadyToolDefinitions();
         const { ProjectSession } = await import('../projects/session.js');
-        open = (id, config) => {
+        open = async (id, config) => {
           if (!store) throw new Error('Project environment unavailable.');
-          return ProjectSession.open(store, id, { llm: config });
+          const session = await ProjectSession.open(store, id, { llm: config });
+          try {
+            await store.appendLog(id, { timestamp: Date.now(), category: 'provider:availability', data: providers?.readiness });
+            return session;
+          } catch (error) { await session.close(); throw error; }
         };
         return `${ready.length} tools ready; ${arsenal.getToolDefinitions().length - ready.length} unavailable`;
       },
@@ -346,11 +333,14 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     if (!configuration || !store || !open) throw new Error('Required initialization failed; saved data is preserved.');
     if (rows.some(row => row.status === 'failed')) {
       surface.startup(rows, 'Enter Continue    Ctrl+C Save & Quit');
-      await surface.nextKey();
+      for (;;) { if ((await surface.nextKey()).key.name === 'return') break; }
     }
-    await new InteractiveApp(surface, { configuration, store, open, llm, installedModels, prepareProviders }).run();
+    const runtime = providers;
+    if (!runtime) throw new Error('Provider environment unavailable.');
+    await new InteractiveApp(surface, { configuration, store, open, llm, prepareProviders,
+      installedModels: () => runtime.installedModels(), installedAgents: () => runtime.installedAgents() }).run();
   } finally {
-    try { await localSession?.stop(); }
+    try { await providers?.close(); }
     finally {
       surface.off('interrupt', interrupt); process.off('SIGINT', signal); process.off('SIGTERM', signal);
       surface.dispose();

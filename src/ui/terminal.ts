@@ -237,7 +237,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 export async function initializeTerminal(surface: TerminalSurface,
   jobs: [() => Promise<string | void>, () => Promise<string | void>, () => Promise<string | void>, () => Promise<string | void>],
   signal?: AbortSignal): Promise<InitializationRows> {
-  const rows: InitializationRows = ['Loading configuration', 'Initializing scanner', 'Connecting to local LLM', 'Loading project environment']
+  const rows: InitializationRows = ['Loading configuration', 'Initializing scanner', 'Checking AI providers', 'Loading project environment']
     .map(label => ({ label, status: 'pending' as RowStatus })) as InitializationRows;
   surface.startup(rows);
   for (let index = 0; index < jobs.length; index++) {

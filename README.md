@@ -89,12 +89,18 @@ Partially consumed AI tool batches resume from their saved calls; completed evid
 is reused. Interrupted requests with no receipt are retried only when their replay
 is safe. Unknown or state-changing operations are held for inspection.
 
-The new CLI is under active migration. Provider authentication/inference checks,
-retuned adaptive scanning behavior, decomposed-subtask recovery and final installation
-still have acceptance work. Changing the saved behavior setting alone does not yet
-apply the new presets. See the [milestone ledger](docs/VULNORA_MILESTONE.md) for the
-verified state and remaining requirements. Existing local aliases remain on the
-preserved installed runtime until the new runtime passes its installation checks.
+Startup checks CLI version/authentication and an actual inference reply, then validates
+an installed Ollama model and keeps it loaded until exit. The interactive fallback
+chain is the selected provider, validated Ollama, then deterministic evidence-only
+checks. Provider changes and limitations are logged explicitly; no model is downloaded.
+The local model is released on graceful exit. A hard process kill cannot guarantee unload.
+
+The new CLI is under active migration. Retuned adaptive scanning behavior,
+decomposed-subtask recovery and final installation still have acceptance work.
+Changing the saved behavior setting alone does not yet apply the new presets.
+See the [milestone ledger](docs/VULNORA_MILESTONE.md) for verified state and remaining
+requirements. Existing local aliases remain on the preserved installed runtime
+until the new runtime passes its installation checks.
 
 For Codex with an Ollama fallback, put these settings in `~/.vulnora/.env`:
 

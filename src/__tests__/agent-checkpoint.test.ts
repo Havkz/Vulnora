@@ -32,6 +32,20 @@ function fixture(options: AgentLoopOptions = {}) {
 }
 
 describe('granular agent recovery', () => {
+  it('finishes a saved partial batch in evidence-only mode without requesting another plan or summary', async () => {
+    const controller = new AbortController(); const task = newTask();
+    const first = fixture({ onCheckpoint: async checkpoint => {
+      if (checkpoint.steps.some(step => step.toolName) && checkpoint.pendingCalls.length === 1 && !checkpoint.activeCall) controller.abort(new Error('pause boundary'));
+    } });
+    first.chatWithTools.mockResolvedValueOnce({ content: 'Check both paths', model: 'fixture', toolCalls: [call('one'), call('two')], usage: { totalTokens: 23 } });
+    await expect(first.loop.run(task, '', target, undefined, undefined, controller.signal)).rejects.toThrow('pause boundary');
+    const resumed = fixture(); resumed.llm.getProvider = () => 'deterministic';
+    const result = await resumed.loop.run(JSON.parse(JSON.stringify(task)) as Task, '', target);
+    expect(resumed.execute).toHaveBeenCalledOnce(); expect(resumed.execute.mock.calls[0][1].parameters.url).toContain('/two');
+    expect(resumed.chatWithTools).not.toHaveBeenCalled(); expect(resumed.chat).not.toHaveBeenCalled();
+    expect(result.steps.filter(step => step.toolName)).toHaveLength(2); expect(result.tokensUsed).toBe(23);
+  });
+
   it('restores a persisted partial batch without repeating completed tools or asking for a new plan', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-agent-'));
     directories.push(directory);

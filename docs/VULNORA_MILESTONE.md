@@ -241,3 +241,41 @@ offering a resumable menu. A completed project opens its results without startin
   /home/tempest/.vulnora/validation/ui-preview-wddj135e/terminal-transcript.ansi.
   GitHub run 38459924921 still has runner_id=0/no job steps; hosted billing remains
   an external validation limitation. The final installed Vulnora alias is pending.
+
+- Interactive startup now owns a ProviderSession separate from the terminal/scanner.
+  It queries installed Ollama models without downloading, holds the selected model,
+  and validates actual inference independently of the selected primary. Codex/Claude
+  version/authentication status is checked through their official CLI commands before
+  inference; API-key/model changes revalidate connectivity while the scanner is paused.
+- The interactive fallback chain is selected primary, validated installed Ollama,
+  then deterministic evidence-only operation. Startup failures stay visible and allow
+  Settings/saved reports. Provider switching includes actual provider/model fields;
+  the live view displays the active provider rather than calling every response Codex.
+- Deterministic execution performs real supported checks, preserves tool findings and
+  interrupted batches, and states that AI analysis is unavailable. It does not return
+  mock model answers. Controlled tests perform a real scoped HEAD request, restore
+  a partial batch without another plan, and reopen a complete report without AI.
+- Native planner calls disable their independent tools: Codex disables shell/exec,
+  apps/plugins/hooks, browser/computer access, web search and configured MCP servers
+  through invocation overrides. Claude uses safe mode, empty native tools/MCP denial,
+  retaining its normal existing authentication; bare mode would require an API key.
+  Existing provider authentication/configuration files are never edited or copied.
+- Real installed-runtime evidence: VULNORA_REAL_PROVIDER_READINESS_OK confirms Codex
+  and huihui_ai/qwen3-coder-abliterated:30b both infer successfully; forced Codex failure
+  produces VULNORA_REAL_OLLAMA_FALLBACK_TOOL_CALL_OK and the harness executes the
+  requested base64_decode. VULNORA_REAL_PROVIDER_RELEASE_OK confirms model unloading.
+  The restricted native Codex connector also passes CODEX_NATIVE_TOOL_CALL_OK.
+- The Linux PTY preview remains green at 80x30/24x12, including READY without scan,
+  partial edit persistence and model holding/release. Latest preview transcript:
+  /home/tempest/.vulnora/validation/ui-preview-y77n6cjh/terminal-transcript.ansi.
+  Same-model settings revalidation reuses the held session; only a changed model
+  unloads its predecessor before loading the replacement.
+- Effective adaptive presets, decomposed-task recovery, final alias/deployment,
+  remaining documentation/theme acceptance and secure-setting validation still need
+  work. Hosted CI billing remains blocked; Claude live inference is unavailable on
+  this machine. Official sources checked: https://developers.openai.com/codex/config-reference
+  and https://code.claude.com/docs/en/cli-reference (2026-10-13).
+- Provider milestone Windows validation: 63 suites, 673 tests passed/17 POSIX skips,
+  11 preflight checks passed; build and lint pass (0 errors, 192 existing warnings).
+  Clean-install Linux validation runs against the committed snapshot before this
+  intermediate milestone is considered portable. No final-installation claim is made.

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { detectLocalAgents } from '../agent/local-agents.js';
+import { detectLocalAgent, detectLocalAgents } from '../agent/local-agents.js';
 
 const directories: string[] = [];
 afterEach(() => { vi.unstubAllEnvs(); for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
@@ -37,9 +37,15 @@ else if (args === 'login status') {
   vi.stubEnv('VULNORA_AUTH_FIXTURE', status);
   vi.stubEnv('OPENAI_API_KEY', 'application-key-must-not-replace-native-login');
   vi.stubEnv('ANTHROPIC_API_KEY', 'application-key-must-not-replace-native-login');
+  return join(bin, id + (process.platform === 'win32' ? '.cmd' : ''));
 }
 
 describe('official local CLI authentication status', () => {
+  it('validates the explicitly configured Codex command instead of a different PATH binary', async () => {
+    const command = fixture('codex', 'logged', false);
+    expect(await detectLocalAgent('codex', command)).toMatchObject({ path: command, version: '2.1.300', ready: true, authMethod: 'cli_status' });
+  }, 20000);
+
   it.each(['codex', 'claude'] as const)('does not treat an existing %s credentials file as a valid login', async id => {
     fixture(id, 'expired');
     const agent = (await detectLocalAgents()).find(agent => agent.id === id);

@@ -65,6 +65,10 @@ describe('authenticated local CLI transport', () => {
     expect(call).toMatchObject({ home: f.home });
     expect(call.key).toBeUndefined(); expect(call.anthropic).toBeUndefined();
     expect(call.args).toContain('--json'); expect(call.args).toContain('never');
+    for (const feature of ['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'browser_use', 'computer_use', 'in_app_browser']) {
+      expect(call.args.slice(call.args.indexOf(feature) - 1, call.args.indexOf(feature) + 1)).toEqual(['--disable', feature]);
+    }
+    expect(call.args).toContain('web_search="disabled"'); expect(call.args).toContain('mcp_servers={}');
     expect(call.args).toContain('fixture-model'); expect(call.cwd).not.toBe(process.cwd());
     expect(existsSync(call.cwd)).toBe(false);
   });
@@ -75,6 +79,7 @@ describe('authenticated local CLI transport', () => {
       .resolves.toBe('Connected: 日本語 — hello');
     expect(events[0]).toMatchObject({ agent: 'claude', text: 'Connected: ' });
     const { args } = JSON.parse(readFileSync(f.invocation, 'utf8'));
+    expect(args).toContain('--safe-mode'); expect(args).not.toContain('--bare');
     expect(args.slice(args.indexOf('--tools'), args.indexOf('--tools') + 2)).toEqual(['--tools', '']);
     expect(args).toContain('mcp__*'); expect(args).toContain('--no-session-persistence');
   });

@@ -8,7 +8,7 @@ import type { AgentCheckpoint } from '../agent/checkpoint.js';
 // LLM CONFIGURATION
 // =============================================================================
 
-export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'codex' | 'mock' | 'local' | 'local-agent';
+export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'codex' | 'mock' | 'local' | 'local-agent' | 'deterministic';
 
 export interface LLMConfig {
   provider: LLMProvider;
