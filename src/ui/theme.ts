@@ -1,5 +1,5 @@
 import chalk, { Chalk } from 'chalk';
-import { stripVTControlCharacters } from 'node:util';
+import stringWidth from 'string-width';
 
 // VoidAccess main.py/display.py: preserve indexed colors and standard ANSI status colors.
 export const THEME_TOKENS = Object.freeze({
@@ -35,7 +35,7 @@ export const theme = createTheme();
 export type TerminalTheme = ReturnType<typeof createTheme>;
 
 export function visibleWidth(text: string): number {
-  return [...stripVTControlCharacters(text)].length;
+  return stringWidth(text);
 }
 
 export function centerLines(lines: string[], width: number): string[] {

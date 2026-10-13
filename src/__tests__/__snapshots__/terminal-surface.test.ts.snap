@@ -1,0 +1,33 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`terminal surface > retains the reference composition at 24 columns × 12 rows 1`] = `
+"Vulnora
+website & API security…
+
+VULNORA
+
+  > Create New Project
+    Resume Project
+    Settings"
+`;
+
+exports[`terminal surface > retains the reference composition at 80 columns × 30 rows 1`] = `
+"                                     ░░░░░█░░░░░
+                               ░░█████████████████░░
+                             ░█████████████████████░
+                            ░███████████████████████░
+                            ░███████████████████████░
+                            ███████  Vulnora  ███████
+                            ░███████████████████████░
+                            ░███████████████████████░
+                             ░█████████████████████░
+                               ░░█████████████████░░
+                                     ░░░░░█░░░░░
+                         website & API security testing
+
+VULNORA
+
+  > Create New Project
+    Resume Project
+    Settings"
+`;

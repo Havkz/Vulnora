@@ -143,3 +143,17 @@ offering a resumable menu. A completed project opens its results without startin
   and 11 preflight checks passed. Build passes; lint has zero errors and the 195
   existing warnings. GitHub run `38419615223` verified the preceding agent milestone
   on both Windows and Ubuntu; the whole-recovery commit has its own CI gate.
+- Whole recovery was committed/pushed as `8f06ff0`. Its GitHub run `38424374876`
+  did not start either runner: GitHub reports failed account payments or an exhausted
+  spending limit. No billing settings were changed. Independent clean-install WSL
+  validation of this exact commit passes build, lint (0 errors), 617 tests with 4
+  Windows-only skips, and 11 preflight checks; Windows passed 605 with 16 POSIX skips.
+- Terminal renderer is being connected next. It owns keyboard input, 8 Hz status
+  animation, changed-row repaint, terminal resize, masked secret input and restoration.
+  Its Unicode width helper reuses the already-installed `string-width` dependency.
+  Stream-driven renderer tests are not a claim that the installed interactive CLI is ready.
+
+- Renderer foundation validation: 55 Windows suites, 617 passed and 16 POSIX skips;
+  11 preflight checks passed, 12 keyboard/rendering cases and two terminal snapshots.
+  Build/typecheck pass; lint has 0 errors and 194 existing warnings. No new default
+  menu or installed alias is claimed until application/runtime integration passes.
