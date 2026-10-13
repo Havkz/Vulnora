@@ -110,3 +110,9 @@ offering a resumable menu. A completed project opens its results without startin
   CLI availability/authentication and installation remain to be verified in milestone 5/6.
 - Persistent projects, granular recovery, new interactive UI, adaptive scanning and
   installed command remain pending. The existing installed runtime has not been replaced.
+- Project-store foundation adds original-input target validation (URLs, IPv4/IPv6,
+  hostnames), atomic flushed JSON records, full append-only event journals, and
+  non-destructive truncated-tail recovery. Focused checks: 24 project cases plus 3
+  theme/migration cases pass. Scanner checkpoint integration remains pending.
+- The Windows legacy launcher is backed up and pinned to its installed baseline
+  during development; a fresh `tempest --help` invocation still passes.
