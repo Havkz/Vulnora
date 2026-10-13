@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
 import { configDirectory, migrateEnvironment } from './migration.js';
 
-type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'local';
+export type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'local';
 
 // =============================================================================
 // CONFIGURATION SCHEMA
@@ -35,6 +35,10 @@ export interface VulnoraSettings {
   // Default LLM settings
   defaultProvider: LLMProvider;
   defaultModel: string;
+
+  scanningBehavior: 'auto' | 'stealth' | 'aggressive';
+  local: { baseUrl: string; defaultModel: string };
+  localAgent: { defaultModel: string };
 
   // OpenRouter specific
   openrouter: {
@@ -116,11 +120,18 @@ export interface VulnoraSettings {
 // DEFAULT CONFIGURATION
 // =============================================================================
 
+/** @deprecated Use VulnoraSettings. */
+export type TempestSettings = VulnoraSettings;
+
 const DEFAULT_SETTINGS: VulnoraSettings = {
   apiKeys: {},
 
   defaultProvider: 'openrouter',
   defaultModel: 'anthropic/claude-opus-4.8',
+
+  scanningBehavior: 'auto',
+  local: { baseUrl: 'http://127.0.0.1:11434/api', defaultModel: '' },
+  localAgent: { defaultModel: 'codex' },
 
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
@@ -821,6 +832,9 @@ class ConfigManager {
       case 'codex':
         actualModel = model || this.config.get('codex').defaultModel;
         break;
+      case 'local-agent':
+        actualModel = model || this.config.get('localAgent').defaultModel;
+        break;
       case 'mock':
         actualModel = 'mock-model';
         break;
@@ -830,11 +844,11 @@ class ConfigManager {
         // /api/paas/v4) and VULNORA_LOCAL_MODEL at the model tag you're serving.
         // Some OpenAI-compatible servers require a real bearer (Zhipu, Together, etc.) —
         // VULNORA_LOCAL_API_KEY (or a provider-specific env like ZAI_API_KEY) provides it.
-        baseUrl = process.env.VULNORA_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api';
+        baseUrl = process.env.VULNORA_LOCAL_BASE_URL?.trim() || this.config.get('local').baseUrl;
         // Placeholder ids from AVAILABLE_MODELS / the static UI are not real served model tags.
         // Treat them as unset so VULNORA_LOCAL_MODEL (or the llama3 default) wins; a real tag
         // passed in still takes priority.
-        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3';
+        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3';
         apiKey = process.env.VULNORA_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
         break;
       default:
@@ -872,9 +886,9 @@ class ConfigManager {
       if (primary !== 'local') {
         chain.push({
           provider: 'local',
-          model: process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3',
+          model: process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3',
           apiKey: process.env.VULNORA_LOCAL_API_KEY?.trim() || undefined,
-          baseUrl: process.env.VULNORA_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api',
+          baseUrl: process.env.VULNORA_LOCAL_BASE_URL?.trim() || this.config.get('local').baseUrl,
         });
       }
       return chain;
@@ -936,7 +950,10 @@ class ConfigManager {
         this.config.set('defaultModel', this.config.get('codex').defaultModel);
         break;
       case 'local':
-        this.config.set('defaultModel', process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3');
+        this.config.set('defaultModel', this.getLLMConfig('local').model);
+        break;
+      case 'local-agent':
+        this.config.set('defaultModel', this.config.get('localAgent').defaultModel);
         break;
     }
   }
@@ -972,6 +989,12 @@ class ConfigManager {
         break;
       case 'codex':
         this.config.set('codex', { ...this.config.get('codex'), defaultModel: model });
+        break;
+      case 'local':
+        this.config.set('local', { ...this.config.get('local'), defaultModel: model });
+        break;
+      case 'local-agent':
+        this.config.set('localAgent', { defaultModel: model });
         break;
     }
 

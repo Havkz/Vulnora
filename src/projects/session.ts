@@ -100,8 +100,8 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.project.status = 'running';
     this.record('project:started', { target: this.project.target.input });
     await this.persist();
-    if (this.command.isRunning()) return;
     this.command.resume();
+    if (this.command.isRunning()) return;
     this.command.start();
   }
 

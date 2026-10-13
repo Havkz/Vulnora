@@ -511,6 +511,9 @@ export interface VulnoraConfig {
   hooks?: RuntimeHooks;
 }
 
+/** @deprecated Use VulnoraConfig. */
+export type TempestConfig = VulnoraConfig;
+
 export interface RuntimeHooks {
   onCheckpoint?: (task: Task) => Promise<void>;
   onStateCheckpoint?: () => Promise<void>;

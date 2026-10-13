@@ -164,3 +164,30 @@ offering a resumable menu. A completed project opens its results without startin
   URL schemes, ports, paths and IPv6 addresses; DNS/port tools receive only the host.
   Validation: 56 Windows suites, 626 passed, 16 skips, 11 preflight checks; build,
   typecheck and lint (0 errors, 194 warnings) pass.
+
+- The new default CLI now connects the themed menu to persistent name/target drafts,
+  explicit READY confirmation, the real ProjectSession, resumable project metadata,
+  scrollable untruncated logs, a completion report gate, and full Markdown export.
+  The obsolete operation/menu implementation was removed; existing setup/status/test/
+  models commands remain available through a separate command module.
+- Integrated keyboard cases cover READY without opening a scanner, saved partial input,
+  actual scheduler pause/resume and repeated interrupts, completed report reopening,
+  and report generation only after explicit Enter. A scheduler resume bug found by
+  integration was corrected in ProjectSession.start().
+- A real Linux kernel PTY check at 80x30 and 24x12 passes startup/menu, original-target
+  READY without scan, editing/back navigation, settings, terminal restoration and Ctrl+C.
+  The installed 30B Ollama model stays loaded through the session and unloads on exit.
+  Ollama acknowledges unload asynchronously; shutdown now also confirms removal from
+  /api/ps. Latest live transcript: /home/tempest/.vulnora/validation/ui-preview-a0aase2z.
+  This validates the compiled preview in WSL, not the final installed Windows alias.
+- New settings retain local-model and installed-agent choices across process restarts.
+  Behavior selection is persisted but retuned effective presets are still pending.
+  Provider authentication/inference validation, deterministic fallback, decomposed
+  task recovery and final deployment remain outstanding. No completion is claimed.
+
+- Integrated CLI intermediate validation: 59 Windows suites, 637 passed and 16
+  POSIX skips; 11 preflight checks passed. Build/typecheck pass; lint has 0 errors
+  and 192 existing warnings. Tests cap worker concurrency at four; the Windows CLI
+  detection/dispatch case allows its two separately bounded subprocess deadlines.
+  Full live terminal/model checks pass after unloading confirmation was added.
+  Hosted GitHub runs for renderer/scope still fail before runner startup due to billing.

@@ -80,6 +80,20 @@ describe('persistent project sessions', () => {
     expect((await open(store, project.id)).project.status).toBe('ready');
   });
 
+  it('resumes the existing running scheduler after a drained pause', async () => {
+    const { store, project } = await fixture();
+    const session = await open(store, project.id);
+    const resumed = vi.fn();
+    session.command.on('command:resumed', resumed);
+    await session.start();
+    await session.pause();
+    expect(session.project.status).toBe('paused');
+    await session.start();
+    expect(session.project.status).toBe('running');
+    expect(resumed).toHaveBeenCalledOnce();
+    expect(session.command.mission.getAllMissions()).toHaveLength(1);
+  });
+
   it('keeps detailed journal content and truthful model fallback events', async () => {
     const { store, project } = await fixture();
     const session = await open(store, project.id);

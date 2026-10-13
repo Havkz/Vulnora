@@ -101,6 +101,10 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   show(screen: () => TerminalFrame): void { this.screen = screen; this.paint(); }
 
+  refresh(): void { this.paint(); }
+
+  interrupt(): void { this.onClosed(); }
+
   private paint(): void {
     if (!this.screen) return;
     const view = this.screen();
@@ -135,26 +139,28 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       : [this.colors.bright('Vulnora'), this.colors.muted(fit('website & API security testing', this.columns - 1))];
   }
 
-  startup(rows: InitializationRows): void {
+  startup(rows: InitializationRows, footer = 'Ctrl+C Save & Quit'): void {
     this.show(() => ({ lines: [...(this.rows >= 12 ? [...this.logo(), ''] : []), this.colors.accent(`${SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]} Starting`), '',
       ...rows.map(row => {
         const glyph = row.status === 'active' ? SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] : STATUS_GLYPHS[row.status];
         const line = fit(`${glyph} ${row.label}${row.detail ? ` · ${row.detail}` : ''}`, this.columns - 4);
         return '  ' + statusStyle(row.status, this.colors)(line);
-      })], footer: 'Ctrl+C Save & Quit' }));
+      })], footer }));
   }
 
-  async menu(title: string, choices: string[]): Promise<number | undefined> {
+  async menu(title: string, choices: string[], details?: (selected: number) => string[]): Promise<number | undefined> {
     if (!choices.length) throw new Error('Menu must contain at least one choice.');
     let selected = 0;
     this.show(() => {
-      const room = Math.max(1, this.rows - this.logo().length - 5);
+      const logo = this.rows < 12 ? [] : this.logo();
+      const detailLines = details?.(selected).flatMap(line => wrapTerminalText(line, this.columns - 4)) || [];
+      const room = Math.max(1, this.rows - logo.length - 5 - detailLines.length);
       const start = Math.max(0, selected - room + 1);
-      return { lines: [...this.logo(), '', this.colors.accent(title), '',
+      return { lines: [...logo, ...(logo.length ? [''] : []), this.colors.accent(title), '',
         ...choices.slice(start, start + room).map((label, offset) => {
           const text = fit(label, this.columns - 4);
           return offset + start === selected ? this.colors.accent(`  > ${text}`) : this.colors.foreground(`    ${text}`);
-        })], footer: '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+C Save & Quit' };
+        }), ...detailLines.map(line => '  ' + this.colors.detail(line))], footer: '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+C Save & Quit' };
     });
     for (;;) {
       const { key } = await this.nextKey();
@@ -166,7 +172,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     }
   }
 
-  async prompt(label: string, initial = '', secret = false): Promise<string | undefined> {
+  async prompt(label: string, initial = '', secret = false, onChange?: (value: string) => void): Promise<string | undefined> {
     let value = [...initial]; let position = value.length;
     this.show(() => {
       const shown = secret ? '•'.repeat(value.length) : value.join('');
@@ -193,6 +199,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       else if (!key.ctrl && !key.meta && text && terminalText(text) === text && !text.includes('\n') && value.length + [...text].length <= 8192) {
         const characters = [...text]; value.splice(position, 0, ...characters); position += characters.length;
       }
+      onChange?.(value.join(''));
       this.paint();
     }
   }

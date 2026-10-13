@@ -1,0 +1,143 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PassThrough } from 'node:stream';
+import type { ReadStream, WriteStream } from 'node:tty';
+import { stripVTControlCharacters } from 'node:util';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { InteractiveApp, formatProjectLog, type InteractiveServices } from '../ui/app.js';
+import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
+import { ProjectStore } from '../projects/store.js';
+import { ProjectSession } from '../projects/session.js';
+
+const directories: string[] = [];
+const surfaces: TerminalSurface[] = [];
+const running: Promise<unknown>[] = [];
+afterEach(async () => {
+  for (const surface of surfaces.splice(0)) { surface.interrupt(); surface.dispose(); }
+  await Promise.allSettled(running.splice(0));
+  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+async function fixture() {
+  const directory = await mkdtemp(join(tmpdir(), 'vulnora-ui-'));
+  directories.push(directory);
+  const input = Object.assign(new PassThrough(), { isTTY: true, isRaw: false, setRawMode(value: boolean) { this.isRaw = value; return this; } });
+  const output = Object.assign(new PassThrough(), { isTTY: true, columns: 80, rows: 30 });
+  let transcript = '';
+  output.on('data', data => { transcript += String(data); });
+  const surface = new TerminalSurface(input as unknown as ReadStream, output as unknown as WriteStream);
+  surfaces.push(surface);
+  const store = new ProjectStore(directory);
+  let session: ProjectSession | undefined;
+  const open = vi.fn(async (id: string) => { session = await ProjectSession.open(store, id, { llm: { provider: 'mock', model: 'fixture' } }); return session; });
+  const configuration = { get: () => 'auto', set: vi.fn() } as unknown as InteractiveServices['configuration'];
+  const services: InteractiveServices = { configuration, store, open, llm: () => ({ provider: 'mock', model: 'fixture' }),
+    installedModels: async () => [], prepareProviders: async () => 'Fixture' };
+  const app = new InteractiveApp(surface, services);
+  const start = () => { const result = app.run().catch(error => error); running.push(result); return result; };
+  const wait = async (text: string) => { await expect.poll(() => stripVTControlCharacters(transcript), { timeout: 5000 }).toContain(text); };
+  return { input, surface, store, open, start, wait, session: () => session, transcript: () => transcript };
+}
+
+describe('durable interactive project flow', () => {
+  it('saves the name and incomplete target before READY, preserves edits on Esc, and never starts automatically', async () => {
+    const f = await fixture(); const result = f.start();
+    const prompts = vi.spyOn(f.surface, 'prompt');
+    f.input.write('\rFixture project\r');
+    await f.wait('Target URL or IP:');
+    expect((await f.store.listDrafts()).drafts[0].name).toBe('Fixture project');
+    f.input.write('https://\r');
+    await f.wait('Invalid target');
+    expect(f.open).not.toHaveBeenCalled();
+    f.input.write('\r\x15https://fixture.test:8443/base?mode=read\r');
+    await f.wait('Press Enter to start');
+    const project = (await f.store.list()).projects[0];
+    expect(project.target.input).toBe('https://fixture.test:8443/base?mode=read');
+    expect(project.status).toBe('ready');
+    expect(f.open).not.toHaveBeenCalled();
+    f.input.write('\x1b');
+    await expect.poll(() => prompts.mock.calls.length, { timeout: 5000 }).toBe(4);
+    f.input.write('/still-editing\x1b');
+    await expect.poll(async () => (await f.store.load(project.id)).inputDraft, { timeout: 5000 }).toBe(project.target.input + '/still-editing');
+    f.input.write('\x03');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect(f.open).not.toHaveBeenCalled();
+  });
+
+  it('starts only on Enter, safely pauses/resumes the real scheduler, and closes on repeated Ctrl+C', async () => {
+    const f = await fixture(); const result = f.start();
+    f.input.write('\rRuntime fixture\r');
+    await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r');
+    await f.wait('Press Enter to start');
+    expect(f.open).not.toHaveBeenCalled();
+    f.input.write('\r');
+    await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
+    const session = f.session();
+    expect(session).toBeDefined();
+    f.input.write('\x1b');
+    await f.wait('> Resume');
+    expect(session?.project.status).toBe('paused');
+    f.input.write('\r');
+    await expect.poll(() => session?.project.status).toBe('running');
+    f.input.write('\x03\x03');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect(session?.command.isRunning()).toBe(false);
+    const saved = await f.store.load(session?.project.id || '');
+    expect(saved.status).toBe('paused');
+    expect(saved.checkpoint).toBeDefined();
+    const reopened = await ProjectSession.open(f.store, saved.id, { llm: { provider: 'mock', model: 'fixture' } });
+    await reopened.close();
+  });
+
+  it('reopens the full saved report and exports it without another scan or provider request', async () => {
+    const f = await fixture();
+    const project = await f.store.create('Completed fixture', 'https://fixture.test');
+    project.status = 'completed'; project.progress = 100;
+    project.report = { markdown: '# Report\n\n' + 'Complete technical evidence\n'.repeat(1000) + 'END OF EVIDENCE', generatedAt: Date.now() };
+    await f.store.save(project);
+    const result = f.start();
+    f.input.write('\x1b[B\r');
+    await f.wait('Resume Project');
+    f.input.write('\r');
+    await f.wait('Saved report:');
+    expect(f.session()?.command.isRunning()).toBe(false);
+    expect(f.session()?.command.arsenal.getExecutions()).toEqual([]);
+    expect(await readFile(join(f.store.directory, project.id + '.report.md'), 'utf8')).toBe(project.report.markdown);
+    f.input.write('\x1b[F');
+    await f.wait('END OF EVIDENCE');
+    f.input.write('\x03');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect((await f.store.load(project.id)).report).toEqual(project.report);
+  });
+
+  it('waits for explicit Enter before generating the report after a real mission completion event', async () => {
+    const f = await fixture(); const result = f.start();
+    f.input.write('\rCompletion fixture\r');
+    await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r');
+    await f.wait('Press Enter to start'); f.input.write('\r');
+    await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
+    const session = f.session();
+    if (!session) throw new Error('Missing fixture session');
+    const report = vi.spyOn(session, 'results');
+    const mission = session.command.mission.getActiveMission();
+    if (!mission) throw new Error('Missing fixture mission');
+    session.command.mission.completeMission(mission.id);
+    await f.wait('Press Enter to view results');
+    expect(report).not.toHaveBeenCalled();
+    f.input.write('\r');
+    await f.wait('Saved report:');
+    expect(report).toHaveBeenCalledOnce();
+    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect((await f.store.load(session.project.id)).report).toBeDefined();
+  });
+
+  it('keeps every multiline technical log detail available to the view and journal', () => {
+    const detail = 'First evidence line\n' + 'All technical evidence retained\n'.repeat(1000) + 'Final evidence line';
+    const formatted = formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail } });
+    expect(formatted).toContain(detail);
+    expect(formatted).toContain('Final evidence line');
+  });
+});

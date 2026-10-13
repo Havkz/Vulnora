@@ -7,6 +7,16 @@ export const PROJECT_STATUSES = ['ready', 'running', 'paused', 'completed', 'int
 export type ProjectStatus = typeof PROJECT_STATUSES[number];
 export type ScanningBehavior = 'auto' | 'stealth' | 'aggressive';
 
+export interface ProjectDraft {
+  version: 1;
+  id: string;
+  name: string;
+  targetInput: string;
+  behavior: ScanningBehavior;
+  createdAt: number;
+  lastActivity: number;
+}
+
 export interface ProjectRecord<Checkpoint = unknown> {
   version: 1;
   id: string;
@@ -18,10 +28,18 @@ export interface ProjectRecord<Checkpoint = unknown> {
   progress: number;
   behavior: ScanningBehavior;
   checkpoint?: Checkpoint;
+  inputDraft?: string;
   report?: { markdown: string; generatedAt: number };
 }
 
 function validId(id: string): boolean { return /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(id); }
+
+function validateDraft(draft: ProjectDraft): void {
+  if (!draft || draft.version !== 1 || !validId(draft.id) || typeof draft.targetInput !== 'string'
+    || draft.targetInput.length > 8192 || !Number.isFinite(draft.createdAt) || !Number.isFinite(draft.lastActivity)
+    || !['auto', 'stealth', 'aggressive'].includes(draft.behavior)) throw new Error('Invalid project draft.');
+  validateProjectName(draft.name);
+}
 
 function validateRecord(value: unknown): asserts value is ProjectRecord {
   if (!value || typeof value !== 'object') throw new Error('Invalid project record.');
@@ -32,6 +50,7 @@ function validateRecord(value: unknown): asserts value is ProjectRecord {
     || !Number.isFinite(project.createdAt) || !Number.isFinite(project.lastActivity)
     || !Number.isFinite(project.progress) || project.progress < 0 || project.progress > 100) throw new Error('Invalid project metadata.');
   validateProjectName(project.name);
+  if (project.inputDraft !== undefined && (typeof project.inputDraft !== 'string' || project.inputDraft.length > 8192)) throw new Error('Invalid pending target input.');
   const validated = validateProjectTarget(project.target.input);
   if (validated.kind !== project.target.kind || validated.hostname !== project.target.hostname) throw new Error('Project target metadata does not match the original input.');
   if (project.report && (typeof project.report.markdown !== 'string' || !Number.isFinite(project.report.generatedAt))) throw new Error('Invalid saved report.');
@@ -60,16 +79,68 @@ export class ProjectStore {
   async save(project: ProjectRecord): Promise<void> {
     validateRecord(project);
     // Capture the checkpoint now, before a running operator mutates its next step.
-    const data = JSON.stringify(project);
-    await this.enqueue(project.id, async () => {
+    await this.publish(project.id, '.json', JSON.stringify(project));
+  }
+
+  private async publish(id: string, suffix: string, data: string): Promise<void> {
+    await this.enqueue(id, async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
-      const temporary = this.path(project.id, `.${randomUUID()}.tmp`);
+      const temporary = this.path(id, `.${randomUUID()}.tmp`);
       const handle = await open(temporary, 'wx', 0o600);
       try { await handle.writeFile(data, 'utf8'); await handle.sync(); }
       finally { await handle.close(); }
-      try { await rename(temporary, this.path(project.id)); }
+      try { await rename(temporary, this.path(id, suffix)); }
       finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
     });
+  }
+
+  async createDraft(name: string, behavior: ScanningBehavior = 'auto'): Promise<ProjectDraft> {
+    const draft: ProjectDraft = { version: 1, id: randomUUID(), name: validateProjectName(name),
+      targetInput: '', behavior, createdAt: Date.now(), lastActivity: Date.now() };
+    await this.saveDraft(draft);
+    return draft;
+  }
+
+  async saveDraft(draft: ProjectDraft): Promise<void> {
+    validateDraft(draft);
+    await this.publish(draft.id, '.draft.json', JSON.stringify(draft));
+  }
+
+  async listDrafts(): Promise<{ drafts: ProjectDraft[]; errors: string[] }> {
+    await this.flush();
+    let files: string[];
+    try { files = await readdir(this.directory); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { drafts: [], errors: [] }; throw error; }
+    const drafts: ProjectDraft[] = []; const errors: string[] = [];
+    for (const file of files.filter(file => file.endsWith('.draft.json') && validId(file.slice(0, -11)))) {
+      try {
+        const draft = JSON.parse(await readFile(join(this.directory, file), 'utf8')) as ProjectDraft;
+        validateDraft(draft);
+        if (draft.id !== file.slice(0, -11)) throw new Error('Project draft ID does not match its file.');
+        // A crash after publishing READY may leave the superseded draft behind.
+        try { await this.load(draft.id); continue; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        drafts.push(draft);
+      } catch (error) { errors.push(`${file}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    drafts.sort((a, b) => b.lastActivity - a.lastActivity);
+    return { drafts, errors };
+  }
+
+  async finishDraft(draft: ProjectDraft): Promise<ProjectRecord> {
+    validateDraft(draft);
+    const project: ProjectRecord = { version: 1, id: draft.id, name: draft.name, target: validateProjectTarget(draft.targetInput),
+      behavior: draft.behavior, createdAt: draft.createdAt, lastActivity: Date.now(), status: 'ready', progress: 0 };
+    await this.save(project);
+    await this.enqueue(draft.id, () => unlink(this.path(draft.id, '.draft.json')));
+    return project;
+  }
+
+  async exportReport(project: ProjectRecord): Promise<string> {
+    if (!project.report) throw new Error('This project has no generated report.');
+    validateRecord(project);
+    await this.publish(project.id, '.report.md', project.report.markdown);
+    return this.path(project.id, '.report.md');
   }
 
   async load(id: string): Promise<ProjectRecord> {

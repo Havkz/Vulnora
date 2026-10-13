@@ -244,7 +244,7 @@ else { let prompt = ''; process.stdin.on('data', chunk => { prompt += chunk; });
     expect(detection?.path).toBe(cli);
     expect(detection?.version).toBe('1.2.3');
     await expect(localAgentChat('claude', 'ping', { timeoutMs: 4000 })).resolves.toBe('1.2.3');
-  });
+  }, 10000); // Detection and dispatch have separate bounded subprocess deadlines.
 
   it('passes shell metacharacters and multiline prompts literally to npm shims', async () => {
     const { home } = fixture('hermes');

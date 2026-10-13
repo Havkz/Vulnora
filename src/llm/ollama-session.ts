@@ -1,4 +1,5 @@
 import type { LLMConfig } from '../types/index.js';
+import { setTimeout as delay } from 'node:timers/promises';
 
 /** Hold the configured Ollama model for one CLI session, then release its memory. */
 export function createOllamaSession(config: LLMConfig) {
@@ -24,6 +25,17 @@ export function createOllamaSession(config: LLMConfig) {
     await response.json();
   }
 
+  async function confirmUnloaded(signal: AbortSignal): Promise<void> {
+    for (;;) {
+      const response = await fetch(`${baseUrl}/ps`, { signal });
+      if (!response.ok) throw new Error(`Ollama unload confirmation failed: HTTP ${response.status}`);
+      const data = await response.json() as { models?: { name?: string; model?: string }[] };
+      if (!Array.isArray(data.models)) throw new Error('Ollama unload confirmation returned invalid model data.');
+      if (!data.models.some(model => model.name === local?.model || model.model === local?.model)) return;
+      await delay(200, undefined, { signal });
+    }
+  }
+
   return {
     async start(): Promise<void> {
       if (!enabled) return;
@@ -35,7 +47,12 @@ export function createOllamaSession(config: LLMConfig) {
       if (!active) return;
       stopping ??= (async () => {
         controller.abort();
-        try { await request(0, AbortSignal.timeout(30000)); }
+        try {
+          const signal = AbortSignal.timeout(30000);
+          await request(0, signal);
+          // Ollama acknowledges keep_alive=0 before its runner disappears from /ps.
+          await confirmUnloaded(signal);
+        }
         finally {
           if (previousKeepAlive === undefined) delete process.env.VULNORA_LOCAL_KEEP_ALIVE;
           else process.env.VULNORA_LOCAL_KEEP_ALIVE = previousKeepAlive;

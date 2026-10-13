@@ -14,7 +14,8 @@ describe('Ollama CLI session lifecycle', () => {
   it('preloads with the chat context, holds the model across chat, and unloads once on exit', async () => {
     vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', '5m');
     const bodies: Array<Record<string, unknown>> = [];
-    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (String(url).endsWith('/ps')) return new Response(JSON.stringify({ models: [] }));
       bodies.push(JSON.parse(init.body));
       return new Response(JSON.stringify({ message: { content: 'ready' }, done: true }));
     }));
@@ -56,12 +57,33 @@ describe('Ollama CLI session lifecycle', () => {
 
   it('fails clearly on startup and still releases the model and session setting', async () => {
     vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', '10m');
-    const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(new Response('{}'));
+    const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(new Response('{}'))
+      .mockResolvedValueOnce(new Response('{"models":[]}'));
     vi.stubGlobal('fetch', fetch);
     const session = createOllamaSession(settings);
     await expect(session.start()).rejects.toThrow('load failed: HTTP 404');
     await session.stop();
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
     expect(process.env.VULNORA_LOCAL_KEEP_ALIVE).toBe('10m');
+  });
+
+  it('waits for actual model removal after the unload API acknowledgement and leaves other models untouched', async () => {
+    let polls = 0;
+    const fetch = vi.fn(async (url: string) => {
+      if (url.endsWith('/ps')) {
+        polls++;
+        return new Response(JSON.stringify({ models: polls === 1 ? [{ name: 'test-model' }, { name: 'another-model' }] : [{ name: 'another-model' }] }));
+      }
+      return new Response('{}');
+    });
+    vi.stubGlobal('fetch', fetch);
+    const session = createOllamaSession(settings);
+    await session.start();
+    const stopping = session.stop();
+    const repeated = session.stop();
+    await stopping;
+    await expect(repeated).resolves.toBeUndefined();
+    expect(polls).toBe(2);
+    expect(fetch.mock.calls.filter(([url]) => url.endsWith('/generate'))).toHaveLength(2);
   });
 });

@@ -37,7 +37,7 @@ export * from './types/index.js';
 
 // Configuration
 export { config, getApiKey, setApiKey, hasApiKey, getLLMConfig, getConfiguredProviders, AVAILABLE_MODELS } from './config/index.js';
-export type { VulnoraSettings, ModelInfo } from './config/index.js';
+export type { VulnoraSettings, TempestSettings, ModelInfo } from './config/index.js';
 
 // LLM
 export {

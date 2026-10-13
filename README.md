@@ -3,15 +3,17 @@
 <!-- ⊰ sharp eye on the raw source. there's a flag for the curious: VULNORA{r3c31pt5_n0t_v1b3z} — the one that counts, you earn: run `npm run verify-claims`. LOVE PLINY ⊱ -->
 
 ```
- ▄▄▄█████▓▓█████  ███▄ ▄███▓ ██▓███  ▓█████   ██████ ▄▄▄█████▓
- ▓  ██▒ ▓▒▓█   ▀ ▓██▒▀█▀ ██▒▓██░  ██▒▓█   ▀ ▒██    ▒ ▓  ██▒ ▓▒
- ▒ ▓██░ ▒░▒███   ▓██    ▓██░▓██░ ██▓▒▒███   ░ ▓██▄   ▒ ▓██░ ▒░
- ░ ▓██▓ ░ ▒▓█  ▄ ▒██    ▒██ ▒██▄█▓▒ ▒▒▓█  ▄   ▒   ██▒░ ▓██▓ ░
-   ▒██▒ ░ ░▒████▒▒██▒   ░██▒▒██▒ ░  ░░▒████▒▒██████▒▒  ▒██▒ ░
-   ▒ ░░   ░░ ▒░ ░░ ▒░   ░  ░▒▓▒░ ░  ░░░ ▒░ ░▒ ▒▓▒ ▒ ░  ▒ ░░
-     ░     ░ ░  ░░  ░      ░░▒ ░      ░ ░  ░░ ░▒  ░ ░    ░
-   ░         ░   ░      ░   ░░          ░   ░  ░  ░    ░
-             ░  ░       ░               ░  ░      ░
+     ░░░░░█░░░░░
+  ░░█████████████████░░
+ ░█████████████████████░
+░███████████████████████░
+░███████████████████████░
+███████  Vulnora  ███████
+░███████████████████████░
+░███████████████████████░
+ ░█████████████████████░
+  ░░█████████████████░░
+     ░░░░░█░░░░░
 ```
 
 <div align="center">
@@ -71,7 +73,28 @@ npm run build
 npm start
 ```
 
-Use **Settings** to choose a provider, then **Start New Operation**. Codex uses your existing CLI login (`codex login`); no API key is required. The browser interface has been removed.
+The main menu contains **Create New Project**, **Resume Project**, and **Settings**.
+Use arrows and Enter to select; Esc returns, and Ctrl+C saves and quits. Create a
+project, enter its target, then confirm **READY — Press Enter to start**. Entering
+the target alone does not start a scan. The browser interface has been removed.
+
+Projects and name/target drafts persist under `~/.vulnora/projects/`, or the directory
+selected with `VULNORA_CONFIG_DIR`. Resume Project shows status, progress, original
+target and timestamps. Completed reports reopen without another scan and are also
+exported as `<project-id>.report.md` beside the full project and event journal.
+
+During a scan, Esc stops scheduling and drains or cancels active work before the
+pause menu. Ctrl+C flushes checkpoints and logs and releases the project lease.
+Partially consumed AI tool batches resume from their saved calls; completed evidence
+is reused. Interrupted requests with no receipt are retried only when their replay
+is safe. Unknown or state-changing operations are held for inspection.
+
+The new CLI is under active migration. Provider authentication/inference checks,
+retuned adaptive scanning behavior, decomposed-subtask recovery and final installation
+still have acceptance work. Changing the saved behavior setting alone does not yet
+apply the new presets. See the [milestone ledger](docs/VULNORA_MILESTONE.md) for the
+verified state and remaining requirements. Existing local aliases remain on the
+preserved installed runtime until the new runtime passes its installation checks.
 
 For Codex with an Ollama fallback, put these settings in `~/.vulnora/.env`:
 
@@ -83,7 +106,12 @@ VULNORA_LOCAL_BASE_URL=http://127.0.0.1:11434/api
 VULNORA_LOCAL_MODEL=your-installed-model
 ```
 
-With Ollama running, the interactive CLI loads that model before showing the menu and keeps it resident throughout the session, including after fallback requests. **Exit** or **Ctrl+C** unloads it. `npm start -- test` checks the LLM connection. Force-killing the process bypasses cleanup; use `ollama stop your-installed-model` in that case.
+With Ollama running, the interactive CLI discovers installed models, loads the
+selected model before showing the menu and keeps it resident throughout the session.
+Esc from the main menu or Ctrl+C unloads it; shutdown waits for removal from Ollama's
+running-model list. No model is downloaded automatically. `npm start -- test` checks
+the LLM connection. Force-killing the process bypasses cleanup; use
+`ollama stop your-installed-model` in that case.
 
 Prefer to bring a key? Set one and skip the connect step:
 
