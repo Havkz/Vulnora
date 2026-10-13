@@ -1,0 +1,242 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createServer, type Server } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { VulnoraCommand } from '../index.js';
+import { KillChainPhase } from '../types/index.js';
+import { validateEngineCheckpoint } from '../projects/engine-checkpoint.js';
+import { ProjectStore } from '../projects/store.js';
+import { CheckpointWriteError } from '../agent/checkpoint.js';
+import { acquireProjectLease } from '../projects/lease.js';
+
+const commands: VulnoraCommand[] = [];
+const servers: Server[] = [];
+const children: ChildProcess[] = [];
+const directories: string[] = [];
+afterEach(async () => {
+  vi.unstubAllEnvs();
+  for (const command of commands.splice(0)) { command.stop(); command.opsec.cleanup(); }
+  for (const child of children.splice(0)) if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await new Promise<void>(resolve => child.once('exit', () => resolve())); }
+  for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
+});
+
+function scanner(onStateCheckpoint?: () => Promise<void>): VulnoraCommand {
+  const command = new VulnoraCommand({ name: 'Fixture', llm: { provider: 'mock', model: 'fixture' },
+    operators: { defaultConfig: { cooldownMs: 0 } }, hooks: { onStateCheckpoint } });
+  commands.push(command);
+  return command;
+}
+
+function prepare(command: VulnoraCommand, origin = 'http://127.0.0.1:1234') {
+  command.targetEnv.addTarget({ name: 'Fixture', type: 'web_application', zone: 'external', address: origin });
+  const mission = command.mission.createMission({ name: 'Fixture', objectives: ['Read fixture'], phases: [KillChainPhase.RECON] });
+  command.mission.startMission(mission.id);
+  const task = command.mission.createTask({ missionId: mission.id, name: 'Read', description: `Read ${origin}`,
+    phase: KillChainPhase.RECON, operatorType: 'recon' });
+  task.executionPlan = { toolName: 'http_request', parameters: { url: origin } };
+  return { mission, task };
+}
+
+async function tick(command: VulnoraCommand): Promise<void> {
+  await (command as unknown as { tick: () => Promise<void> }).tick();
+}
+
+async function listen(server: Server): Promise<string> {
+  servers.push(server);
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Fixture address missing');
+  return `http://127.0.0.1:${address.port}`;
+}
+
+describe('whole scanner checkpoints', () => {
+  it('retains phases, queues, IDs, results, scope, evidence, budgets, and operator settings', async () => {
+    const origin = await listen(createServer((_request, response) => response.end('Fixture evidence')));
+    const command = scanner();
+    const { mission, task } = prepare(command, origin);
+    await tick(command);
+    await vi.waitFor(() => expect(task.status).toBe('completed'), { timeout: 5000 });
+    const before = command.exportCheckpoint();
+    validateEngineCheckpoint(before);
+    const restored = scanner();
+    restored.restoreCheckpoint(JSON.parse(JSON.stringify(before)));
+    const after = restored.exportCheckpoint();
+    expect(after.mission).toEqual(before.mission);
+    expect(after.targets).toEqual(before.targets);
+    expect(after.orchestrator).toEqual(before.orchestrator);
+    expect(after.operators[0].id).toBe(before.operators[0].id);
+    expect(after.operators[0].config.cooldownMs).toBe(0);
+    expect(after.operators[0].state.completedTasks).toBe(1);
+    expect(restored.arsenal.getScope()?.allowedHosts).toEqual(['127.0.0.1']);
+    expect(after.mission.activeMissionId).toBe(mission.id);
+    let ran = false;
+    const duplicate = await restored.arsenal.execute('http_request', { parameters: { url: origin } });
+    expect(duplicate.metadata?.cacheHit).toBe(true);
+    const tool = restored.arsenal.getTool('http_request');
+    if (!tool) throw new Error('HTTP tool missing');
+    const result = await restored.arsenal.getOrchestrator().execute(tool, { parameters: { url: origin } }, async () => { ran = true; return { success: true }; });
+    expect(ran).toBe(false);
+    expect(result.metadata?.cacheHit).toBe(true);
+  });
+
+  it('does not start a new mission when inspecting a completed saved project', () => {
+    const command = scanner();
+    const { mission } = prepare(command);
+    command.mission.completeMission(mission.id);
+    const restored = scanner();
+    restored.restoreCheckpoint(JSON.parse(JSON.stringify(command.exportCheckpoint())));
+    expect(() => restored.start()).toThrow('completed');
+    expect(restored.generateReport(mission.id)).toContain('# Security Assessment Report');
+    expect(restored.generateReport()).toContain('# Security Assessment Report');
+    expect(restored.mission.getAllMissions()).toHaveLength(1);
+  });
+
+  it.each(['version', 'target', 'task', 'budget', 'agent_context'])('rejects corrupt %s before mutating the scanner', key => {
+    const command = scanner();
+    prepare(command);
+    const saved = command.exportCheckpoint();
+    if (key === 'version') (saved as { version: number }).version = 99;
+    if (key === 'target') saved.targets[0].address = 'javascript:alert(1)';
+    if (key === 'task') saved.mission.tasks[0].missionId = 'missing';
+    if (key === 'budget') saved.orchestrator.budgets = [['fixture', { limits: { total_request_budget: -1 }, used: {} } as never]];
+    if (key === 'agent_context') saved.mission.tasks[0].checkpoint = { version: 99 } as never;
+    const restored = scanner();
+    expect(() => restored.restoreCheckpoint(saved)).toThrow();
+    expect(restored.targetEnv.getAllTargets()).toEqual([]);
+    expect(restored.mission.getAllMissions()).toEqual([]);
+  });
+
+  it('saves charged request budgets before executing and propagates write failure through Arsenal', async () => {
+    const command = scanner(async () => { throw new Error('disk full'); });
+    let ran = false;
+    const tool = command.arsenal.getTool('http_request');
+    if (!tool) throw new Error('HTTP tool missing');
+    await expect(command.arsenal.getOrchestrator().execute(tool,
+      { parameters: { url: 'http://127.0.0.1/' } }, async () => { ran = true; return { success: true }; })).rejects.toBeInstanceOf(CheckpointWriteError);
+    expect(ran).toBe(false);
+    expect(command.arsenal.getOrchestrator().getBudget('127.0.0.1').used.http_request_budget).toBe(1);
+    await expect(command.arsenal.execute('http_request', { parameters: { url: 'http://127.0.0.1/other' } })).rejects.toBeInstanceOf(CheckpointWriteError);
+  });
+
+  it('drains a real in-flight HTTP request before returning a resumable pause', async () => {
+    let received!: () => void;
+    const started = new Promise<void>(resolve => { received = resolve; });
+    const origin = await listen(createServer(() => received()));
+    const command = scanner();
+    const { task } = prepare(command, origin);
+    command.start();
+    await tick(command);
+    await started;
+    const first = command.pauseAndDrain();
+    expect(command.pauseAndDrain()).toBe(first);
+    await first;
+    expect(task.status).toBe('pending');
+    expect(command.isRunning()).toBe(false);
+    expect(command.cell.getAllOperators().every(operator => operator.state.currentTask === null)).toBe(true);
+    const saved = command.exportCheckpoint();
+    expect(saved.mission.tasks[0].checkpoint?.activeCall?.name).toBe('http_request');
+    expect(() => validateEngineCheckpoint(saved)).not.toThrow();
+  });
+
+  it('recovers after killing a real scanner process without repeating the completed request', async () => {
+    const requests = { first: 0, second: 0 };
+    let resume = false;
+    const origin = await listen(createServer((request, response) => {
+      if (request.url === '/first') { requests.first++; response.end('First result persisted'); }
+      else if (request.url === '/second') { requests.second++; if (resume) response.end('Second result resumed'); }
+      else { response.writeHead(404); response.end(); }
+    }));
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-crash-'));
+    directories.push(directory);
+    const worker = fileURLToPath(new URL('./fixtures/project-crash-worker.mjs', import.meta.url));
+    const child = spawn(process.execPath, ['--import', 'tsx', worker, origin, directory], {
+      cwd: process.cwd(), env: { ...process.env, VULNORA_CONFIG_DIR: join(directory, 'config'), VULNORA_FULL_ARSENAL: 'off' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.push(child);
+    let output = ''; let errors = '';
+    child.stdout?.on('data', data => { output += data.toString(); });
+    child.stderr?.on('data', data => { errors += data.toString(); });
+    await vi.waitFor(() => {
+      if (child.exitCode !== null) throw new Error(`Worker exited: ${errors}`);
+      expect(output).toMatch(/READY [a-f\d-]+/);
+      expect(requests.second).toBe(1);
+    }, { timeout: 15_000 });
+    const id = output.match(/READY ([a-f\d-]+)/)?.[1];
+    if (!id) throw new Error('Worker project ID missing');
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+    child.kill('SIGKILL'); await exited;
+    const release = await acquireProjectLease(directory, id);
+    await release();
+    const project = await new ProjectStore(directory).load(id);
+    const restored = scanner();
+    restored.restoreCheckpoint(project.checkpoint);
+    resume = true;
+    await tick(restored);
+    await vi.waitFor(() => expect(restored.mission.getTaskQueue().getForMission(restored.mission.getAllMissions()[0].id).every(task => task.status === 'completed')).toBe(true), { timeout: 5000 });
+    expect(requests).toEqual({ first: 1, second: 2 });
+    expect(restored.arsenal.getOrchestrator().getBudget('127.0.0.1').used.http_request_budget).toBe(3);
+    expect(restored.arsenal.getOrchestrator().getEvidence().some(record => record.parsedOutput?.responseBody === 'First result persisted')).toBe(true);
+  }, 20_000);
+
+  it('preserves complete multiline log content instead of cutting it at 2000 characters', () => {
+    const command = scanner();
+    const { task } = prepare(command);
+    const operator = command.spawnOperator('Log fixture', 'recon');
+    const detail = 'A complete technical observation with spaces.\n'.repeat(300);
+    let observed = '';
+    command.on('scan:progress', event => { observed = event.detail; });
+    operator.emit('agent:thinking', { task, content: detail });
+    expect(observed).toBe(detail);
+    expect(command.exportCheckpoint().command.progressEvents[0].detail).toBe(detail);
+  });
+
+  it('uses a persisted POST completion receipt after a crash instead of replaying the write', async () => {
+    let writes = 0;
+    const origin = await listen(createServer((request, response) => {
+      if (request.method === 'POST') writes++;
+      response.writeHead(201, { 'content-type': 'application/json' }); response.end('{"fixture":"write-completed"}');
+    }));
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-receipt-'));
+    directories.push(directory);
+    const worker = fileURLToPath(new URL('./fixtures/project-crash-worker.mjs', import.meta.url));
+    const child = spawn(process.execPath, ['--import', 'tsx', worker, origin, directory, 'write'], {
+      cwd: process.cwd(), env: { ...process.env, VULNORA_CONFIG_DIR: join(directory, 'config'), VULNORA_FULL_ARSENAL: 'off' }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    children.push(child);
+    let output = ''; let errors = '';
+    child.stdout?.on('data', data => { output += data.toString(); });
+    child.stderr?.on('data', data => { errors += data.toString(); });
+    await vi.waitFor(() => {
+      if (child.exitCode !== null) throw new Error(`Worker exited: ${errors}`);
+      expect(output).toMatch(/READY [a-f\d-]+/);
+    }, { timeout: 15_000 });
+    const id = output.match(/READY ([a-f\d-]+)/)?.[1];
+    if (!id) throw new Error('Worker project ID missing');
+    const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+    child.kill('SIGKILL'); await exited;
+    const project = await new ProjectStore(directory).load(id);
+    const restored = scanner();
+    restored.restoreCheckpoint(project.checkpoint);
+    expect(restored.mission.getTaskQueue().getForMission(restored.mission.getAllMissions()[0].id)[0].checkpoint?.activeCall?.arguments.method).toBe('POST');
+    await tick(restored);
+    await vi.waitFor(() => expect(restored.mission.getTaskQueue().getForMission(restored.mission.getAllMissions()[0].id)[0].status).toBe('completed'), { timeout: 5000 });
+    expect(writes).toBe(1);
+    expect(restored.arsenal.getExecutions()).toEqual([]);
+    expect(restored.arsenal.getOrchestrator().getBudget('127.0.0.1').used.http_request_budget).toBe(1);
+  }, 20_000);
+
+  it('prevents concurrent local ownership and releases the project lease idempotently', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-lease-'));
+    directories.push(directory);
+    const id = 'aabbccdd-1111-2222-3333-444444444444';
+    const release = await acquireProjectLease(directory, id);
+    try { await expect(acquireProjectLease(directory, id)).rejects.toThrow('exclusive project access'); }
+    finally { await release(); }
+    await release();
+    await (await acquireProjectLease(directory, id))();
+  });
+});

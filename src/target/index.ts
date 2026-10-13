@@ -35,6 +35,10 @@ export interface TargetEvents {
 export class TargetEnvironment extends EventEmitter<TargetEvents> {
   private targets: Map<string, Target> = new Map();
 
+  restoreCheckpoint(targets: Target[]): void {
+    this.targets = new Map(structuredClone(targets).map(target => [target.id, target]));
+  }
+
   /**
    * Add a target
    */

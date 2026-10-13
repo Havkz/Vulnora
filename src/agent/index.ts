@@ -10,7 +10,7 @@ import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
 import { isContextCompactionNotice, type LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
-import { normalizeToolCall } from '../orchestrator/tool-orchestrator.js';
+import { normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
 import {
   buildMissionPrompt,
@@ -171,7 +171,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     signal?.throwIfAborted();
     const saved = task.checkpoint === undefined ? undefined : restoreAgentCheckpoint(task.checkpoint, task, target);
     if (saved?.phase === 'completed' && saved.result) return saved.result;
-    if (saved?.activeCall && !canReplayInterruptedCall(saved.activeCall)) throw new UnsafeResumeError(saved.activeCall);
+    const savedReceipt = saved?.activeAttempt ? this.arsenal.getOrchestrator().getEvidence().find(record =>
+      record.attemptId === saved.activeAttempt?.attemptId && record.sourceToolCallId === saved.activeAttempt?.sourceToolCallId
+      && record.executionStatus === 'executed' && saved.activeCall
+      && record.normalizedSignature === normalizeToolCall(saved.activeCall.name, { target, parameters: saved.activeCall.arguments }).normalizedSignature) : undefined;
+    if (saved?.activeCall && !savedReceipt && !canReplayInterruptedCall(saved.activeCall)) throw new UnsafeResumeError(saved.activeCall);
     const startTime = Date.now() - (saved?.elapsedMs || 0);
     const steps: AgentStep[] = saved?.steps || [];
     const allFindings: ToolFinding[] = saved?.findings || [];
@@ -190,6 +194,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     let bootstrapCompleted = saved?.bootstrapCompleted || false;
     let pendingCalls = saved?.pendingCalls || [];
     let activeCall = saved?.activeCall;
+    let activeAttempt = saved?.activeAttempt;
     let findingsBeforeBatch = saved?.findingsBeforeBatch || 0;
 
     const profile = resolveAgentPromptProfile(this.llm.getPromptProfile());
@@ -259,7 +264,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         findings: allFindings, tokensUsed, totalToolCalls, seenCalls: [...seenCalls],
         toolCallCounts: [...toolCallCounts], exhaustedToolWarnings: [...exhaustedToolWarnings],
         noProgress, consecutiveLlmFailures, modelUnavailable, lastLlmError,
-        pendingCalls, activeCall, findingsBeforeBatch, result,
+        pendingCalls, activeCall, activeAttempt, findingsBeforeBatch, result,
       });
       task.checkpoint = checkpoint;
       try { await this.onCheckpoint?.(checkpoint, task); }
@@ -279,9 +284,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     if (!bootstrapCompleted && bootstrapCall) {
       if (!toolDefs.some(definition => definition.name === bootstrapCall.name)) throw new UnsafeResumeError(bootstrapCall);
       activeCall = bootstrapCall;
+      activeAttempt ||= { attemptId: `attempt-${randomUUID()}`, sourceToolCallId: `tool-call-${randomUUID()}` };
       await publish('bootstrap');
-      const toolStep = await this.executeTool(bootstrapCall, target, task, -1, signal);
+      const toolStep = await this.executeTool(bootstrapCall, target, task, -1, signal, activeAttempt, savedReceipt);
       activeCall = undefined;
+      activeAttempt = undefined;
       bootstrapCompleted = true;
       toolCallCounts.set(bootstrapCall.name, 1);
       totalToolCalls++;
@@ -419,8 +426,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
               } else {
                 if (!toolDefs.some(definition => definition.name === toolCall.name) && replayingBatch) throw new UnsafeResumeError(toolCall);
                 activeCall = toolCall;
+                activeAttempt ||= { attemptId: `attempt-${randomUUID()}`, sourceToolCallId: `tool-call-${randomUUID()}` };
                 await publish('tool_batch');
-                toolStep = await this.executeTool(toolCall, target, task, i, signal);
+                toolStep = await this.executeTool(toolCall, target, task, i, signal, activeAttempt,
+                  savedReceipt?.attemptId === activeAttempt.attemptId ? savedReceipt : undefined);
                 toolCallCounts.set(toolCall.name, count + 1);
                 seenCalls.set(callHash, String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160));
               }
@@ -458,6 +467,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
               });
             }
             activeCall = undefined;
+            activeAttempt = undefined;
             pendingCalls.shift();
             // Save the next exact call without asking the model to re-plan completed work.
             if (pendingCalls.length > 0) await publish('tool_batch');
@@ -683,12 +693,14 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     target: Target | undefined,
     task: Task,
     iteration: number,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    attempt?: AgentCheckpoint['activeAttempt'],
+    receipt?: EvidenceRecord
   ): Promise<AgentStep> {
     signal?.throwIfAborted();
     const source = iteration < 0 ? 'backend_seeded' : 'agent';
-    const attemptId = `attempt-${randomUUID()}`;
-    const sourceToolCallId = `tool-call-${randomUUID()}`;
+    const attemptId = attempt?.attemptId || `attempt-${randomUUID()}`;
+    const sourceToolCallId = attempt?.sourceToolCallId || `tool-call-${randomUUID()}`;
     this.emit('agent:tool_call', { name: toolCall.name, args: toolCall.arguments, source });
 
     let toolResult: ToolResult;
@@ -696,7 +708,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       const targetReceipt = target?.metadata?.authorizationReceipt
         || target?.metadata?.scopeReceipt
         || target?.metadata?.receipt;
-      toolResult = await this.arsenal.execute(toolCall.name, {
+      if (receipt) this.emit('agent:thinking', { content: `Using the persisted completed result for ${toolCall.name}; no new tool execution.` });
+      toolResult = receipt ? receipt.result : await this.arsenal.execute(toolCall.name, {
         target,
         operator: this.options.sourceAgent,
         mission: task.missionId,
@@ -710,6 +723,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         abortSignal: signal,
       });
     } catch (err) {
+      if (err instanceof CheckpointWriteError) throw err;
       signal?.throwIfAborted();
       // A bad/hallucinated tool name must NOT crash the loop. Return the callable set so the
       // model self-corrects in-place instead of dying or looping on a tool that doesn't exist.
@@ -738,7 +752,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       attemptId,
       sourceToolCallId,
       evidenceRecordId: typeof toolResult.metadata?.evidenceRecordId === 'string' ? toolResult.metadata.evidenceRecordId : undefined,
-      timestamp: Date.now(),
+      timestamp: receipt?.timestamp || Date.now(),
     };
   }
 

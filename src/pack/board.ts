@@ -507,6 +507,22 @@ export class PackBoard extends EventEmitter<PackBoardEvents> {
     return Array.from(this.agents.values(), (a) => ({ ...a }));
   }
 
+  exportCheckpoint(): { leads: Lead[]; log: BoardEvent[]; agents: AgentStatus[] } {
+    return { leads: this.getAllLeads(), log: this.getLog(), agents: this.getAgents() };
+  }
+
+  restoreCheckpoint(state: ReturnType<PackBoard['exportCheckpoint']>): void {
+    const saved = structuredClone(state);
+    this.leads.clear(); this.byDedup.clear(); this.agents.clear();
+    this.log.splice(0, this.log.length, ...saved.log);
+    for (const lead of saved.leads) {
+      // The previous process owns no live agent leases after a restart.
+      if (lead.claim) { delete lead.claim; if (lead.status === 'claimed') lead.status = 'open'; lead.version++; }
+      this.leads.set(lead.id, lead); this.byDedup.set(lead.dedupKey, lead.id);
+    }
+    for (const agent of saved.agents) this.agents.set(agent.agentId, { ...agent, activity: 'gone' });
+  }
+
   /** Agents whose last heartbeat is within the liveness window. */
   getLiveAgents(now: number = this.now()): AgentStatus[] {
     return this.getAgents().filter((a) => a.activity !== 'gone' && now - a.lastSeen <= this.cfg.livenessWindowMs);

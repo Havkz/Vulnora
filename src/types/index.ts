@@ -511,6 +511,7 @@ export interface VulnoraConfig {
 
 export interface RuntimeHooks {
   onCheckpoint?: (task: Task) => Promise<void>;
+  onStateCheckpoint?: () => Promise<void>;
   onOperatorSpawned?: (operator: { id: string; archetype: OperatorArchetype }) => void;
   onOperatorStateChange?: (operator: { id: string }, newState: OperatorState) => void;
   onFindingDiscovered?: (finding: Finding, operator: { id: string }) => void;

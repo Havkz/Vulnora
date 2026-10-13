@@ -325,10 +325,11 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
     callsign: string,
     archetype: OperatorArchetype,
     config?: Partial<OperatorConfig>,
-    llm?: LLMBackbone
+    llm?: LLMBackbone,
+    id: string = randomUUID()
   ) {
     super();
-    this.id = randomUUID();
+    this.id = id;
     this.callsign = callsign;
     this.archetype = archetype;
     this.profile = resolveProfile(archetype);
@@ -352,6 +353,17 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
    */
   get state(): OperatorState {
     return { ...this._state };
+  }
+
+  exportCheckpoint() {
+    return structuredClone({ id: this.id, callsign: this.callsign, archetype: this.archetype,
+      config: this.config, state: this._state, findings: this.findings, credentials: this.credentials });
+  }
+
+  restoreCheckpoint(saved: ReturnType<OperatorAgent['exportCheckpoint']>): void {
+    if (this.activeTask || saved.id !== this.id) throw new Error('Cannot restore over a different or active operator.');
+    this._state = { ...saved.state, currentTask: null, status: saved.state.status === 'burned' ? 'burned' : 'idle' };
+    this.findings = structuredClone(saved.findings); this.credentials = structuredClone(saved.credentials);
   }
 
   /**
@@ -399,6 +411,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       this.setStatus('executing');
       const result = await this.executeTask(task, target, signal);
       if (!isCurrent()) return cancelled();
+      task.result = result;
 
       this._state.completedTasks++;
       this._state.currentTask = null;
@@ -483,6 +496,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
    */
   async executeTask(task: Task, target?: Target, signal?: AbortSignal): Promise<TaskResult> {
     signal?.throwIfAborted();
+    if (task.checkpoint?.phase === 'completed' && task.result) return task.result;
     // If we have an agent loop (LLM + Arsenal), use autonomous ReAct execution.
     // Pass the white-box source excerpt (if any) so the model sees the target's
     // real source alongside the task; empty string keeps black-box behavior.
@@ -879,6 +893,8 @@ export class OperatorCell extends EventEmitter<CellEvents> {
     this.llm = llm;
   }
 
+  getCapacity(): number { return this.maxOperators; }
+
   /**
    * Set the LLM backbone for all operators
    */
@@ -895,7 +911,8 @@ export class OperatorCell extends EventEmitter<CellEvents> {
   spawnOperator(
     callsign: string,
     archetype: OperatorArchetype,
-    config?: Partial<OperatorConfig>
+    config?: Partial<OperatorConfig>,
+    id?: string
   ): OperatorAgent {
     if (this.operators.size >= this.maxOperators) {
       this.emit('cell:capacity_warning', {
@@ -912,7 +929,7 @@ export class OperatorCell extends EventEmitter<CellEvents> {
       }
     }
 
-    const operator = new OperatorAgent(callsign, archetype, config, this.llm);
+    const operator = new OperatorAgent(callsign, archetype, config, this.llm, id);
 
     // Forward operator events
     operator.on('status:changed', ({ oldStatus }) => {

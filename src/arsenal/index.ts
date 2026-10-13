@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { commandPath } from '../command-path.js';
 import { EventEmitter } from 'eventemitter3';
+import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { createHash, randomUUID } from 'crypto';
 import { execFile } from 'child_process';
 import { access, mkdtemp, rm, writeFile } from 'fs/promises';
@@ -583,6 +584,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       return result;
     } catch (error) {
       execution.completedAt = Date.now();
+      if (error instanceof CheckpointWriteError) throw error;
       execution.error = redactConfiguredSecrets({
         success: false,
         error: error instanceof Error ? error.message : String(error),

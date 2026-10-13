@@ -235,6 +235,27 @@ export class MissionControl extends EventEmitter<MissionEvents> {
     this.taskQueue.on('task:added', task => this.emit('task:created', task));
   }
 
+  exportCheckpoint(): { missions: Mission[]; tasks: Task[]; activeMissionId: string | null } {
+    return structuredClone({ missions: this.getAllMissions(),
+      tasks: this.getAllMissions().flatMap(mission => this.taskQueue.getForMission(mission.id)),
+      activeMissionId: this.activeMissionId });
+  }
+
+  /** Restore a validated checkpoint without replaying task-creation events. */
+  restoreCheckpoint(state: ReturnType<MissionControl['exportCheckpoint']>): void {
+    const saved = structuredClone(state);
+    this.missions = new Map(saved.missions.map(mission => [mission.id, mission]));
+    this.activeMissionId = saved.activeMissionId;
+    this.taskQueue.clear();
+    for (const task of saved.tasks) {
+      if (task.status === 'assigned' || task.status === 'in_progress') {
+        task.status = 'pending';
+        delete task.assignedTo;
+      }
+      this.taskQueue.add(task);
+    }
+  }
+
   /**
    * Create a new mission
    */

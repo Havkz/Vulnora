@@ -1,4 +1,5 @@
 import { commandPath } from '../command-path.js';
+import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { redactSecrets } from '../redact.js';
 import { redactConfiguredSecrets } from '../arsenal/target-headers.js';
 import { createHash } from 'crypto';
@@ -369,6 +370,7 @@ export class ToolOrchestrator {
   private readonly dnsResolver: (host: string) => Promise<string[]>;
   private readonly evidenceStore: EvidenceStore;
   private readonly explicitRepeatLimit: number;
+  private onCheckpoint?: () => Promise<void>;
 
   constructor(options: {
     cacheTtlMs?: number;
@@ -403,6 +405,30 @@ export class ToolOrchestrator {
     return Object.fromEntries([...this.dependencyStatus.entries()].map(([name, value]) => [name, { ...value }]));
   }
   getEvidenceStoreBackend(): EvidenceStore['backend'] { return this.evidenceStore.backend; }
+  setCheckpointWriter(writer: () => Promise<void>): void { this.onCheckpoint = writer; }
+  private async persistCheckpoint(): Promise<void> {
+    try { await this.onCheckpoint?.(); } catch (error) { throw new CheckpointWriteError(error); }
+  }
+
+  exportCheckpoint() {
+    return structuredClone({ records: this.records, events: this.events, conflicts: this.conflicts,
+      budgets: [...this.budgets], network: [...this.network], metrics: this.metrics,
+      wildcardDns: [...this.wildcardDns], lastHostRequest: [...this.lastHostRequest] });
+  }
+
+  restoreCheckpoint(state: ReturnType<ToolOrchestrator['exportCheckpoint']>): void {
+    if (this.activeExecutions.size || this.inFlight.size) throw new Error('Cannot restore over active tool executions.');
+    const saved = structuredClone(state);
+    this.records.splice(0, this.records.length, ...saved.records);
+    this.events.splice(0, this.events.length, ...saved.events);
+    this.conflicts.splice(0, this.conflicts.length, ...saved.conflicts);
+    Object.assign(this.metrics, saved.metrics);
+    this.budgets.clear(); this.network.clear(); this.wildcardDns.clear(); this.lastHostRequest.clear();
+    for (const [key, value] of saved.budgets) this.budgets.set(key, value);
+    for (const [key, value] of saved.network) this.network.set(key, value);
+    for (const [key, value] of saved.wildcardDns) this.wildcardDns.set(key, value);
+    for (const [key, value] of saved.lastHostRequest) this.lastHostRequest.set(key, value);
+  }
   refreshPreflight(binary?: string): void { if (binary) this.dependencyStatus.delete(binary); else this.dependencyStatus.clear(); }
   markIncompleteArea(area: string): void {
     if (!this.metrics.incompleteAreas.includes(area)) this.metrics.incompleteAreas.push(area);
@@ -777,6 +803,8 @@ export class ToolOrchestrator {
     const cost = this.estimatedRequests(call);
     const reservation = this.reserveBudget(call, cost);
     if (reservation.failure) { this.store(call, context, reservation.failure, 0, 'budget_exceeded', reservation.estimated); return reservation.failure; }
+    // Retain charged budgets even if the process dies during the network operation.
+    await this.persistCheckpoint();
     const started = Date.now();
     const controller = new AbortController();
     context.abortSignal = context.abortSignal ? AbortSignal.any([controller.signal, context.abortSignal]) : controller.signal;
@@ -816,6 +844,7 @@ export class ToolOrchestrator {
       this.resolveConflicts(record);
       if (!result.success) { this.metrics.toolFailures++; this.emit('FAILED', record.errorType || 'tool error', call); }
       else this.emit('EXECUTED', 'new evidence', call);
+      await this.persistCheckpoint();
       return { ...record.result, metadata: { ...(record.result.metadata || {}), orchestrationStatus: record.errorType || 'executed', executionStatus: record.executionStatus, resultType: record.resultType, networkRequests: reconciled.actual ?? cost, evidenceRecordId: record.id, budgetCostEstimated: reservation.estimated, budgetCostActual: reconciled.actual, budgetCostSource: reconciled.source } };
     } finally {
       this.inFlight.delete(call.equivalentSignature);

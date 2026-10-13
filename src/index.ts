@@ -276,6 +276,9 @@ import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
 import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
+import { validateEngineCheckpoint, type EngineCheckpoint } from './projects/engine-checkpoint.js';
+import { redactString, redactSecrets } from './redact.js';
+import { redactConfiguredSecrets } from './arsenal/target-headers.js';
 import { OpGeneral } from './general/index.js';
 import {
   evaluateCoverage,
@@ -369,7 +372,11 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   private tickInterval: NodeJS.Timeout | null = null;
   private tickCount: number = 0;
   private hooks: RuntimeHooks;
-  private readonly taskTimeoutMs: number;
+  private defaultOperatorConfig?: VulnoraConfig['operators'];
+  private tickPromise?: Promise<void>;
+  private quiescing?: Promise<void>;
+  private restoredCompleted = false;
+  private taskTimeoutMs: number;
   private readonly phaseStatuses = new Map<string, string>();
   private readonly coverageRecoveryAttempts = new Map<string, number>();
   private readonly coverageTerminalized = new Map<string, Set<CoverageCapability>>();
@@ -416,6 +423,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     super();
     this.name = config.name;
     this.hooks = config.hooks || {};
+    this.defaultOperatorConfig = config.operators;
     this.taskTimeoutMs = VulnoraCommand.resolveTaskTimeoutMs(config.llm.provider);
 
     // Initialize LLM backbone
@@ -427,6 +435,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.targetEnv = new TargetEnvironment();
     this.vault = new EvidenceVault();
     this.arsenal = new Arsenal();
+    if (this.hooks.onStateCheckpoint) this.arsenal.getOrchestrator().setCheckpointWriter(() => this.persistState());
     this.opsec = new OpsecController(config.opsec);
     this.comms = new CommsChannel();
 
@@ -625,7 +634,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     });
 
     operator.on('agent:tool_call', ({ task, name, args, source }) => {
-      this.recordProgress('tool_call', operator, task, `${name} ${JSON.stringify(args || {})}`, { toolName: name, source });
+      this.recordProgress('tool_call', operator, task, `${name} ${JSON.stringify(redactSecrets(redactConfiguredSecrets(args || {})))}`, { toolName: name, source });
     });
 
     operator.on('agent:tool_result', ({ task, name, result, source }) => {
@@ -726,7 +735,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     detail: string,
     extra: Partial<Pick<ScanProgressEvent, 'toolName' | 'success' | 'source'>> = {}
   ): void {
-    const compact = String(detail || '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const fullDetail = redactString(redactConfiguredSecrets(String(detail || '')));
     const event: ScanProgressEvent = {
       id: `progress-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       timestamp: Date.now(),
@@ -736,7 +745,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       archetype: operator.archetype,
       taskId: task?.id,
       taskName: task?.name,
-      detail: compact,
+      detail: fullDetail,
       ...extra,
     };
 
@@ -855,6 +864,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    */
   public start(): void {
     if (this.running) return;
+    if (this.restoredCompleted) throw new Error('This saved project is completed; open its report instead of starting another scan.');
 
     // Auto-create a mission if none exists
     this.ensureMission();
@@ -872,8 +882,68 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     // Start tick loop (1 second interval). Catch any tick error so a single bad tick
     // (e.g. a spawn hitting the pool cap) can never take down the whole server process.
     this.tickInterval = setInterval(() => {
-      this.tick().catch(err => console.error('[VULNORA] tick error (mission continues):', err instanceof Error ? err.message : err));
+      if (this.tickPromise) return;
+      this.tickPromise = this.tick().then(() => this.persistState()).catch(err => {
+        this.pause();
+        console.error('[VULNORA] tick stopped:', err instanceof Error ? err.message : err);
+      }).finally(() => { this.tickPromise = undefined; });
     }, 1000);
+  }
+
+  private async persistState(): Promise<void> {
+    try { await this.hooks.onStateCheckpoint?.(); }
+    catch (error) { this.pause(); throw new CheckpointWriteError(error); }
+  }
+
+  public exportCheckpoint(): EngineCheckpoint {
+    return structuredClone({ version: 1, limits: { maxOperators: this.cell.getCapacity(), taskTimeoutMs: this.taskTimeoutMs },
+      mission: this.mission.exportCheckpoint(), targets: this.targetEnv.getAllTargets(),
+      vault: { findings: this.vault.getAllFindings(), credentials: this.vault.getAllCredentials() },
+      orchestrator: this.arsenal.getOrchestrator().exportCheckpoint(), opsec: this.opsec.exportCheckpoint(),
+      board: this.packBoard.exportCheckpoint(), operators: this.cell.getAllOperators().map(operator => operator.exportCheckpoint()),
+      command: { tickCount: this.tickCount, taskSeeded: this.taskSeeded, phaseStatuses: [...this.phaseStatuses],
+        coverageRecoveryAttempts: [...this.coverageRecoveryAttempts], coverageTerminalized: [...this.coverageTerminalized].map(([key, values]) => [key, [...values]]),
+        coverageSnapshots: [...this.coverageSnapshots], progressEvents: this.progressEvents, whiteboxSource: this.whiteboxSource,
+        spawnedFollowups: [...this.spawnedFollowups], leadsPosted: this.leadsPosted, followupsSpawned: this.followupsSpawned } });
+  }
+
+  public restoreCheckpoint(value: unknown): void {
+    if (this.running || this.cell.getAllOperators().length) throw new Error('Restore requires a fresh, stopped scanner.');
+    validateEngineCheckpoint(value);
+    const saved = structuredClone(value);
+    if (saved.operators.length > this.cell.getCapacity()) throw new Error('Configured operator capacity is smaller than the saved project. Restore its recorded limit first.');
+    this.taskTimeoutMs = saved.limits.taskTimeoutMs;
+    this.targetEnv.restoreCheckpoint(saved.targets);
+    this.mission.restoreCheckpoint(saved.mission);
+    this.vault.restoreCheckpoint(saved.vault);
+    this.arsenal.getOrchestrator().restoreCheckpoint(saved.orchestrator);
+    this.opsec.restoreCheckpoint(saved.opsec);
+    this.packBoard.restoreCheckpoint(saved.board);
+    const state = saved.command;
+    this.tickCount = state.tickCount; this.taskSeeded = state.taskSeeded; this.whiteboxSource = state.whiteboxSource;
+    this.progressEvents = state.progressEvents; this.leadsPosted = state.leadsPosted; this.followupsSpawned = state.followupsSpawned;
+    this.phaseStatuses.clear(); this.coverageRecoveryAttempts.clear(); this.coverageTerminalized.clear(); this.coverageSnapshots.clear(); this.spawnedFollowups.clear();
+    for (const [key, status] of state.phaseStatuses) this.phaseStatuses.set(key, status);
+    for (const [key, attempts] of state.coverageRecoveryAttempts) this.coverageRecoveryAttempts.set(key, attempts);
+    for (const [key, capabilities] of state.coverageTerminalized) this.coverageTerminalized.set(key, new Set(capabilities));
+    for (const [key, snapshot] of state.coverageSnapshots) this.coverageSnapshots.set(key, snapshot);
+    for (const id of state.spawnedFollowups) this.spawnedFollowups.add(id);
+    this.syncArsenalScope();
+    for (const operator of saved.operators) this.spawnOperator(operator.callsign, operator.archetype, operator);
+    this.restoredCompleted = !saved.mission.activeMissionId && saved.mission.missions.some(mission => mission.status === 'completed');
+  }
+
+  /** Stop scheduling, cancel cancellable work, and await every actual dispatch. */
+  public pauseAndDrain(): Promise<void> {
+    if (this.quiescing) return this.quiescing;
+    this.pause();
+    this.quiescing = (async () => {
+      await this.tickPromise;
+      for (const operator of this.dispatchOperators.values()) operator.abortActiveTask('project pause');
+      await Promise.allSettled([...this.dispatchPromises.values()]);
+      await this.persistState();
+    })().finally(() => { this.quiescing = undefined; });
+    return this.quiescing;
   }
 
   /**
@@ -950,6 +1020,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   /** The operator each in-flight dispatch was assigned to, keyed by task id — so a
    * timed-out dispatch can reset the exact wedged operator back to idle. */
   private dispatchOperators: Map<string, OperatorAgent> = new Map();
+  private dispatchPromises = new Map<string, Promise<void>>();
 
   /**
    * GENEROUS per-dispatch wall-clock backstop (ms). If a single task dispatch stays
@@ -1262,18 +1333,31 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       this.dispatchLastProgress.set(task.id, Date.now());
       this.dispatchOperators.set(task.id, operator);
       taskQueue.assign(task.id, operator.id);
+      try { await this.persistState(); }
+      catch (error) { this.clearDispatch(task.id); taskQueue.updateStatus(task.id, 'pending'); throw error; }
+      if (this.paused) {
+        this.clearDispatch(task.id);
+        taskQueue.updateStatus(task.id, 'pending');
+        break;
+      }
 
       // Execute asynchronously
-      operator.assignTask(task, target).then((result) => {
+      const dispatched = operator.assignTask(task, target).then(async (result) => {
         // If the backstop already reaped this dispatch, activeDispatches no longer
         // has it — skip so we don't clobber the timed-out task's terminal state or
         // double-fire the completion hook.
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
+        if (result.error?.startsWith('aborted:')) {
+          taskQueue.updateStatus(task.id, 'pending');
+          await this.persistState();
+          return;
+        }
         if (result.success === false) {
           if (result.skipReason) {
             taskQueue.updateStatus(task.id, 'skipped', result);
             this.phaseStatuses.set(`${mission.id}:${task.phase}:${target.id}`, result.outcomeStatus || result.skipReason);
+            await this.persistState();
             return;
           }
           const nonExploitOutcome = (task.operatorType === 'exploiter' || task.phase === KillChainPhase.DELIVER || task.phase === KillChainPhase.EXPLOIT)
@@ -1289,7 +1373,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
           taskQueue.complete(task.id, result);
           this.hooks.onTaskCompleted?.(task);
         }
-      }).catch((_error) => {
+        await this.persistState();
+      }).catch(async (_error) => {
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
         if (_error instanceof CheckpointWriteError || _error instanceof CheckpointRestoreError || _error instanceof UnsafeResumeError) {
@@ -1303,7 +1388,12 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         } catch (failErr) {
           // Swallow — task may already be in a terminal state
         }
-      });
+        await this.persistState();
+      }).catch(error => {
+        this.pause();
+        this.emit('recovery:blocked', { task, error: error instanceof Error ? error : new Error(String(error)) });
+      }).finally(() => { this.dispatchPromises.delete(task.id); });
+      this.dispatchPromises.set(task.id, dispatched);
     }
   }
 
@@ -1466,9 +1556,11 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    */
   public spawnOperator(
     callsign: string,
-    archetype: OperatorArchetype
+    archetype: OperatorArchetype,
+    saved?: ReturnType<OperatorAgent['exportCheckpoint']>
   ): OperatorAgent {
-    const operator = this.cell.spawnOperator(callsign, archetype);
+    const operator = this.cell.spawnOperator(callsign, archetype, saved?.config || this.defaultOperatorConfig?.defaultConfig, saved?.id);
+    if (saved) operator.restoreCheckpoint(saved);
     this.setupOperatorEvents(operator);
 
     // Attach the agent loop scoped to this archetype's SPECIALIZED role toolkit (defaultTools =
@@ -1487,7 +1579,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     const approvedTools = this.approval.approvedTools();
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
       onCheckpoint: async (_checkpoint, task) => {
-        try { await this.hooks.onCheckpoint?.(task); }
+        try { await this.hooks.onCheckpoint?.(task); await this.persistState(); }
         catch (error) { this.pause(); throw error; }
       },
       sourceAgent: callsign,
@@ -1634,7 +1726,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   public generateReport(missionId?: string): string {
     const mission = missionId
       ? this.mission.getMission(missionId)
-      : this.mission.getActiveMission();
+      : this.mission.getActiveMission() || this.mission.getAllMissions().at(-1);
 
     if (!mission) {
       throw new Error('No mission found for reporting');

@@ -26,7 +26,7 @@ function fixture(options: AgentLoopOptions = {}) {
   const execute = vi.fn().mockResolvedValue({ success: true, output: 'Complete unshortened fixture evidence' });
   const definitions = [{ name: 'http_request', description: 'Read a fixture URL', parameters: { type: 'object', properties: { url: { type: 'string' } } } }];
   const getReadyToolDefinitions = vi.fn().mockResolvedValue(definitions);
-  const arsenal = { execute, getReadyToolDefinitions, getToolDefinitions: () => definitions };
+  const arsenal = { execute, getReadyToolDefinitions, getToolDefinitions: () => definitions, getOrchestrator: () => ({ getEvidence: () => [] }) };
   return { loop: new AgentLoop(llm as unknown as LLMBackbone, arsenal as unknown as Arsenal, options),
     execute, chatWithTools, chat, getReadyToolDefinitions, llm };
 }

@@ -124,3 +124,22 @@ offering a resumable menu. A completed project opens its results without startin
   task decomposition. Nine focused recovery cases pass, including disk round-trip of
   a partial batch. Full regression: 52 suites, 585 passed, 16 POSIX skipped, 11
   preflight checks passed. Whole scanner/project/UI recovery is still pending.
+- Whole-engine snapshots now retain missions, queues, targets, evidence, budget
+  charges, network/backoff observations, coverage recovery, operator IDs/settings,
+  and coordination state. Restoring is validated before mutation and preserves the
+  original project scope. Local OS-owned leases prevent concurrent project execution.
+- Real subprocess kill/restart checks cover a completed GET followed by an interrupted
+  GET, and a POST whose completion receipt was persisted before the agent consumed it.
+  Completed work is reused without another request; a POST with no completion receipt
+  remains blocked. Request budgets are saved before execution and are never reset by restart.
+- ProjectSession connects atomic records, full event journals, safe in-flight drain,
+  report generation on explicit request, and reopening completed reports. Scan progress
+  now preserves multiline content without the previous 2000-character cut; the durable
+  journal preserves history beyond the in-memory window.
+- Focused recovery/session checks: 29 pass. Interactive keyboard/terminal integration,
+  decomposed-task recovery, adaptive presets, provider readiness and final installation
+  still need acceptance work; the new interactive CLI is not yet installed.
+- Whole recovery intermediate regression: 54 suites, 605 passed, 16 POSIX skipped,
+  and 11 preflight checks passed. Build passes; lint has zero errors and the 195
+  existing warnings. GitHub run `38419615223` verified the preceding agent milestone
+  on both Windows and Ubuntu; the whole-recovery commit has its own CI gate.

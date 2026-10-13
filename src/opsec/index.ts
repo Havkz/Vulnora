@@ -92,6 +92,7 @@ export class OpsecController extends EventEmitter<OpsecEvents> {
   private iocs: IOC[] = [];
   private inCooldown: boolean = false;
   private cooldownTimer: NodeJS.Timeout | null = null;
+  private cooldownUntil = 0;
 
   constructor(config?: Partial<OpsecConfig>) {
     super();
@@ -215,10 +216,12 @@ export class OpsecController extends EventEmitter<OpsecEvents> {
     if (this.inCooldown) return;
 
     this.inCooldown = true;
+    this.cooldownUntil = Date.now() + this.config.cooldownAfterDetection;
     this.emit('cooldown:started', { durationMs: this.config.cooldownAfterDetection });
 
     this.cooldownTimer = setTimeout(() => {
       this.inCooldown = false;
+      this.cooldownUntil = 0;
       this.cooldownTimer = null;
       this.emit('cooldown:ended');
     }, this.config.cooldownAfterDetection);
@@ -289,6 +292,24 @@ export class OpsecController extends EventEmitter<OpsecEvents> {
     return { ...this.config };
   }
 
+  exportCheckpoint(): { config: OpsecConfig; detections: DetectionEvent[]; iocs: IOC[]; cooldownUntil: number } {
+    return structuredClone({ config: this.config, detections: this.detectionEvents, iocs: this.iocs, cooldownUntil: this.cooldownUntil });
+  }
+
+  restoreCheckpoint(state: ReturnType<OpsecController['exportCheckpoint']>): void {
+    this.cleanup();
+    const saved = structuredClone(state);
+    this.config = saved.config; this.detectionEvents = saved.detections; this.iocs = saved.iocs;
+    this.cooldownUntil = saved.cooldownUntil;
+    this.inCooldown = saved.cooldownUntil > Date.now();
+    if (this.inCooldown) {
+      this.cooldownTimer = setTimeout(() => {
+        this.inCooldown = false; this.cooldownUntil = 0; this.cooldownTimer = null;
+        this.emit('cooldown:ended');
+      }, Math.min(2_147_483_647, saved.cooldownUntil - Date.now()));
+    }
+  }
+
   /**
    * Clear all detection events (for cleanup)
    */
@@ -305,5 +326,6 @@ export class OpsecController extends EventEmitter<OpsecEvents> {
       this.cooldownTimer = null;
     }
     this.inCooldown = false;
+    this.cooldownUntil = 0;
   }
 }

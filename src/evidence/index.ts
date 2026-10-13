@@ -97,6 +97,12 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
   private findings: Map<string, Finding> = new Map();
   private credentials: Map<string, Credential> = new Map();
 
+  restoreCheckpoint(state: { findings: Finding[]; credentials: Credential[] }): void {
+    const saved = structuredClone(state);
+    this.findings = new Map(saved.findings.map(finding => [finding.id, finding]));
+    this.credentials = new Map(saved.credentials.map(credential => [credential.id, credential]));
+  }
+
   /**
    * Add a finding
    */
