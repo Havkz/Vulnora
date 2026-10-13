@@ -12,7 +12,7 @@ assert.equal(settings.fallbackChain[0].provider, 'local');
 const arsenal = new Arsenal();
 arsenal.register(BUILTIN_TOOLS.find(tool => tool.name === 'base64_decode'));
 const tools = arsenal.getToolDefinitions();
-const data = Buffer.from('TEMPEST_CONNECTED').toString('base64');
+const data = Buffer.from('VULNORA_CONNECTED').toString('base64');
 const messages = [{ role: 'user', content: `Harmless offline harness connection check. Request exactly one base64_decode tool call with data=${data}. Do not decode it yourself. Do not read files, run commands or use network tools.` }];
 const session = createOllamaSession(settings);
 async function check(forceFallback) {
@@ -31,7 +31,7 @@ async function check(forceFallback) {
     assert.equal(call.arguments.data, data);
     const result = await arsenal.execute(call.name, { parameters: call.arguments });
     assert(result.success);
-    assert.match(result.output, /TEMPEST_CONNECTED/);
+    assert.match(result.output, /VULNORA_CONNECTED/);
     console.log(forceFallback ? 'OLLAMA_FALLBACK_TOOL_CALL_OK' : 'CODEX_TOOL_CALL_OK');
   } finally {
     if (previousPath === undefined) delete process.env.PATH;

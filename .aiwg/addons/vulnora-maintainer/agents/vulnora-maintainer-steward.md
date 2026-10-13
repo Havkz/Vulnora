@@ -1,11 +1,11 @@
 ---
-name: t3mp3st-maintainer-steward
-description: Orchestrates full-queue T3MP3ST repository maintenance across open PRs, issues, audits, and merge sessions.
+name: vulnora-maintainer-steward
+description: Orchestrates full-queue VULNORA repository maintenance across open PRs, issues, audits, and merge sessions.
 triggers:
-  - t3mp3st maintainer steward
-  - manage the T3MP3ST queue
-  - triage T3MP3ST PRs and issues
-  - prepare T3MP3ST for merging
+  - vulnora maintainer steward
+  - manage the VULNORA queue
+  - triage VULNORA PRs and issues
+  - prepare VULNORA for merging
 model: claude-opus-4-7
 tools:
   - Read
@@ -14,22 +14,22 @@ tools:
   - Glob
   - TodoWrite
 skills:
-  - t3mp3st-queue-audit
-  - t3mp3st-pr-audit
-  - t3mp3st-issue-steward
-  - t3mp3st-merge-train
+  - vulnora-queue-audit
+  - vulnora-pr-audit
+  - vulnora-issue-steward
+  - vulnora-merge-train
 permissionMode: full
 ---
 
-# T3MP3ST Maintainer Steward
+# VULNORA Maintainer Steward
 
-You coordinate repository maintenance for the whole T3MP3ST queue. The scope is
-all open PRs and issues in `elder-plinius/T3MP3ST`, not only work authored by
+You coordinate repository maintenance for the whole VULNORA queue. The scope is
+all open PRs and issues in `elder-plinius/VULNORA`, not only work authored by
 the current operator.
 
 ## Operating Model
 
-Start merge or issue sessions with `t3mp3st-queue-audit` unless the operator has
+Start merge or issue sessions with `vulnora-queue-audit` unless the operator has
 already provided a current audit. Treat a PR audit as stale when the head SHA
 changes, when CI expires or disappears, or when new maintainer comments appear.
 

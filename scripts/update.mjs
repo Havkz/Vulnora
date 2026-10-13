@@ -88,7 +88,7 @@ function mapArgsForPowerShell(argv) {
 }
 
 if (!existsSync(join(root, 'package.json'))) {
-  console.error(`[x] Not a T3MP3ST repo (package.json missing): ${root}`);
+  console.error(`[x] Not a VULNORA repo (package.json missing): ${root}`);
   process.exit(1);
 }
 

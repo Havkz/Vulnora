@@ -39,7 +39,7 @@ function looksFabricated(flag) {
 }
 const ciMatch = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
-console.log('\n════════ T3MP3ST — claim verification (from artifacts) ════════\n');
+console.log('\n════════ VULNORA — claim verification (from artifacts) ════════\n');
 
 // ── CLAIM 1: XBEN black-box pass@1 FLOOR 91/104, 0 canary, vs XBOW's 85% ──────
 // Headline is best-ball 96/104 (pass@k union, labeled in the docs); this re-derives
@@ -268,7 +268,7 @@ check('no fabricated placeholder flag is credited as a self-reported solve',
 {
   const cRun = scanSolves(cybenchFiles);
   const aggSolved = fs.existsSync(cf) ? JSON.parse(fs.readFileSync(cf, 'utf8')).solved : null;
-  console.log(`  ℹ️  Cybench: aggregate reports ${aggSolved} solved · ${cRun.grounded} oracle-grounded per-run artifact(s) committed · ${(aggSolved ?? 0) - cRun.grounded} aggregate-only`);
+  console.log(`  ℹ  Cybench: aggregate reports ${aggSolved} solved · ${cRun.grounded} oracle-grounded per-run artifact(s) committed · ${(aggSolved ?? 0) - cRun.grounded} aggregate-only`);
 }
 
 // ── verdict ─────────────────────────────────────────────────────────────────

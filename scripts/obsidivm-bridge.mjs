@@ -1,5 +1,5 @@
 /**
- * T3MP3ST ↔ OBSIDIVM bridge.
+ * VULNORA ↔ OBSIDIVM bridge.
  *
  * Thin HTTP client over OBSIDIVM's range API (default http://127.0.0.1:4200).
  * Importable as a module from other scripts:

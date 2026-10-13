@@ -1,5 +1,5 @@
 #!/bin/sh
-# install-hooks.sh — activate the t3mp3st push guard.
+# install-hooks.sh — activate the vulnora push guard.
 #
 # Sets core.hooksPath to .githooks AND copies the pre-push hook into
 # .git/hooks/pre-push so the guard fires even if hooksPath is ignored
@@ -21,4 +21,4 @@ cp .githooks/pre-push .git/hooks/pre-push
 # 3) Make both executable.
 chmod +x .githooks/pre-push .git/hooks/pre-push
 
-echo "t3mp3st push guard installed: core.hooksPath=.githooks + .git/hooks/pre-push (both executable)."
+echo "vulnora push guard installed: core.hooksPath=.githooks + .git/hooks/pre-push (both executable)."

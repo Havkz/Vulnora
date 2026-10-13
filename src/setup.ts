@@ -1,24 +1,23 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST Setup Wizard
+ * VULNORA Setup Wizard
  *
  * Interactive setup for configuring API keys and settings.
  */
 
 import inquirer from 'inquirer';
-import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
 import { config, AVAILABLE_MODELS, hasApiKey, setApiKey } from './config/index.js';
 import { LLMBackbone } from './llm/index.js';
-import { getBanner } from './index.js';
+import { renderLogo, theme } from './ui/theme.js';
 
 // =============================================================================
 // DISPLAY HELPERS
 // =============================================================================
 
 function showBanner(): void {
-  console.log(chalk.cyan(getBanner()));
+  console.log('\n' + renderLogo(process.stdout.columns || 80).join('\n') + '\n');
 }
 
 function showBox(title: string, content: string, borderColor: string = 'cyan'): void {
@@ -35,19 +34,19 @@ function showBox(title: string, content: string, borderColor: string = 'cyan'): 
 }
 
 function showSuccess(message: string): void {
-  console.log(chalk.green('✓ ') + message);
+  console.log(theme.success('✓ ') + message);
 }
 
 function showError(message: string): void {
-  console.log(chalk.red('✗ ') + message);
+  console.log(theme.error('✗ ') + message);
 }
 
 function showInfo(message: string): void {
-  console.log(chalk.blue('ℹ ') + message);
+  console.log(theme.active('ℹ ') + message);
 }
 
 function showWarning(message: string): void {
-  console.log(chalk.yellow('⚠ ') + message);
+  console.log(theme.warning(' ') + message);
 }
 
 // =============================================================================
@@ -57,7 +56,7 @@ function showWarning(message: string): void {
 async function setupOpenRouterKey(): Promise<boolean> {
   console.log('');
   showInfo('OpenRouter provides access to multiple AI models through a single API.');
-  showInfo('Get your API key at: ' + chalk.underline('https://openrouter.ai/keys'));
+  showInfo('Get your API key at: ' + theme.emphasis.underline('https://openrouter.ai/keys'));
   console.log('');
 
   const { apiKey } = await inquirer.prompt([
@@ -104,7 +103,7 @@ async function setupOpenRouterKey(): Promise<boolean> {
 async function setupVeniceKey(): Promise<boolean> {
   console.log('');
   showInfo('Venice AI is an OpenAI-compatible, privacy-focused provider (uncensored models).');
-  showInfo('Get your API key at: ' + chalk.underline('https://venice.ai/settings/api'));
+  showInfo('Get your API key at: ' + theme.emphasis.underline('https://venice.ai/settings/api'));
   console.log('');
 
   const { apiKey } = await inquirer.prompt([
@@ -151,7 +150,7 @@ async function setupVeniceKey(): Promise<boolean> {
 async function setupAnthropicKey(): Promise<boolean> {
   console.log('');
   showInfo('Anthropic provides direct access to Claude models.');
-  showInfo('Get your API key at: ' + chalk.underline('https://console.anthropic.com/'));
+  showInfo('Get your API key at: ' + theme.emphasis.underline('https://console.anthropic.com/'));
   console.log('');
 
   const { apiKey } = await inquirer.prompt([
@@ -197,7 +196,7 @@ async function setupAnthropicKey(): Promise<boolean> {
 async function setupDeepSeekKey(): Promise<boolean> {
   console.log('');
   showInfo('DeepSeek provides OpenAI-compatible chat and reasoning models.');
-  showInfo('Get your API key at: ' + chalk.underline('https://platform.deepseek.com/api_keys'));
+  showInfo('Get your API key at: ' + theme.emphasis.underline('https://platform.deepseek.com/api_keys'));
   console.log('');
 
   const { apiKey } = await inquirer.prompt([
@@ -244,7 +243,7 @@ async function setupDeepSeekKey(): Promise<boolean> {
 async function setupOpenAIKey(): Promise<boolean> {
   console.log('');
   showInfo('OpenAI provides access to GPT models.');
-  showInfo('Get your API key at: ' + chalk.underline('https://platform.openai.com/api-keys'));
+  showInfo('Get your API key at: ' + theme.emphasis.underline('https://platform.openai.com/api-keys'));
   console.log('');
 
   const { apiKey } = await inquirer.prompt([
@@ -290,7 +289,7 @@ async function setupOpenAIKey(): Promise<boolean> {
 async function setupLiteLLMProxy(): Promise<boolean> {
   console.log('');
   showInfo('LiteLLM is an AI gateway proxy that routes to 100+ LLM providers.');
-  showInfo('Docs: ' + chalk.underline('https://docs.litellm.ai/docs/proxy/quick_start'));
+  showInfo('Docs: ' + theme.emphasis.underline('https://docs.litellm.ai/docs/proxy/quick_start'));
   console.log('');
 
   const { baseUrl } = await inquirer.prompt([
@@ -407,16 +406,16 @@ async function runSetup(): Promise<void> {
   showBanner();
 
   showBox(
-    'Welcome to T3MP3ST Setup',
-    `This wizard will help you configure T3MP3ST for first use.
+    'Welcome to VULNORA Setup',
+    `This wizard will help you configure VULNORA for first use.
 
 You can use a local model with no API key, or add a key from one of these providers:
-• ${chalk.cyan('Local')} - Ollama / LM Studio / vLLM via TEMPEST_LOCAL_BASE_URL
-• ${chalk.cyan('OpenRouter')} (recommended) - Access multiple models
-• ${chalk.cyan('Anthropic')} - Direct Claude access
-• ${chalk.cyan('OpenAI')} - GPT models
-• ${chalk.cyan('DeepSeek')} - OpenAI-compatible chat/reasoning models
-• ${chalk.cyan('LiteLLM')} - AI gateway proxy (100+ providers)
+• ${theme.active('Local')} - Ollama / LM Studio / vLLM via VULNORA_LOCAL_BASE_URL
+• ${theme.active('OpenRouter')} (recommended) - Access multiple models
+• ${theme.active('Anthropic')} - Direct Claude access
+• ${theme.active('OpenAI')} - GPT models
+• ${theme.active('DeepSeek')} - OpenAI-compatible chat/reasoning models
+• ${theme.active('LiteLLM')} - AI gateway proxy (100+ providers)
 
 The setup will guide you through:
 1. Adding API key(s), if you use a hosted provider
@@ -483,15 +482,15 @@ The setup will guide you through:
   console.log('');
   showBox(
     'Setup Complete!',
-    `T3MP3ST is now configured and ready to use.
+    `VULNORA is now configured and ready to use.
 
 Quick start:
-${chalk.cyan('npx t3mp3st')}        Start the interactive CLI
-${chalk.cyan('npx t3mp3st --help')} View all commands
+${theme.active('npx vulnora')}        Start the interactive CLI
+${theme.active('npx vulnora --help')} View all commands
 
 Or use in your code:
-${chalk.gray(`import { createTempest } from 't3mp3st';
-const tempest = createTempest({ name: 'My Operation' });`)}`,
+${theme.muted(`import { createVulnora } from 'vulnora';
+const vulnora = createVulnora({ name: 'My Operation' });`)}`,
     'green'
   );
 }
@@ -504,27 +503,27 @@ async function setupApiKeys(): Promise<void> {
       message: 'Which hosted API keys would you like to configure? Leave empty to use a local model only.',
       choices: [
         {
-          name: `OpenRouter ${hasApiKey('openrouter') ? chalk.green('(configured)') : chalk.yellow('(recommended)')}`,
+          name: `OpenRouter ${hasApiKey('openrouter') ? theme.success('(configured)') : theme.warning('(recommended)')}`,
           value: 'openrouter',
         },
         {
-          name: `Venice ${hasApiKey('venice') ? chalk.green('(configured)') : ''}`,
+          name: `Venice ${hasApiKey('venice') ? theme.success('(configured)') : ''}`,
           value: 'venice',
         },
         {
-          name: `Anthropic ${hasApiKey('anthropic') ? chalk.green('(configured)') : ''}`,
+          name: `Anthropic ${hasApiKey('anthropic') ? theme.success('(configured)') : ''}`,
           value: 'anthropic',
         },
         {
-          name: `OpenAI ${hasApiKey('openai') ? chalk.green('(configured)') : ''}`,
+          name: `OpenAI ${hasApiKey('openai') ? theme.success('(configured)') : ''}`,
           value: 'openai',
         },
         {
-          name: `DeepSeek ${hasApiKey('deepseek') ? chalk.green('(configured)') : ''}`,
+          name: `DeepSeek ${hasApiKey('deepseek') ? theme.success('(configured)') : ''}`,
           value: 'deepseek',
         },
         {
-          name: `LiteLLM Proxy ${config.hasLiteLLMProxy() ? chalk.green('(configured)') : chalk.gray('(100+ providers via gateway)')}`,
+          name: `LiteLLM Proxy ${config.hasLiteLLMProxy() ? theme.success('(configured)') : theme.muted('(100+ providers via gateway)')}`,
           value: 'litellm',
         },
       ],
@@ -585,20 +584,20 @@ function viewConfiguration(): void {
   console.log('');
   showInfo('Current Configuration:');
   console.log('');
-  console.log(chalk.cyan('  Default Provider: ') + settings.defaultProvider);
-  console.log(chalk.cyan('  Default Model: ') + settings.defaultModel);
-  console.log(chalk.cyan('  Max Tokens: ') + settings.maxTokens);
-  console.log(chalk.cyan('  Temperature: ') + settings.temperature);
+  console.log(theme.active('  Default Provider: ') + settings.defaultProvider);
+  console.log(theme.active('  Default Model: ') + settings.defaultModel);
+  console.log(theme.active('  Max Tokens: ') + settings.maxTokens);
+  console.log(theme.active('  Temperature: ') + settings.temperature);
   console.log('');
-  console.log(chalk.cyan('  API Keys:'));
-  console.log('    OpenRouter: ' + (hasApiKey('openrouter') ? chalk.green('configured') : chalk.red('not set')));
-  console.log('    Venice: ' + (hasApiKey('venice') ? chalk.green('configured') : chalk.red('not set')));
-  console.log('    Anthropic: ' + (hasApiKey('anthropic') ? chalk.green('configured') : chalk.red('not set')));
-  console.log('    OpenAI: ' + (hasApiKey('openai') ? chalk.green('configured') : chalk.red('not set')));
-  console.log('    DeepSeek: ' + (hasApiKey('deepseek') ? chalk.green('configured') : chalk.red('not set')));
-  console.log('    LiteLLM Proxy: ' + (config.hasLiteLLMProxy() ? chalk.green('configured') : chalk.red('not set')));
+  console.log(theme.active('  API Keys:'));
+  console.log('    OpenRouter: ' + (hasApiKey('openrouter') ? theme.success('configured') : theme.error('not set')));
+  console.log('    Venice: ' + (hasApiKey('venice') ? theme.success('configured') : theme.error('not set')));
+  console.log('    Anthropic: ' + (hasApiKey('anthropic') ? theme.success('configured') : theme.error('not set')));
+  console.log('    OpenAI: ' + (hasApiKey('openai') ? theme.success('configured') : theme.error('not set')));
+  console.log('    DeepSeek: ' + (hasApiKey('deepseek') ? theme.success('configured') : theme.error('not set')));
+  console.log('    LiteLLM Proxy: ' + (config.hasLiteLLMProxy() ? theme.success('configured') : theme.error('not set')));
   console.log('');
-  console.log(chalk.cyan('  Config Path: ') + config.getConfigPath());
+  console.log(theme.active('  Config Path: ') + config.getConfigPath());
   console.log('');
 }
 

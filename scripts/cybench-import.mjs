@@ -88,20 +88,20 @@ function parseArgs(argv) {
 const enc = s => s.split('/').map(p => encodeURIComponent(p)).join('/');
 
 async function ghJson(url) {
-  const r = await fetch(url, { headers: { 'user-agent': 't3mp3st-cybench-importer', ...AUTH_HEADERS } });
+  const r = await fetch(url, { headers: { 'user-agent': 'vulnora-cybench-importer', ...AUTH_HEADERS } });
   if (!r.ok) throw new Error(`${url} → ${r.status}`);
   return r.json();
 }
 
 async function ghText(url) {
-  const r = await fetch(url, { headers: { 'user-agent': 't3mp3st-cybench-importer', ...AUTH_HEADERS } });
+  const r = await fetch(url, { headers: { 'user-agent': 'vulnora-cybench-importer', ...AUTH_HEADERS } });
   if (!r.ok) throw new Error(`${url} → ${r.status}`);
   return r.text();
 }
 
 async function ghTextOrNull(url) {
   try {
-    const r = await fetch(url, { headers: { 'user-agent': 't3mp3st-cybench-importer', ...AUTH_HEADERS } });
+    const r = await fetch(url, { headers: { 'user-agent': 'vulnora-cybench-importer', ...AUTH_HEADERS } });
     if (!r.ok) return null;
     return await r.text();
   } catch { return null; }
@@ -109,7 +109,7 @@ async function ghTextOrNull(url) {
 
 async function ghBytesOrNull(url) {
   try {
-    const r = await fetch(url, { headers: { 'user-agent': 't3mp3st-cybench-importer', ...AUTH_HEADERS } });
+    const r = await fetch(url, { headers: { 'user-agent': 'vulnora-cybench-importer', ...AUTH_HEADERS } });
     if (!r.ok) return null;
     const ab = await r.arrayBuffer();
     return Buffer.from(ab);
@@ -224,7 +224,7 @@ let _lfTree = null;
 async function getLosFuzzysTree() {
   if (_lfTree) return _lfTree;
   const j = await ghJson(`${LF_API}/git/trees/${LF_REF}?recursive=1`);
-  if (j.truncated) console.warn('  ⚠️  LosFuzzys tree truncated — deep files may be missing');
+  if (j.truncated) console.warn('    LosFuzzys tree truncated — deep files may be missing');
   _lfTree = j.tree || [];
   return _lfTree;
 }
@@ -392,7 +392,7 @@ async function importLosFuzzys(taskPath, slug, outDir, args) {
     };
     scan(taskDir);
 
-    console.log(`  [IMPORT-LF]   ${slug}  cat=${cat}  files=${copied}  scrub=${scrub}  src=LosFuzzys@${LF_REF.slice(0,7)}${leak ? `  ⚠️ LEAK in ${leak}` : ''}`);
+    console.log(`  [IMPORT-LF]   ${slug}  cat=${cat}  files=${copied}  scrub=${scrub}  src=LosFuzzys@${LF_REF.slice(0,7)}${leak ? `   LEAK in ${leak}` : ''}`);
     return { slug, imported: true, files: copied, scrub, leak };
   } finally {
     try { fs.rmSync(sandbox, { recursive: true, force: true }); } catch {}

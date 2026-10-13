@@ -28,7 +28,7 @@ import { checkRefutationAdjudication, checkSeverityEvidence } from './verify-fin
 import { lintDisclosure } from './lint-disclosure.mjs';
 import { honestyCheck, cvss31 } from './disclosure-gen.mjs';
 
-const PORT = process.env.T3MP3ST_PORT || 3333;
+const PORT = process.env.VULNORA_PORT || 3333;
 const BASE = `http://localhost:${PORT}`;
 const LIVE = process.argv.includes('--live');
 
@@ -196,7 +196,7 @@ async function serverUp() {
 const C = { g: '\x1b[32m', r: '\x1b[31m', y: '\x1b[33m', d: '\x1b[2m', b: '\x1b[1m', x: '\x1b[0m', t: '\x1b[36m' };
 async function main() {
   const up = await serverUp();
-  console.log(`\n${C.b}${C.t}████ t3mp3st · SOFT SMOKE TEST ████${C.x}`);
+  console.log(`\n${C.b}${C.t}████ vulnora · SOFT SMOKE TEST ████${C.x}`);
   console.log(`${C.d}the hardest single probe per category — if your agent would faceplant in a real workflow, this catches it.${C.x}`);
   console.log(`${C.d}server ${up ? C.g + 'UP' : C.y + 'DOWN'}${C.d} @ ${BASE}  ·  live LLM probe ${LIVE ? C.g + 'ON' : C.y + 'OFF (pass --live)'}${C.x}\n`);
 

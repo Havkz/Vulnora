@@ -125,12 +125,12 @@ async function fetchRetry(url, opts, tries = 5) {
 async function getRepoTree() {
   if (_treeCache) return _treeCache;
   const r = await fetchRetry(`${GH_API}/git/trees/main?recursive=1`, {
-    headers: { 'user-agent': 't3mp3st-cybench-service', ...AUTH },
+    headers: { 'user-agent': 'vulnora-cybench-service', ...AUTH },
   });
   if (!r.ok) throw new Error(`/git/trees → ${r.status}`);
   const j = await r.json();
   if (j.truncated) {
-    console.warn('  ⚠️  /git/trees response truncated — some deep files may be missing');
+    console.warn('    /git/trees response truncated — some deep files may be missing');
   }
   _treeCache = j.tree;
   return j.tree;
@@ -139,7 +139,7 @@ async function getRepoTree() {
 const enc = (s) => s.split('/').map(encodeURIComponent).join('/');
 
 async function fetchOneFile(repoPath, destPath) {
-  const r = await fetchRetry(`${GH_RAW}/${enc(repoPath)}`, { headers: { 'user-agent': 't3mp3st-cybench-service', ...AUTH } });
+  const r = await fetchRetry(`${GH_RAW}/${enc(repoPath)}`, { headers: { 'user-agent': 'vulnora-cybench-service', ...AUTH } });
   if (!r.ok) throw new Error(`raw ${repoPath} → ${r.status}`);
   const buf = Buffer.from(await r.arrayBuffer());
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -338,7 +338,7 @@ function ensurePortPublished(composePath, target) {
 // ---------------------------------------------------------------------------
 
 function projectName(sandboxDir) {
-  return 't3mp3st-cyb-' + path.basename(sandboxDir).slice(-40).replace(/[^a-z0-9-]/gi, '').toLowerCase();
+  return 'vulnora-cyb-' + path.basename(sandboxDir).slice(-40).replace(/[^a-z0-9-]/gi, '').toLowerCase();
 }
 
 async function ensureSharedNetwork() {
@@ -691,7 +691,7 @@ async function main() {
     const checked = [];
     for (const t of candidates) {
       try {
-        const r = await fetch(`${GH_RAW}/${enc(t)}/metadata/metadata.json`, { headers: { 'user-agent': 't3mp3st-cybench-service', ...AUTH } });
+        const r = await fetch(`${GH_RAW}/${enc(t)}/metadata/metadata.json`, { headers: { 'user-agent': 'vulnora-cybench-service', ...AUTH } });
         if (!r.ok) continue;
         const m = await r.json();
         if (m.target_host && String(m.target_host).trim()) checked.push({ path: t, meta: m });

@@ -11,7 +11,7 @@ mistake we made earlier ("44–56%", which traces to NO XBOW publication).
 - Corroborated: [xbow.com/blog/xbow-vs-humans](https://xbow.com/blog/xbow-vs-humans), **2024-08-05** — "85% in 28 minutes," vs a principal pentester 85% (in 40h), staff 59%, and a 5-human team 87.5%, on the same 104.
 - The benchmark set is the one we run: [github.com/xbow-engineering/validation-benchmarks](https://github.com/xbow-engineering/validation-benchmarks) — exactly 104 dirs (XBEN-001-24 … XBEN-104-24), Jeopardy-style, flag not hardcoded.
 
-### ⚠ What XBOW did NOT disclose (the caveats that bound the comparison)
+###  What XBOW did NOT disclose (the caveats that bound the comparison)
 - **Scoring protocol** — pass@1 vs pass@k / best-of-N is never stated. We do NOT know if their 85% is single-run.
 - **Model / agent version** — never named. Their 85% is the **2024** XBOW agent.
 - **No leaderboard file in the repo** — the 85% lives only in the two blog posts.

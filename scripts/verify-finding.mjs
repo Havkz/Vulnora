@@ -524,7 +524,7 @@ async function main() {
   else { console.log(`    ${osv.count} advisories${osv.ids.length ? ` (${osv.ids.slice(0, 8).join(', ')}${osv.ids.length > 8 ? '…' : ''})` : ''}`); console.log(`    possible overlap: ${osv.overlaps.length ? osv.overlaps.join(', ') : 'none flagged'}`); }
   console.log(`  manual novelty checks:`);
   for (const u of manualUrls(f)) console.log(`    · ${u}`);
-  if (cls && cls.memoryWrite) console.log(`\n  OOB-write obligation: ${cls.gaps.length ? '⚠ ' + cls.gaps.join('; ') : '✅ destination size + source provenance + missing-check all stated'}`);
+  if (cls && cls.memoryWrite) console.log(`\n  OOB-write obligation: ${cls.gaps.length ? ' ' + cls.gaps.join('; ') : '✅ destination size + source provenance + missing-check all stated'}`);
 
   console.log(`\n  PoC artifact (poc-executed must prove itself):`);
   if (!pocArt.present) console.log(`    ${poc === 'poc-executed' ? '❌ claims poc-executed but no poc_artifact block' : '— n/a (not poc-executed yet)'}`);
@@ -541,9 +541,9 @@ async function main() {
     !refAdj.present ? '❌ none — run scripts/refute-finding.mjs (independent panel; required for CONFIRMED)'
     : refAdj.verdict === 'SURVIVED' ? `✅ SURVIVED (${refAdj.refutedCount}/${refAdj.total} refuters found a guard)${refAdj.ran ? ' [live]' : ` [${refAdj.source}]`}`
     : refAdj.verdict === 'REFUTED' ? `❌ REFUTED (${refAdj.refutedCount}/${refAdj.total}${guardList ? ' @ ' + guardList : ''}) — OVERTURNED`
-    : `⚠ ${refAdj.verdict} (${refAdj.refutedCount}/${refAdj.total})`}`);
+    : ` ${refAdj.verdict} (${refAdj.refutedCount}/${refAdj.total})`}`);
   for (const n of refAdj.notes) console.log(`    · ${n}`);
-  console.log(`  novelty attestation : ${natt.present ? (natt.stale ? `⚠ stale (${natt.ageDays}d) — re-check before sending` : `✅ ${natt.date}${natt.ageDays != null ? ` (${natt.ageDays}d old)` : ''}`) : '❌ none recorded'}`);
+  console.log(`  novelty attestation : ${natt.present ? (natt.stale ? ` stale (${natt.ageDays}d) — re-check before sending` : `✅ ${natt.date}${natt.ageDays != null ? ` (${natt.ageDays}d old)` : ''}`) : '❌ none recorded'}`);
   if (args['check-head']) {
     console.log(`  still-vulnerable-at-HEAD:`);
     if (head.skipped) console.log(`    skipped — ${head.skipped}`);
@@ -552,10 +552,10 @@ async function main() {
 
   if (guard.applicable) {
     console.log(`\n  reachability — dominating-guard scan (sink length operand):`);
-    if (!guard.declared) console.log(`    ⚠ no sink {file,line,length_var} declared — add it so the guard scan can run automatically`);
+    if (!guard.declared) console.log(`     no sink {file,line,length_var} declared — add it so the guard scan can run automatically`);
     else if (!guard.scanned) console.log(`    — could not scan (${guard.fileMissing ? 'sink file not in repo' : 'repo not located'})`);
     else if (guard.dominatingCandidates.length) {
-      console.log(`    ⚠ ${guard.dominatingCandidates.length} upstream bound-check(s) on "${f.sink.length_var}" in the sink's function — confirm none dominates:`);
+      console.log(`     ${guard.dominatingCandidates.length} upstream bound-check(s) on "${f.sink.length_var}" in the sink's function — confirm none dominates:`);
       for (const g of guard.dominatingCandidates) console.log(`       line ${g.line}: ${g.text}`);
     } else console.log(`    ✅ no dominating guard on "${f.sink.length_var}" found in the enclosing function${guard.range ? ` (lines ${guard.range.from}-${guard.range.to})` : ''} — consistent with an unbounded sink`);
   }
@@ -563,10 +563,10 @@ async function main() {
   if (sevEv.applicable) {
     console.log(`\n  severity-evidence (CVSS vector vs reachability):`);
     if (!sevEv.flags.length) console.log(`    ✅ ${String(f.cvss_vector).replace('CVSS:3.1/', '')} consistent with the stated reachability`);
-    else { for (const fl of sevEv.flags) console.log(`    ⚠ ${fl}`); if (!args['strict-severity']) console.log(`    (advisory — pass --strict-severity to gate on these)`); }
+    else { for (const fl of sevEv.flags) console.log(`     ${fl}`); if (!args['strict-severity']) console.log(`    (advisory — pass --strict-severity to gate on these)`); }
   }
 
-  console.log(`\n  ${verdict === 'CONFIRMED' ? '✅' : verdict === 'REJECT' ? '❌' : '⚠'} VERDICT: ${verdict}`);
+  console.log(`\n  ${verdict === 'CONFIRMED' ? '✅' : verdict === 'REJECT' ? '❌' : ''} VERDICT: ${verdict}`);
   if (reasons.length) for (const r of reasons) console.log(`     - ${r}`);
   else console.log('     - all gates passed');
   console.log('');

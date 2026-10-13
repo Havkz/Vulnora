@@ -2,7 +2,7 @@
 # Linux / macOS / WSL updater (Windows uses update.ps1 via scripts/update.mjs).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UPSTREAM_URL='https://github.com/elder-plinius/T3MP3ST.git'
+UPSTREAM_URL='https://github.com/elder-plinius/VULNORA.git'
 UPSTREAM_BRANCH='main'
 UPSTREAM_REMOTE='upstream'
 DRY_RUN=0
@@ -104,13 +104,13 @@ command -v npm >/dev/null 2>&1 || { npm_install_help; exit 1; }
 if [[ -f "$ROOT/scripts/update-banner.txt" ]]; then
   cat "$ROOT/scripts/update-banner.txt"
 else
-  echo 'T3MP3ST'
+  echo 'VULNORA'
 fi
-echo '  T3MP3ST Updater'
+echo '  VULNORA Updater'
 echo '  Safe upstream sync - secrets, config, and bench artifacts stay local'
 echo
 
-backup="$(mktemp -d -t t3mp3st-update-backup.XXXXXX)"
+backup="$(mktemp -d -t vulnora-update-backup.XXXXXX)"
 manifest="$backup/manifest.txt"
 : >"$manifest"
 protected_count=0
@@ -247,7 +247,7 @@ else
 fi
 
 rule 'Never touched (outside repo)'
-plan_line '-' '$HOME/.config or AppData t3mp3st config'
+plan_line '-' '$HOME/.config or AppData vulnora config'
 plan_line '-' 'Codex / Hermes local agent auth'
 
 local_sha='(no commits yet)'

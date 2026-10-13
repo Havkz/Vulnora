@@ -4,7 +4,7 @@ import { posix, resolve, win32 } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-const rawBaseUrl = process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333';
+const rawBaseUrl = process.env.VULNORA_API_URL || 'http://127.0.0.1:3333';
 const jsonMode = process.argv.includes('--json');
 const strictMode = process.argv.includes('--strict');
 const checks = [];
@@ -98,7 +98,7 @@ function finish(startedAt, baseUrl, forcedPass) {
   const warnings = checks.filter(item => !item.passed && item.severity === 'warn');
   const passed = forcedPass ?? (blockers.length === 0 && (!strictMode || warnings.length === 0));
   const result = {
-    tool: 't3mp3st-ops-preflight',
+    tool: 'vulnora-ops-preflight',
     startedAt,
     finishedAt: new Date().toISOString(),
     baseUrl,
@@ -116,7 +116,7 @@ function finish(startedAt, baseUrl, forcedPass) {
   if (jsonMode) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`T3MP3ST ops preflight: ${passed ? 'PASS' : 'FAIL'}`);
+    console.log(`VULNORA ops preflight: ${passed ? 'PASS' : 'FAIL'}`);
     console.log(`${result.summary.passed}/${result.summary.checks} checks passed, ${warnings.length} warning(s), ${blockers.length} blocker(s)`);
     for (const item of checks) {
       const marker = item.passed ? 'ok' : item.severity === 'warn' ? 'warn' : 'block';
@@ -189,7 +189,7 @@ export async function main() {
   } else if (!localAgentShapeValid) {
     backendDetail = `server LLM unavailable; local-agent status ${localAgent.ok ? 'has invalid shape' : apiFailure(localAgent)}`;
   } else {
-    backendDetail = 'no server LLM or connected local agent - configure the provider in ~/.t3mp3st/.env';
+    backendDetail = 'no server LLM or connected local agent - configure the provider in ~/.vulnora/.env';
   }
   check('LLM backend available', backendAvailable, backendDetail, 'warn');
 

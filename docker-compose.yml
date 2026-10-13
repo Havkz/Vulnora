@@ -3,12 +3,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: t3mp3st
+    container_name: vulnora
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      - T3MP3ST_PORT=3333
+      - VULNORA_PORT=3333
     volumes:
       - ./reports:/app/reports
       - ./evidence:/app/evidence

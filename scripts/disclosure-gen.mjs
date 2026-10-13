@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * disclosure-gen — turn a VERIFIED t3mp3st finding into a coordinated-disclosure
+ * disclosure-gen — turn a VERIFIED vulnora finding into a coordinated-disclosure
  * package: a vendor-ready report, an email-ready plaintext, and a human send
  * checklist. This is the piece that closes the loop — research only counts when
  * the vendor can fix it.
@@ -250,7 +250,7 @@ function renderChecklist(f, cvss, tl, warnings) {
   out.push(`# Send checklist — ${f.project}\n`);
   out.push('> This tool drafted the package. **You** review and send it. Work top to bottom.\n');
   if (warnings.length) {
-    out.push('## ⚠ Honesty gate — resolve these first\n');
+    out.push('##  Honesty gate — resolve these first\n');
     for (const w of warnings) out.push(`- [ ] ${w}`);
     out.push('');
   }
@@ -346,7 +346,7 @@ function main() {
   console.log(`  written    :`);
   for (const w of written) console.log(`               ${path.relative(REPO, w)}`);
   if (warnings.length) {
-    console.log(`\n  ⚠ honesty gate (${warnings.length}) — resolve before sending:`);
+    console.log(`\n   honesty gate (${warnings.length}) — resolve before sending:`);
     for (const w of warnings) console.log(`     • ${w}`);
   }
   // vendor-cleanliness lint of the outgoing artifacts (safe-by-construction)
@@ -355,7 +355,7 @@ function main() {
   const blocks = leaks.filter((l) => l.sev === 'block');
   if (leaks.length) {
     console.log(`\n  vendor-cleanliness lint: ${blocks.length} blocking · ${leaks.length - blocks.length} warning(s)`);
-    for (const l of leaks) console.log(`     ${l.sev === 'block' ? '❌' : '⚠'} ${l.label}: "${l.snippet}"`);
+    for (const l of leaks) console.log(`     ${l.sev === 'block' ? '❌' : ''} ${l.label}: "${l.snippet}"`);
   } else console.log(`\n  vendor-cleanliness lint: ✅ clean`);
 
   console.log(`\n  NEXT: open ${path.relative(REPO, cp)} and work the checklist. This tool does NOT send — you do.\n`);

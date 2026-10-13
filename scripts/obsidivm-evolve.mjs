@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST × OBSIDIVM evolution loop.
+ * VULNORA × OBSIDIVM evolution loop.
  *
  * Per generation:
  *   1. Run obsidivm-bench against the live range.
@@ -60,7 +60,7 @@ if (process.platform === 'darwin') {
   for (const name of ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
     if (process.env[name]) continue;
     try {
-      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 't3mp3st-bench-keys', '-w'],
+      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 'vulnora-bench-keys', '-w'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       if (v) process.env[name] = v;
     } catch {}
@@ -84,7 +84,7 @@ function parseArgs(argv) {
     targetGrade: null,
     acceptThreshold: 0.7,
     obsidivmUrl: process.env.OBSIDIVM_URL || 'http://127.0.0.1:4200',
-    t3mp3stUrl:  process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333',
+    vulnoraUrl:  process.env.VULNORA_API_URL || 'http://127.0.0.1:3333',
     model: 'claude-opus-4-7',
     judgeModel: 'claude-sonnet-4-5',
     reset: false,
@@ -99,7 +99,7 @@ function parseArgs(argv) {
     else if (k === '--target-grade')       a.targetGrade = argv[++i];
     else if (k === '--accept-threshold')   a.acceptThreshold = parseFloat(argv[++i]);
     else if (k === '--obsidivm')           a.obsidivmUrl = argv[++i];
-    else if (k === '--t3mp3st')            a.t3mp3stUrl = argv[++i];
+    else if (k === '--vulnora')            a.vulnoraUrl = argv[++i];
     else if (k === '--model')              a.model = argv[++i];
     else if (k === '--judge-model')        a.judgeModel = argv[++i];
     else if (k === '--reset')              a.reset = true;
@@ -114,15 +114,15 @@ function parseArgs(argv) {
 }
 
 function help() {
-  console.log(`T3MP3ST × OBSIDIVM evolution loop
+  console.log(`VULNORA × OBSIDIVM evolution loop
 
-  --hunter <stub|live|t3mp3st>    bench hunter mode (default stub)
+  --hunter <stub|live|vulnora>    bench hunter mode (default stub)
   --target <id>                   restrict to single OBSIDIVM target
   --max-gens <N>                  run up to N sequential generations (default 1)
   --target-grade <A|B+|B|C+|...>  stop early when reached
   --accept-threshold <0..1>       auto-accept proposals at or above (default 0.7)
   --obsidivm <url>                OBSIDIVM base URL
-  --t3mp3st <url>                 t3mp3st base URL
+  --vulnora <url>                 vulnora base URL
   --model <name>                  hunter model (default claude-opus-4-7)
   --judge-model <name>            proposal-generator model (default claude-sonnet-4-5)
   --reset                         wipe bench/obsidivm-evolution/ and start fresh
@@ -189,7 +189,7 @@ function runBench(args, reportPath) {
       '--hunter', args.hunter,
       '--report', reportPath,
       '--obsidivm', args.obsidivmUrl,
-      '--t3mp3st',  args.t3mp3stUrl,
+      '--vulnora',  args.vulnoraUrl,
       '--model',    args.model,
       '--skip-record', // evolution writes its own gen manifest
     ];
@@ -237,7 +237,7 @@ function extractMisses(benchReport) {
 
 // ----- proposal generation ------------------------------------------------
 
-const JUDGE_PROPOSAL_SYSTEM = `You are the t3mp3st evolution engine. You are given a missed expected
+const JUDGE_PROPOSAL_SYSTEM = `You are the vulnora evolution engine. You are given a missed expected
 finding from the OBSIDIVM range scoring along with the target's context.
 Generate ONE concrete tactical addition that, if appended to a hunter
 agent's system prompt as "LEARNED TACTICS", would make it more likely
@@ -333,8 +333,8 @@ async function callLLM({ provider, apiKey, model, system, user, maxTokens, timeo
         : 'https://api.openai.com/v1/chat/completions';
       headers = { 'content-type': 'application/json', 'authorization': `Bearer ${apiKey}` };
       if (provider === 'openrouter') {
-        headers['HTTP-Referer'] = 'https://t3mp3st.bench/obsidivm-evolve';
-        headers['X-Title']      = 't3mp3st-obsidivm-evolve';
+        headers['HTTP-Referer'] = 'https://vulnora.bench/obsidivm-evolve';
+        headers['X-Title']      = 'vulnora-obsidivm-evolve';
       }
       body = { model: normalizeModel(model, provider), max_tokens: maxTokens,
                messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
@@ -358,7 +358,7 @@ async function callLLM({ provider, apiKey, model, system, user, maxTokens, timeo
 function appendAcceptedToAccumulator(gen, accepted) {
   const cur = loadAccumulator();
   const block = [
-    cur ? '' : '# T3MP3ST × OBSIDIVM — Learned Tactics',
+    cur ? '' : '# VULNORA × OBSIDIVM — Learned Tactics',
     cur ? '' : '',
     cur ? '' : 'This file accumulates accepted proposals from the evolution loop.',
     cur ? '' : 'Each generation appends below. Lower entries are newer.',
@@ -406,7 +406,7 @@ async function runGeneration(gen, args, spec) {
     const target = targetById[miss.target_id];
     if (!target) continue;
     try {
-      const p = args.hunter === 'live' || args.hunter === 't3mp3st'
+      const p = args.hunter === 'live' || args.hunter === 'vulnora'
         ? await generateProposalLLM(miss, target, args)
         : generateProposalHeuristic(miss, target);
       proposals.push(p);
@@ -460,7 +460,7 @@ async function main() {
   const ledger = loadLedger();
   const startGen = nextGenNumber(ledger);
   const endGen = startGen + args.maxGens - 1;
-  console.log(`T3MP3ST × OBSIDIVM evolve  gens=${startGen}..${endGen}  hunter=${args.hunter}  threshold=${args.acceptThreshold}`);
+  console.log(`VULNORA × OBSIDIVM evolve  gens=${startGen}..${endGen}  hunter=${args.hunter}  threshold=${args.acceptThreshold}`);
 
   let prevScore = ledger.generations.length > 0
     ? ledger.generations[ledger.generations.length - 1].score

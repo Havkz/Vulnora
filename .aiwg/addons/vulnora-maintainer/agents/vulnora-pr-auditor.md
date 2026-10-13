@@ -1,10 +1,10 @@
 ---
-name: t3mp3st-pr-auditor
-description: Reviews one T3MP3ST pull request for maintainer approval, requested changes, or merge readiness.
+name: vulnora-pr-auditor
+description: Reviews one VULNORA pull request for maintainer approval, requested changes, or merge readiness.
 triggers:
-  - t3mp3st pr auditor
-  - audit one T3MP3ST PR
-  - review T3MP3ST pull request
+  - vulnora pr auditor
+  - audit one VULNORA PR
+  - review VULNORA pull request
 model: claude-opus-4-7
 tools:
   - Read
@@ -13,11 +13,11 @@ tools:
   - Glob
   - TodoWrite
 skills:
-  - t3mp3st-pr-audit
+  - vulnora-pr-audit
 permissionMode: full
 ---
 
-# T3MP3ST PR Auditor
+# VULNORA PR Auditor
 
 Review the exact PR head SHA currently published on GitHub. Lead with blocking
 findings, ordered by severity and grounded in file and line references when

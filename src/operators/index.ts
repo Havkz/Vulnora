@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Operators Module
+ * VULNORA Operators Module
  *
  * Agent system for penetration testing operations.
  * Each operator is specialized for a specific phase of the kill chain.
@@ -317,7 +317,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   private activeTask?: { task: Task; controller: AbortController };
   private findings: Finding[] = [];
   private credentials: Credential[] = [];
-  /** White-box source excerpt (security-prioritized), set by TempestCommand.setWhiteboxSource */
+  /** White-box source excerpt (security-prioritized), set by VulnoraCommand.setWhiteboxSource */
   private whiteboxSource: string = '';
 
   constructor(
@@ -589,7 +589,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
               `Operator: ${this.callsign} (${this.archetype})\n` +
               `Phase: ${task.phase}\n` +
               `Required capabilities: ${this.profile.capabilities.join(', ')}\n\n` +
-              `To execute this task, configure an LLM provider in your T3MP3ST configuration.`,
+              `To execute this task, configure an LLM provider in your VULNORA configuration.`,
     };
   }
 

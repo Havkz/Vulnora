@@ -135,7 +135,7 @@ const checks = [
 
 const failures = checks.filter(check => !check.passed);
 const report = {
-  audit: 't3mp3st-prompt-audit',
+  audit: 'vulnora-prompt-audit',
   promptPath,
   resourcesPath,
   serverPath,

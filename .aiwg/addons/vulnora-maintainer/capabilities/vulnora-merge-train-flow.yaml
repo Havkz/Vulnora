@@ -1,14 +1,14 @@
 apiVersion: ops.aiwg.io/v1
 kind: OpsCapability
 metadata:
-  name: t3mp3st-merge-train-flow
+  name: vulnora-merge-train-flow
   labels:
     category: maintainer
-    repository: T3MP3ST
+    repository: VULNORA
   annotations:
     blast-radius: "repository-wide; merges code into main and may close linked issues"
 spec:
-  description: Merge validated T3MP3ST PRs one at a time with current CI, SHA, review, and issue reconciliation checks.
+  description: Merge validated VULNORA PRs one at a time with current CI, SHA, review, and issue reconciliation checks.
   version: "0.1.0"
   inputs:
     - name: pr_numbers
@@ -38,11 +38,11 @@ spec:
   target_requirements:
     os: [linux, macos]
     capabilities: [git, gh, npm]
-  agent: t3mp3st-release-integrator
+  agent: vulnora-release-integrator
   idempotent: false
   steps:
     - name: confirm-audit
-      description: Require a current t3mp3st-queue-audit result or perform one before merging.
+      description: Require a current vulnora-queue-audit result or perform one before merging.
     - name: verify-candidate
       description: Re-read PR head SHA, merge state, review decision, and status checks immediately before action.
     - name: confirm-public-input-threat-preflight
@@ -54,5 +54,5 @@ spec:
     - name: refresh
       description: Refresh the open PR queue before the next candidate.
   verification:
-    command: "gh pr list --repo elder-plinius/T3MP3ST --state open --limit 1 >/dev/null && git status --short --branch >/dev/null"
+    command: "gh pr list --repo elder-plinius/VULNORA --state open --limit 1 >/dev/null && git status --short --branch >/dev/null"
     expect: "command exits 0"

@@ -2,7 +2,7 @@
 // LOCAL AGENT CONNECTORS — "bring your own already-authed agent"
 // =============================================================================
 // Detect + connect agent CLIs that already live, authenticated, on the operator's machine
-// (Claude Code, Codex, Hermes) and drive them headlessly as t3mp3st operators.
+// (Claude Code, Codex, Hermes) and drive them headlessly as vulnora operators.
 //
 // SECURITY POSTURE (important):
 //   - We NEVER read, print, log, or transmit credential contents. Auth is detected purely by the
@@ -17,8 +17,8 @@ import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSy
 import { homedir, tmpdir, userInfo } from 'os';
 import { join, dirname, resolve } from 'path';
 
-// t3mp3st injects its OWN provider keys (from .env) into the server process. If we let those leak into
-// a spawned CLI, the CLI uses t3mp3st's key instead of the user's native login → 401. The entire point
+// vulnora injects its OWN provider keys (from .env) into the server process. If we let those leak into
+// a spawned CLI, the CLI uses vulnora's key instead of the user's native login → 401. The entire point
 // of this feature is "use the agent you already authed", so we strip these before spawning so each CLI
 // falls back to its own auth (keychain / ~/.codex/auth.json / ~/.hermes/.env).
 const PROVIDER_ENV_TO_STRIP = [
@@ -31,19 +31,19 @@ const PROVIDER_ENV_TO_STRIP = [
  * The REAL user home where the agent CLIs keep their own auth artifacts
  * (~/.claude.json, ~/.codex/auth.json, ~/.hermes/.env, macOS keychain).
  *
- * DELIBERATELY separate from os.homedir()/$HOME: T3MP3ST may run with HOME redirected
+ * DELIBERATELY separate from os.homedir()/$HOME: VULNORA may run with HOME redirected
  * (e.g. an isolated app-config dir), and os.homedir() returns that redirected path. Detecting
  * OR spawning the user's CLIs against a redirected HOME makes an installed-and-authed agent
  * look unavailable — the Settings checkboxes go dead and it reads like a UI bug. Resolution
  * order:
- *   1. T3MP3ST_AGENT_HOME    — explicit override (a launcher that redirects HOME sets this).
+ *   1. VULNORA_AGENT_HOME    — explicit override (a launcher that redirects HOME sets this).
  *   2. os.userInfo().homedir — the real home from the OS user DB (getpwuid), NOT affected by a
  *                              $HOME redirect, so this AUTO-recovers the correct home with no config.
  *   3. os.homedir()          — last-resort fallback.
  * os.homedir()/$HOME is intentionally left untouched for app-config storage (src/config reads it).
  */
 export function agentHome(): string {
-  const override = (process.env.T3MP3ST_AGENT_HOME || '').trim();
+  const override = (process.env.VULNORA_AGENT_HOME || '').trim();
   if (override) return override;
   try {
     const real = userInfo().homedir;
@@ -65,9 +65,9 @@ const localAppData = (rel: string): string =>
 
 /**
  * Env for a spawned agent CLI. Two adjustments to our own env:
- *   - strip the injected provider keys so the CLI falls back to its OWN native login (not t3mp3st's).
+ *   - strip the injected provider keys so the CLI falls back to its OWN native login (not vulnora's).
  *   - point HOME (and USERPROFILE on Windows) at the agentHome() so the CLI finds that login even
- *     when t3mp3st itself runs with HOME redirected for app-config storage. Same home the detector
+ *     when vulnora itself runs with HOME redirected for app-config storage. Same home the detector
  *     used, so "detected as authed" and "actually authenticates when spawned" stay consistent.
  */
 function childEnv(): NodeJS.ProcessEnv {
@@ -154,7 +154,7 @@ const SPECS: AgentSpec[] = [
     vendor: 'Hermes Agent',
     bin: 'hermes',
     blurb: 'Hermes Agent — tool-calling AI',
-    invokeHint: 'hermes -z "<prompt>"  (--yolo only if T3MP3ST_HERMES_YOLO=1)',
+    invokeHint: 'hermes -z "<prompt>"  (--yolo only if VULNORA_HERMES_YOLO=1)',
     versionArgs: ['--version'],
     parseVersion: (o) => (o.match(/v([\d]+\.[\d]+(\.[\d]+)?)/)?.[1]) || (o.match(/[\d]+\.[\d]+(\.[\d]+)?/) || ['?'])[0],
     // Hermes desktop on Windows stores its login under %LOCALAPPDATA%\hermes\ (NOT ~/.hermes/), so
@@ -172,12 +172,12 @@ export function getSpec(id: string): AgentSpec | undefined {
 /**
  * B-06 — Hermes '--yolo' auto-approves EVERY tool call with no confirmation:
  * powerful but dangerous (unattended command exec with no gate). It is OFF by
- * default; the operator must explicitly opt in with T3MP3ST_HERMES_YOLO=1. Safe
+ * default; the operator must explicitly opt in with VULNORA_HERMES_YOLO=1. Safe
  * mode (the default) runs Hermes without the flag so it honors its own approval
  * prompts. Applies to both the one-shot backbone call and the chat path.
  */
 export function hermesYoloEnabled(): boolean {
-  return /^(1|true|yes|on)$/i.test((process.env.T3MP3ST_HERMES_YOLO || '').trim());
+  return /^(1|true|yes|on)$/i.test((process.env.VULNORA_HERMES_YOLO || '').trim());
 }
 
 export interface AgentDetection {
@@ -202,7 +202,7 @@ const NEWLINE_RE = new RegExp('\\r?\\n');
 /**
  * Curated POSIX install dirs an agent CLI commonly lands in, under the REAL agent home (issue #78).
  *
- * The bug: a T3MP3ST server launched from Finder / the desktop app / any non-interactive shell
+ * The bug: a VULNORA server launched from Finder / the desktop app / any non-interactive shell
  * inherits launchd's minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin). That omits every place a CLI
  * actually installs — so `execFile('claude', …)` throws ENOENT and a working, authed CLI reads as
  * `installed:false`. We recover it by ALSO scanning these dirs (they are where Claude Code's native
@@ -360,10 +360,10 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
 
 /** Detect every known local agent CLI (installed? authed? ready?). No tokens spent. */
 export async function detectLocalAgents(): Promise<AgentDetection[]> {
-  // Test/CI hook: T3MP3ST_DISABLE_LOCAL_AGENTS=1 forces a backbone-less server (skip
+  // Test/CI hook: VULNORA_DISABLE_LOCAL_AGENTS=1 forces a backbone-less server (skip
   // local-agent auto-detection) so key-required / fail-closed paths can be exercised
   // deterministically — used by scripts/arsenal-smoke.mjs for a reproducible run.
-  if (/^(1|true|yes|on)$/i.test((process.env.T3MP3ST_DISABLE_LOCAL_AGENTS || '').trim())) return [];
+  if (/^(1|true|yes|on)$/i.test((process.env.VULNORA_DISABLE_LOCAL_AGENTS || '').trim())) return [];
   const settled = await Promise.allSettled(SPECS.map(detectOne));
   return settled.map((r, i) => {
     if (r.status === 'fulfilled') return r.value;
@@ -407,7 +407,7 @@ export function runLocalAgent(
   const t0 = Date.now();
   if (!spec) return Promise.resolve({ ok: false, latencyMs: 0, output: '', error: `unknown agent: ${id}` });
   const args = spec.oneShot(prompt, opts.model);
-  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS', 600000);
+  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('VULNORA_LOCAL_AGENT_TIMEOUT_MS', 600000);
   const maxChars = opts.maxChars ?? 4000;
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
@@ -460,7 +460,7 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
   const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model : undefined;
-  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS', 600000);
+  const timeoutMs = opts.timeoutMs ?? envTimeoutMs('VULNORA_LOCAL_AGENT_TIMEOUT_MS', 600000);
 
   let args: string[];
   let viaStdin = true;
@@ -469,7 +469,7 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   if (id === 'claude') {
     args = ['-p', '--output-format', 'text', ...(model ? ['--model', model] : [])];
   } else if (id === 'codex') {
-    workDir = mkdtempSync(join(tmpdir(), 't3mp3st-codexllm-'));
+    workDir = mkdtempSync(join(tmpdir(), 'vulnora-codexllm-'));
     outFile = join(workDir, 'reply.txt');
     args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never', '--sandbox', 'read-only', '--output-last-message', outFile, ...(model ? ['-m', model] : [])];
   } else { // hermes — takes the prompt as an arg

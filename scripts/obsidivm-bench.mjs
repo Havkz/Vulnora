@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST × OBSIDIVM end-to-end bench.
+ * VULNORA × OBSIDIVM end-to-end bench.
  *
  * For each chosen OBSIDIVM target:
  *   1. Fetch the canonical target spec from OBSIDIVM.
- *   2. Dispatch a t3mp3st hunter against the target's URL.
+ *   2. Dispatch a vulnora hunter against the target's URL.
  *      - --hunter=live   : direct LLM (OpenRouter / Anthropic / OpenAI auto-detect)
- *      - --hunter=t3mp3st: drive t3mp3st's /api/general/auto (full platform)
+ *      - --hunter=vulnora: drive vulnora's /api/general/auto (full platform)
  *      - --hunter=stub   : synthesized transcript (no LLM, for plumbing tests)
  *   3. Submit the agent transcript to OBSIDIVM's /api/score/text.
  *   4. Persist the run via OBSIDIVM's /api/runs ledger + per-target sessions.
@@ -16,7 +16,7 @@
  *   node scripts/obsidivm-bench.mjs                              # stub hunter, all 14 targets
  *   node scripts/obsidivm-bench.mjs --target dvwa --hunter stub
  *   node scripts/obsidivm-bench.mjs --target dvwa --hunter live
- *   node scripts/obsidivm-bench.mjs --hunter t3mp3st --t3mp3st http://127.0.0.1:3333
+ *   node scripts/obsidivm-bench.mjs --hunter vulnora --vulnora http://127.0.0.1:3333
  *   node scripts/obsidivm-bench.mjs --report /tmp/run.json
  *   node scripts/obsidivm-bench.mjs --skip-record           # don't write to ledger
  */
@@ -49,7 +49,7 @@ if (process.platform === 'darwin') {
   for (const name of ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
     if (process.env[name]) continue;
     try {
-      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 't3mp3st-bench-keys', '-w'],
+      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 'vulnora-bench-keys', '-w'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       if (v) process.env[name] = v;
     } catch {}
@@ -70,9 +70,9 @@ function detectProvider() {
 function parseArgs(argv) {
   const a = {
     targets: null,                          // null = all
-    hunter:  'stub',                        // stub | live | t3mp3st
+    hunter:  'stub',                        // stub | live | vulnora
     obsidivmUrl: process.env.OBSIDIVM_URL || 'http://127.0.0.1:4200',
-    t3mp3stUrl:  process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333',
+    vulnoraUrl:  process.env.VULNORA_API_URL || 'http://127.0.0.1:3333',
     model:    'claude-opus-4-7',
     timeoutMs: 180000,
     report:   null,
@@ -85,7 +85,7 @@ function parseArgs(argv) {
     else if (k === '--all')         a.targets = null;
     else if (k === '--hunter')      a.hunter  = argv[++i];
     else if (k === '--obsidivm')    a.obsidivmUrl = argv[++i];
-    else if (k === '--t3mp3st')     a.t3mp3stUrl  = argv[++i];
+    else if (k === '--vulnora')     a.vulnoraUrl  = argv[++i];
     else if (k === '--model')       a.model   = argv[++i];
     else if (k === '--timeout')     a.timeoutMs = parseInt(argv[++i], 10);
     else if (k === '--report')      a.report  = argv[++i];
@@ -100,16 +100,16 @@ function parseArgs(argv) {
 }
 
 function help() {
-  console.log(`T3MP3ST × OBSIDIVM bench
+  console.log(`VULNORA × OBSIDIVM bench
 
 Options:
   --target <id>           Target id (repeatable). Default: all 14 OBSIDIVM targets.
-  --hunter <stub|live|t3mp3st>
+  --hunter <stub|live|vulnora>
                           stub:    synthesized transcript (no LLM)
                           live:    direct LLM call
-                          t3mp3st: drive t3mp3st's /api/general/auto
+                          vulnora: drive vulnora's /api/general/auto
   --obsidivm <url>        OBSIDIVM base URL (default http://127.0.0.1:4200)
-  --t3mp3st <url>         t3mp3st base URL (default http://127.0.0.1:3333)
+  --vulnora <url>         vulnora base URL (default http://127.0.0.1:3333)
   --model <name>          LLM model id (default claude-opus-4-7)
   --timeout <ms>          per-target timeout (default 180000)
   --report <path>         write full JSON report
@@ -188,8 +188,8 @@ async function liveHunter(target, opts) {
   });
 }
 
-// A/B baseline: raw Claude with NO t3mp3st scaffolding. Just target URL +
-// "pentest this, write transcript". Δ vs liveHunter measures t3mp3st value.
+// A/B baseline: raw Claude with NO vulnora scaffolding. Just target URL +
+// "pentest this, write transcript". Δ vs liveHunter measures vulnora value.
 const DIRECT_CLAUDE_SYSTEM_OBS = `Authorized pentest. Output a structured transcript describing every distinct vulnerability you confirm: vulnerability class, exact payload, observed evidence, severity. No hedging.`;
 
 async function directClaudeHunter(target, opts) {
@@ -229,8 +229,8 @@ async function callLLM({ provider, apiKey, model, system, user, maxTokens, timeo
         : 'https://api.openai.com/v1/chat/completions';
       headers = { 'content-type': 'application/json', 'authorization': `Bearer ${apiKey}` };
       if (provider === 'openrouter') {
-        headers['HTTP-Referer'] = 'https://t3mp3st.bench/obsidivm';
-        headers['X-Title']      = 't3mp3st-obsidivm-bench';
+        headers['HTTP-Referer'] = 'https://vulnora.bench/obsidivm';
+        headers['X-Title']      = 'vulnora-obsidivm-bench';
       }
       body = { model: normalizeModel(model, provider), max_tokens: maxTokens, messages: [{ role: 'system', content: system }, { role: 'user', content: user }] };
     }
@@ -248,9 +248,9 @@ async function callLLM({ provider, apiKey, model, system, user, maxTokens, timeo
   }
 }
 
-async function t3mp3stHunter(target, opts) {
+async function vulnoraHunter(target, opts) {
   const provider = detectProvider();
-  if (!provider) throw new Error('t3mp3st hunter requires an LLM key in env/Keychain/.env');
+  if (!provider) throw new Error('vulnora hunter requires an LLM key in env/Keychain/.env');
 
   const targetUrl = `http://localhost:${target.port}`;
   const acc = loadAccumulator();
@@ -268,7 +268,7 @@ Produce a complete transcript of every distinct vulnerability you confirm, with 
     scopeHints: [targetUrl],
   };
 
-  const url = `${opts.t3mp3stUrl}/api/general/auto`;
+  const url = `${opts.vulnoraUrl}/api/general/auto`;
   const call = async () => {
     const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: r.status, ok: r.ok, body: await r.text() };
@@ -278,7 +278,7 @@ Produce a complete transcript of every distinct vulnerability you confirm, with 
     let approvalId = null;
     try { approvalId = JSON.parse(attempt.body)?.approval?.id; } catch {}
     if (!approvalId) break;
-    const ar = await fetch(`${opts.t3mp3stUrl}/api/approvals/${approvalId}/approve`, {
+    const ar = await fetch(`${opts.vulnoraUrl}/api/approvals/${approvalId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ approvedBy: 'obsidivm-bench', ttlMinutes: 30 }),
     });
@@ -286,13 +286,13 @@ Produce a complete transcript of every distinct vulnerability you confirm, with 
     body.approvalId = approvalId;
     attempt = await call();
   }
-  if (!attempt.ok) throw new Error(`t3mp3st auto failed ${attempt.status}: ${attempt.body.slice(0, 200)}`);
+  if (!attempt.ok) throw new Error(`vulnora auto failed ${attempt.status}: ${attempt.body.slice(0, 200)}`);
   const data = JSON.parse(attempt.body);
 
   // Poll findings ledger briefly, then concatenate findings + sitreps + plan into the transcript.
   const deadline = Date.now() + 30000;
   while (Date.now() < deadline) {
-    const fr = await fetch(`${opts.t3mp3stUrl}/api/findings`).catch(() => null);
+    const fr = await fetch(`${opts.vulnoraUrl}/api/findings`).catch(() => null);
     if (fr && fr.ok) {
       const j = await fr.json();
       if (j.findings && j.findings.length > 0) break;
@@ -300,13 +300,13 @@ Produce a complete transcript of every distinct vulnerability you confirm, with 
     await new Promise(r => setTimeout(r, 3000));
   }
   const [findingsResp, sitrepsResp, evidenceResp] = await Promise.all([
-    fetch(`${opts.t3mp3stUrl}/api/findings`).then(r => r.json()).catch(() => ({ findings: [] })),
-    fetch(`${opts.t3mp3stUrl}/api/general/sitreps`).then(r => r.json()).catch(() => ({ sitreps: [] })),
-    fetch(`${opts.t3mp3stUrl}/api/evidence`).then(r => r.json()).catch(() => ({ evidence: [] })),
+    fetch(`${opts.vulnoraUrl}/api/findings`).then(r => r.json()).catch(() => ({ findings: [] })),
+    fetch(`${opts.vulnoraUrl}/api/general/sitreps`).then(r => r.json()).catch(() => ({ sitreps: [] })),
+    fetch(`${opts.vulnoraUrl}/api/evidence`).then(r => r.json()).catch(() => ({ evidence: [] })),
   ]);
 
   const lines = [];
-  lines.push(`# T3MP3ST mission ${data?.plan?.codename || data?.execution?.missionName || ''} against ${targetUrl}`);
+  lines.push(`# VULNORA mission ${data?.plan?.codename || data?.execution?.missionName || ''} against ${targetUrl}`);
   lines.push('');
   lines.push('## Plan');
   lines.push(JSON.stringify(data?.plan || {}, null, 2));
@@ -337,7 +337,7 @@ function stubHunter(target) {
   const half = Math.ceil(expected.length / 2);
   const lines = [];
   lines.push(`# Stub hunter transcript for ${target.name} (${target.id}) at http://localhost:${target.port}`);
-  lines.push(`# This transcript is synthesized — used to test the t3mp3st × OBSIDIVM scoring pipeline.`);
+  lines.push(`# This transcript is synthesized — used to test the vulnora × OBSIDIVM scoring pipeline.`);
   lines.push('');
   for (const e of expected.slice(0, half)) {
     // Use first 2 keywords of each finding to guarantee match without
@@ -365,7 +365,7 @@ async function runOnce(args) {
     throw new Error(`no targets matched filter ${JSON.stringify(args.targets)}`);
   }
 
-  console.log(`T3MP3ST × OBSIDIVM bench  hunter=${args.hunter}  targets=${targets.length}  obsidivm=${args.obsidivmUrl}`);
+  console.log(`VULNORA × OBSIDIVM bench  hunter=${args.hunter}  targets=${targets.length}  obsidivm=${args.obsidivmUrl}`);
   console.log('');
 
   // HONESTY GATE: without --replay the transcript is an UNPROBED narrative (the LLM
@@ -374,8 +374,8 @@ async function runOnce(args) {
   const simulated = !args.replay;
   if (simulated) {
     args.skipRecord = true;
-    console.log('  ⚠️  SIMULATION MODE — no live probing (pass --replay to actually hit the target).');
-    console.log('  ⚠️  Scores below are NARRATIVE-ONLY, NOT a capability measurement; ledger write disabled.');
+    console.log('    SIMULATION MODE — no live probing (pass --replay to actually hit the target).');
+    console.log('    Scores below are NARRATIVE-ONLY, NOT a capability measurement; ledger write disabled.');
     console.log('');
   }
 
@@ -387,7 +387,7 @@ async function runOnce(args) {
     try {
       if      (args.hunter === 'live')          transcript = await liveHunter(t, args);
       else if (args.hunter === 'direct-claude') transcript = await directClaudeHunter(t, args);
-      else if (args.hunter === 't3mp3st')       transcript = await t3mp3stHunter(t, args);
+      else if (args.hunter === 'vulnora')       transcript = await vulnoraHunter(t, args);
       else                                      transcript = stubHunter(t);
     } catch (e) {
       error = e.message || String(e);
@@ -439,8 +439,8 @@ async function runOnce(args) {
   if (!args.skipRecord) {
     try {
       runRecord = await o.createRun({
-        agent: `t3mp3st-bench-${args.hunter}`,
-        notes: `T3MP3ST×OBSIDIVM bench hunter=${args.hunter} model=${args.model} suite_grade=${suiteGrade}`,
+        agent: `vulnora-bench-${args.hunter}`,
+        notes: `VULNORA×OBSIDIVM bench hunter=${args.hunter} model=${args.model} suite_grade=${suiteGrade}`,
         spec_version: spec.version,
       });
       const runId = runRecord.run_id || runRecord.id;
@@ -461,7 +461,7 @@ async function runOnce(args) {
   }
 
   const out = {
-    schema: 't3mp3st.obsidivm.bench/v1',
+    schema: 'vulnora.obsidivm.bench/v1',
     timestamp: new Date().toISOString(),
     hunter: args.hunter,
     model: args.hunter === 'stub' ? 'stub' : args.model,

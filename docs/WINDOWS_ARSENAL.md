@@ -1,16 +1,16 @@
 # Windows CLI with a dedicated Linux arsenal
 
-The local `tempest` launcher uses the WSL 2 distribution `Tempest-Arsenal`. Its disk and
-verified Kali rootfs live in `%USERPROFILE%\.t3mp3st\sandbox`. The application runs as
-the Linux user `tempest` in `/home/tempest/app`, from an archive of the committed repository.
+The local `vulnora` launcher uses the WSL 2 distribution `Vulnora-Arsenal`. Its disk and
+verified Kali rootfs live in `%USERPROFILE%\.vulnora\sandbox`. The application runs as
+the Linux user `vulnora` in `/home/vulnora/app`, from an archive of the committed repository.
 It opens the terminal CLI. No web UI or API server is started.
 Passwordless sudo is granted during installation and removed after the installer succeeds.
 
 Windows must restart after enabling Windows Subsystem for Linux and Virtual Machine Platform.
-The first `tempest` invocation then imports the staged rootfs and installs the arsenal using
+The first `vulnora` invocation then imports the staged rootfs and installs the arsenal using
 `scripts/setup-windows-arsenal.ps1`. Package installation can take substantial time and disk
 space. A failed install stops with an error and never writes the readiness marker. It can be
-retried by running `tempest` again.
+retried by running `vulnora` again.
 
 Setup checks a default route and Kali DNS before package installation. Package-index
 download failures abort setup, rather than continuing with incomplete indexes. If mirrored

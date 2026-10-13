@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Arsenal — capability approval + spicy-action warning gate.
+ * VULNORA Arsenal — capability approval + spicy-action warning gate.
  *
  * The human-veto layer that lets an operator be trusted with live post-ex tools (metasploit, hydra,
  * sqlmap, …) safely: an intrusive/credential/dangerous tool is INERT until the tool has been approved
@@ -22,7 +22,7 @@
  * BUILT-IN probes (sqli_scan, password_spray, …) ship UNGATED for backward-compatibility — their
  * safety boundary is the always-on egress SCOPE gate (an out-of-scope target is refused regardless of
  * approval). An operator can extend this gate to cover the spicy built-ins too by launching with
- * T3MP3ST_GATE_BUILTINS=1, which stamps them with a riskTier. So the fail-safe above applies to every
+ * VULNORA_GATE_BUILTINS=1, which stamps them with a riskTier. So the fail-safe above applies to every
  * tool that is gated; it does not, by itself, make the ungated built-ins inert.
  *
  * This module is PURE — no engine/server imports, no I/O. The host injects the approver + warning

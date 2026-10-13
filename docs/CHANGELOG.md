@@ -1,4 +1,4 @@
-# T3MP3ST Changelog
+# VULNORA Changelog
 
 ## 2026-05-28 — Cognitive v3 + Integrity Hardening
 

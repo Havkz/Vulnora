@@ -1,16 +1,16 @@
 ---
-namespace: t3mp3st-maintainer
-name: t3mp3st-merge-train
+namespace: vulnora-maintainer
+name: vulnora-merge-train
 platforms: [all]
-description: Run a conservative T3MP3ST maintainer merge train, merging validated PRs one at a time and reconciling issues after each merge.
+description: Run a conservative VULNORA maintainer merge train, merging validated PRs one at a time and reconciling issues after each merge.
 triggers:
-  - t3mp3st merge train
-  - merge T3MP3ST PRs
-  - start T3MP3ST merge session
+  - vulnora merge train
+  - merge VULNORA PRs
+  - start VULNORA merge session
   - maintainer merge queue
 requires:
   - merge-candidates: one or more PR numbers, or a queue-audit ready list
-  - github-maintainer-access: permission to merge elder-plinius/T3MP3ST PRs
+  - github-maintainer-access: permission to merge elder-plinius/VULNORA PRs
 ensures:
   - one-at-a-time: only one PR is merged before rechecking queue state
   - ci-green: each merged PR has green required checks or explicit maintainer override
@@ -23,9 +23,9 @@ commandHint:
   category: release-management
 ---
 
-# T3MP3ST Merge Train
+# VULNORA Merge Train
 
-Use this after `t3mp3st-queue-audit` identifies ready PRs.
+Use this after `vulnora-queue-audit` identifies ready PRs.
 
 ## Merge Policy
 

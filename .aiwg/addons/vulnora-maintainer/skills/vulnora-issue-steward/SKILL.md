@@ -1,16 +1,16 @@
 ---
-namespace: t3mp3st-maintainer
-name: t3mp3st-issue-steward
+namespace: vulnora-maintainer
+name: vulnora-issue-steward
 platforms: [all]
-description: Triage and steward T3MP3ST issues as a maintainer, deciding whether to answer, close, link to PRs, file follow-ups, or send to address-issues.
+description: Triage and steward VULNORA issues as a maintainer, deciding whether to answer, close, link to PRs, file follow-ups, or send to address-issues.
 triggers:
-  - t3mp3st issue steward
-  - triage T3MP3ST issue
-  - respond to T3MP3ST issue
-  - maintain T3MP3ST issues
+  - vulnora issue steward
+  - triage VULNORA issue
+  - respond to VULNORA issue
+  - maintain VULNORA issues
 requires:
   - issue-number: one or more issue numbers, or open issue filter
-  - github: elder-plinius/T3MP3ST issue access
+  - github: elder-plinius/VULNORA issue access
 ensures:
   - issue-classification: each issue has a concrete class and next action
   - respectful-response: user-facing comments are clear and evidence-based
@@ -22,7 +22,7 @@ commandHint:
   category: issue-management
 ---
 
-# T3MP3ST Issue Steward
+# VULNORA Issue Steward
 
 Use this to handle issue threads before implementation.
 

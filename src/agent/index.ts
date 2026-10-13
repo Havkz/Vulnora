@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Agent Loop
+ * VULNORA Agent Loop
  *
  * ReAct (Reason + Act) agent that connects LLM tool calling to Arsenal execution.
  * This is the core autonomous loop: the LLM decides which tool to use,
@@ -86,12 +86,12 @@ export interface AgentResult {
 
 export function maxToolCallsPerTask(toolName: string): number | undefined {
   if (toolName === 'nmap_scan') {
-    const configured = Number(process.env.T3MP3ST_NMAP_MAX_CALLS_PER_TASK || 4);
+    const configured = Number(process.env.VULNORA_NMAP_MAX_CALLS_PER_TASK || 4);
     return Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.min(10, Math.round(configured))) : 4;
   }
   if (toolName === 'port_scan') return 4;
   if (toolName === 'nuclei_scan') {
-    const configured = Number(process.env.T3MP3ST_NUCLEI_MAX_CALLS_PER_TASK || 4);
+    const configured = Number(process.env.VULNORA_NUCLEI_MAX_CALLS_PER_TASK || 4);
     return Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.min(8, Math.round(configured))) : 4;
   }
   return undefined;

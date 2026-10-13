@@ -52,9 +52,9 @@ export class JsonlEvidenceStore extends MemoryEvidenceStore {
 }
 
 export function evidenceStoreFromEnvironment(): EvidenceStore {
-  const backend = String(process.env.T3MP3ST_EVIDENCE_STORE || 'memory').toLowerCase();
+  const backend = String(process.env.VULNORA_EVIDENCE_STORE || 'memory').toLowerCase();
   if (backend === 'jsonl') {
-    return new JsonlEvidenceStore(process.env.T3MP3ST_EVIDENCE_JSONL_PATH || join(tmpdir(), 't3mp3st-evidence.jsonl'));
+    return new JsonlEvidenceStore(process.env.VULNORA_EVIDENCE_JSONL_PATH || join(tmpdir(), 'vulnora-evidence.jsonl'));
   }
   // SQLite is reserved by the interface but intentionally not required as a dependency.
   return new MemoryEvidenceStore();

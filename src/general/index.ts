@@ -1,12 +1,12 @@
 /**
- * T3MP3ST Op General — Autonomous Operation Orchestrator
+ * VULNORA Op General — Autonomous Operation Orchestrator
  *
- * The General is the strategic brain that sits above TempestCommand.
+ * The General is the strategic brain that sits above VulnoraCommand.
  * Given only a high-level directive (natural language), it uses LLM to:
  *
  * 1. Analyze the directive and identify targets, objectives, and constraints
  * 2. Produce a structured Operation Plan (OpPlan)
- * 3. Configure and launch the TempestCommand instance
+ * 3. Configure and launch the VulnoraCommand instance
  * 4. Monitor progress and adapt the plan based on findings/resistance
  * 5. Make strategic decisions: pivot, escalate, withdraw, re-prioritize
  * 6. Produce a final strategic assessment when complete
@@ -19,7 +19,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
 import type { LLMBackbone } from '../llm/index.js';
-import type { TempestCommand } from '../index.js';
+import type { VulnoraCommand } from '../index.js';
 import type {
   OperatorArchetype,
   OpsecLevel,
@@ -463,7 +463,7 @@ export class OpGeneral extends EventEmitter<GeneralEvents> {
   }
 
   private buildCodexFastSystemPrompt(): string {
-    return `You are THE GENERAL, T3MP3ST's Codex-backed zero-day autohunt planner.
+    return `You are THE GENERAL, VULNORA's Codex-backed zero-day autohunt planner.
 
 You produce fast, evidence-first OpPlans for authorized local or explicitly scoped research. Favor weird-machine hypotheses, component-boundary failures, and cross-domain compositions over checklist scanning. Stay in planning mode unless receipts explicitly authorize execution. Every claim needs a safe probe, expected signal, evidence artifact, falsifier, and retest.
 
@@ -541,7 +541,7 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
     // Construct validated OpPlan from parsed JSON
     const plan: OpPlan = {
       id: randomUUID(),
-      codename: json.codename || 'OPERATION TEMPEST',
+      codename: json.codename || 'OPERATION VULNORA',
       summary: json.summary || directive.objective,
       targets,
       objectives: Array.isArray(json.objectives) ? json.objectives.map((o: any, i: number) => ({
@@ -1086,7 +1086,7 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
   }
 
   // ===========================================================================
-  // EXECUTION PHASE — Configure and launch TempestCommand
+  // EXECUTION PHASE — Configure and launch VulnoraCommand
   // ===========================================================================
 
   /**
@@ -1247,7 +1247,7 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
   }
 
   /**
-   * Execute the current plan by configuring a TempestCommand instance.
+   * Execute the current plan by configuring a VulnoraCommand instance.
    * Returns the configuration payload that should be used to create/start the mission.
    */
   executePlan(plan?: OpPlan): {
@@ -1337,10 +1337,10 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
   // ===========================================================================
 
   /**
-   * Start monitoring a running TempestCommand for situation reports.
+   * Start monitoring a running VulnoraCommand for situation reports.
    * Listens for findings and periodically produces sitreps.
    */
-  startMonitoring(command: TempestCommand): void {
+  startMonitoring(command: VulnoraCommand): void {
     if (this.monitoringActive) return;
     this.monitoringActive = true;
 
@@ -1375,7 +1375,7 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
   /**
    * Produce a situation report using LLM analysis
    */
-  async produceSitrep(command: TempestCommand): Promise<GeneralSitrep> {
+  async produceSitrep(command: VulnoraCommand): Promise<GeneralSitrep> {
     const status = command.getStatus();
     const findings = command.vault.getAllFindings();
     const mission = command.mission.getActiveMission();
@@ -1489,7 +1489,7 @@ Return only a valid JSON object wrapped in a json code block. Keep it compact, c
   /**
    * Produce a final strategic assessment of the operation
    */
-  async produceAssessment(command: TempestCommand): Promise<StrategicAssessment> {
+  async produceAssessment(command: VulnoraCommand): Promise<StrategicAssessment> {
     this.stopMonitoring();
 
     const findings = command.vault.getAllFindings();

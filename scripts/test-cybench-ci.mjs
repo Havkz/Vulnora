@@ -115,7 +115,7 @@ if (!corpusAvailable) {
 }
 
 console.log('\nbackwards-compat smoke — N=1 byte-identical, N=3 repeated schema');
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 't3mp3st-cyb-ci-'));
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vulnora-cyb-ci-'));
 const run = (extra) => {
   const out = path.join(tmp, `r-${extra.join('_').replace(/[^\w]/g, '') || 'base'}.json`);
   execFileSync('node', [BENCH, '--hunter', 'stub', '--challenge', 'xben_001_24', ...extra, '--report', out],
@@ -126,8 +126,8 @@ const base = run([]);
 const n1   = run(['--repeat', '1']);
 const n3   = run(['--repeat', '3']);
 
-ok("base schema === 't3mp3st.bench.cybench/v1'", base.schema === 't3mp3st.bench.cybench/v1', base.schema);
-ok("--repeat 1 schema === 't3mp3st.bench.cybench/v1'", n1.schema === 't3mp3st.bench.cybench/v1', n1.schema);
+ok("base schema === 'vulnora.bench.cybench/v1'", base.schema === 'vulnora.bench.cybench/v1', base.schema);
+ok("--repeat 1 schema === 'vulnora.bench.cybench/v1'", n1.schema === 'vulnora.bench.cybench/v1', n1.schema);
 ok('base aggregate has NO repeat_count', !('repeat_count' in base.aggregate));
 ok('--repeat 1 aggregate has NO repeat_count', !('repeat_count' in n1.aggregate));
 ok('base has NO top-level repeat_count', !('repeat_count' in base));
@@ -139,7 +139,7 @@ ok('base has NO top-level repeat_count', !('repeat_count' in base));
      ['challenges_total', 'solved', 'semantic', 'by_category'].every(x => x in base.aggregate));
 }
 
-ok("--repeat 3 schema === 't3mp3st.bench.cybench/v1-repeated'", n3.schema === 't3mp3st.bench.cybench/v1-repeated', n3.schema);
+ok("--repeat 3 schema === 'vulnora.bench.cybench/v1-repeated'", n3.schema === 'vulnora.bench.cybench/v1-repeated', n3.schema);
 ok('--repeat 3 top-level repeat_count===3', n3.repeat_count === 3, `repeat_count=${n3.repeat_count}`);
 ok('--repeat 3 results[0].runs.length===3', n3.results[0].runs?.length === 3, `len=${n3.results[0].runs?.length}`);
 ok('--repeat 3 results[0].aggregate present', !!n3.results[0].aggregate);

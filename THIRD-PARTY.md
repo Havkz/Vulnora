@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-T3MP3ST's own source (`src/`, `scripts/`) is AGPL-3.0-licensed — see [`LICENSE`](LICENSE).
+VULNORA's own source (`src/`, `scripts/`) is AGPL-3.0-licensed — see [`LICENSE`](LICENSE).
 The `bench/` benchmark corpora are **third-party fixtures used for local evaluation
 only**: they are gitignored and **not distributed** with this package, retain their
 original upstream licenses, and are fetched/staged on demand by the benchmark runners.

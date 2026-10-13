@@ -1,8 +1,8 @@
-# T3MP3ST Team Preview
+# VULNORA Team Preview
 
-This preview is for prompt engineers, red-teamers, bug bounty operators, cyber researchers, and builders who want to pressure-test T3MP3ST before a broader release.
+This preview is for prompt engineers, red-teamers, bug bounty operators, cyber researchers, and builders who want to pressure-test VULNORA before a broader release.
 
-The useful mental model: T3MP3ST is an evidence-first adversarial AI command center. The CLI combines planning, tool execution, and reporting. It routes a mission into specialist agent lanes, binds tool output to evidence, promotes evidence into findings, retests claims, and only then proposes durable learning.
+The useful mental model: VULNORA is an evidence-first adversarial AI command center. The CLI combines planning, tool execution, and reporting. It routes a mission into specialist agent lanes, binds tool output to evidence, promotes evidence into findings, retests claims, and only then proposes durable learning.
 
 ## Ten-Minute First Run
 

@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Analysis Engine
+ * VULNORA Analysis Engine
  *
  * Report generation and findings analysis.
  */

@@ -1,10 +1,10 @@
 ---
-name: t3mp3st-issue-steward
-description: Triage and respond to T3MP3ST issues, including support, defects, feature requests, security routing, and linked PR resolution.
+name: vulnora-issue-steward
+description: Triage and respond to VULNORA issues, including support, defects, feature requests, security routing, and linked PR resolution.
 triggers:
-  - t3mp3st issue steward
-  - triage T3MP3ST issues
-  - respond to T3MP3ST issue
+  - vulnora issue steward
+  - triage VULNORA issues
+  - respond to VULNORA issue
 model: claude-opus-4-7
 tools:
   - Read
@@ -13,11 +13,11 @@ tools:
   - Glob
   - TodoWrite
 skills:
-  - t3mp3st-issue-steward
+  - vulnora-issue-steward
 permissionMode: full
 ---
 
-# T3MP3ST Issue Steward
+# VULNORA Issue Steward
 
 Classify each issue before acting. Issues may need a support response, a linked
 PR check, an implementation pass through `address-issues`, a feature follow-up,

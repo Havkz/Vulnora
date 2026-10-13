@@ -26,10 +26,10 @@ need(){
 }
 
 # Prereq managers (warn, don't fail — a tool that needs a missing manager just FAILs its line).
-if ! have brew && [ -z "$LIST" ]; then echo "⚠ Homebrew not found — brew-based tools will FAIL. https://brew.sh"; fi
+if ! have brew && [ -z "$LIST" ]; then echo " Homebrew not found — brew-based tools will FAIL. https://brew.sh"; fi
 PIPX=pipx; have pipx || PIPX="python3 -m pipx"   # fall back if pipx isn't a shim
 
-recon(){    echo "── 🔍 recon/osint ──"
+recon(){    echo "──  recon/osint ──"
   need file        brew install file
   need curl        brew install curl
   need dig         brew install bind
@@ -45,7 +45,7 @@ recon(){    echo "── 🔍 recon/osint ──"
   need subfinder   brew install projectdiscovery/tap/subfinder
   need nuclei      brew install nuclei
 }
-web(){      echo "── 🕸️ web exploitation ──"
+web(){      echo "──  web exploitation ──"
   need ffuf        brew install ffuf
   need gobuster    brew install gobuster
   need feroxbuster brew install feroxbuster
@@ -56,7 +56,7 @@ web(){      echo "── 🕸️ web exploitation ──"
   need wafw00f     $PIPX install wafw00f
   need testssl.sh  brew install testssl
 }
-echo "T3MP3ST arsenal installer — group: $GROUP${LIST:+ (dry-run)}"
+echo "VULNORA arsenal installer — group: $GROUP${LIST:+ (dry-run)}"
 case "$GROUP" in
   default)  recon; web;;
   web)      recon; web;;

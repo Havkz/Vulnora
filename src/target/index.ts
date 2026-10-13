@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Target Environment
+ * VULNORA Target Environment
  *
  * Manages target systems and attack surface modeling.
  */

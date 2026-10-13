@@ -73,7 +73,7 @@ describe('Arsenal.execute() — approval gate', () => {
   });
 });
 
-describe('opt-in built-in gating (T3MP3ST_GATE_BUILTINS) — stampSpicyBuiltin', () => {
+describe('opt-in built-in gating (VULNORA_GATE_BUILTINS) — stampSpicyBuiltin', () => {
   it('stamps ONLY the spicy built-ins with their tier, and never mutates the shared array', () => {
     // the shared BUILTIN_TOOLS stay ungated (default posture / zero regression) …
     for (const n of Object.keys(SPICY_BUILTIN_TIERS)) {

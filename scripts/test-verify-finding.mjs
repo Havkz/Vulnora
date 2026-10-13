@@ -17,7 +17,7 @@ const ok = (label, cond, detail) =>
         : (fail++, console.log(`  ❌ ${label}${detail ? ` — ${detail}` : ''}`)));
 
 // ── fixture repo ──
-const FIX = '/tmp/t3mp3st-verify-fixture';
+const FIX = '/tmp/vulnora-verify-fixture';
 fs.mkdirSync(path.join(FIX, 'src'), { recursive: true });
 fs.writeFileSync(path.join(FIX, 'src', 'driver.c'),
   ['// line1', 'void f() {', '  size_t len = answer.size();', '  memcpy(&dst, &answer[0], len);  // the sink', '}', ''].join('\n'));

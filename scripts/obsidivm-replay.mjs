@@ -1,5 +1,5 @@
 /**
- * T3MP3ST × OBSIDIVM — live exploit replay.
+ * VULNORA × OBSIDIVM — live exploit replay.
  *
  * Sends real HTTP probes against deployed OBSIDIVM Docker targets and returns
  * a transcript block of `### <probe_id> — <title>\n[status: N]\n[headers]\n[body]`

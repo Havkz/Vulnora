@@ -56,7 +56,7 @@ async function withServer(routes, fn) {
 function runPreflight(baseUrl, args = []) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [preflightPath, '--json', ...args], {
-      env: { ...process.env, T3MP3ST_API_URL: baseUrl },
+      env: { ...process.env, VULNORA_API_URL: baseUrl },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';

@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Configuration Management
+ * VULNORA Configuration Management
  *
  * Handles API keys, settings, and persistent configuration.
  * Supports multiple LLM providers with easy key management.
@@ -7,9 +7,10 @@
 
 import Conf from 'conf';
 import { homedir } from 'os';
-import { join, isAbsolute } from 'path';
+import { join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
+import { configDirectory, migrateEnvironment } from './migration.js';
 
 type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'local';
 
@@ -17,7 +18,7 @@ type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' |
 // CONFIGURATION SCHEMA
 // =============================================================================
 
-export interface TempestSettings {
+export interface VulnoraSettings {
   // API Keys
   apiKeys: {
     openrouter?: string;
@@ -115,7 +116,7 @@ export interface TempestSettings {
 // DEFAULT CONFIGURATION
 // =============================================================================
 
-const DEFAULT_SETTINGS: TempestSettings = {
+const DEFAULT_SETTINGS: VulnoraSettings = {
   apiKeys: {},
 
   defaultProvider: 'openrouter',
@@ -124,8 +125,8 @@ const DEFAULT_SETTINGS: TempestSettings = {
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
     defaultModel: 'anthropic/claude-opus-4.8',
-    siteUrl: 'https://github.com/tempest',
-    siteName: 'T3MP3ST',
+    siteUrl: 'https://github.com/Havkz/Vulnora',
+    siteName: 'VULNORA',
   },
 
   venice: {
@@ -523,7 +524,7 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
   local: [
     {
       id: 'local-model',
-      name: 'Local model (Ollama / LM Studio / vLLM — set TEMPEST_LOCAL_MODEL)',
+      name: 'Local model (Ollama / LM Studio / vLLM — set VULNORA_LOCAL_MODEL)',
       provider: 'Local',
       contextWindow: 32000,
       maxOutput: 4096,
@@ -565,15 +566,14 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
 // =============================================================================
 
 class ConfigManager {
-  private config: Conf<TempestSettings>;
+  private config: Conf<VulnoraSettings>;
   private envLoaded: boolean = false;
 
   constructor() {
-    const directory = process.env.T3MP3ST_CONFIG_DIR;
-    if (directory && !isAbsolute(directory)) throw new Error('T3MP3ST_CONFIG_DIR must be an absolute path');
-    this.config = new Conf<TempestSettings>({
-      projectName: 't3mp3st',
-      ...(directory ? { cwd: directory } : {}),
+    const directory = configDirectory();
+    this.config = new Conf<VulnoraSettings>({
+      projectName: 'vulnora',
+      cwd: directory,
       defaults: DEFAULT_SETTINGS,
     });
 
@@ -586,11 +586,11 @@ class ConfigManager {
   private loadEnvVariables(): void {
     if (this.envLoaded) return;
 
-    // Load only T3MP3ST-owned/home env files. Do NOT read process.cwd()/.env:
-    // operators often run T3MP3ST inside target repos, and importing that repo's
+    // Load only VULNORA-owned/home env files. Do NOT read process.cwd()/.env:
+    // operators often run VULNORA inside target repos, and importing that repo's
     // secrets would contaminate this process with unrelated credentials.
-    const envPaths = process.env.T3MP3ST_CONFIG_DIR ? [join(process.env.T3MP3ST_CONFIG_DIR, '.env')] : [
-      join(homedir(), '.t3mp3st', '.env'),
+    const envPaths = process.env.VULNORA_CONFIG_DIR ? [join(process.env.VULNORA_CONFIG_DIR, '.env')] : [
+      join(homedir(), '.vulnora', '.env'),
       join(homedir(), '.env'),
     ];
 
@@ -622,15 +622,16 @@ class ConfigManager {
             }
           }
         }
-        // Set TEMPEST_DEFAULT_PROVIDER if LLM_PROVIDER found
-        if (envProvider && !process.env.TEMPEST_DEFAULT_PROVIDER) {
-          process.env.TEMPEST_DEFAULT_PROVIDER = envProvider;
+        // Set VULNORA_DEFAULT_PROVIDER if LLM_PROVIDER found
+        if (envProvider && !process.env.VULNORA_DEFAULT_PROVIDER) {
+          process.env.VULNORA_DEFAULT_PROVIDER = envProvider;
         }
         break;
       }
     }
 
-    // Environment variables (including values loaded from ~/.t3mp3st/.env above)
+    migrateEnvironment();
+    // Environment variables (including values loaded from ~/.vulnora/.env above)
     // are intentionally process-local. getApiKey() already gives env vars highest
     // priority, so do not persist them into Conf's apiKeys store as a side effect.
     // (XAI_API_KEY / Grok Build follows the same safe path — see the envVarMap in getApiKey.)
@@ -640,21 +641,21 @@ class ConfigManager {
   /**
    * Get all settings
    */
-  getAll(): TempestSettings {
+  getAll(): VulnoraSettings {
     return this.config.store;
   }
 
   /**
    * Get a specific setting
    */
-  get<K extends keyof TempestSettings>(key: K): TempestSettings[K] {
+  get<K extends keyof VulnoraSettings>(key: K): VulnoraSettings[K] {
     return this.config.get(key);
   }
 
   /**
    * Set a specific setting
    */
-  set<K extends keyof TempestSettings>(key: K, value: TempestSettings[K]): void {
+  set<K extends keyof VulnoraSettings>(key: K, value: VulnoraSettings[K]): void {
     this.config.set(key, value);
   }
 
@@ -673,9 +674,9 @@ class ConfigManager {
   getApiKey(provider: ApiKeyProvider): string | undefined {
     // First check environment variables (highest priority)
     // local provider: a self-hosted/OpenAI-compatible server MAY require a bearer
-    // (Zhipu/z.ai, Together, etc.) — accept TEMPEST_LOCAL_API_KEY or provider-specific vars.
+    // (Zhipu/z.ai, Together, etc.) — accept VULNORA_LOCAL_API_KEY or provider-specific vars.
     if (provider === 'local') {
-      const localKey = process.env.TEMPEST_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
+      const localKey = process.env.VULNORA_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
       if (localKey) return localKey;
       return this.config.get('apiKeys')[provider];
     }
@@ -694,7 +695,7 @@ class ConfigManager {
     // arsenal:smoke so the key-required / fail-closed paths are exercisable. Gated behind
     // an explicit flag so a normal operator's STORED key is NEVER silently disabled by an
     // empty exported env var (round-2 code-sweep regression fix).
-    if (/^(1|true|yes|on)$/i.test((process.env.T3MP3ST_FORCE_UNCONFIGURED || '').trim())) return undefined;
+    if (/^(1|true|yes|on)$/i.test((process.env.VULNORA_FORCE_UNCONFIGURED || '').trim())) return undefined;
 
     const envKey = process.env[envVarMap[provider]];
     if (envKey) return envKey;   // a non-empty env var wins; empty/unset falls through
@@ -761,7 +762,7 @@ class ConfigManager {
     let actualProvider = provider;
 
     if (!actualProvider) {
-      const envProvider = process.env.TEMPEST_DEFAULT_PROVIDER?.trim();
+      const envProvider = process.env.VULNORA_DEFAULT_PROVIDER?.trim();
       if (envProvider) {
         actualProvider = envProvider as LLMProvider;
       } else {
@@ -824,17 +825,17 @@ class ConfigManager {
         actualModel = 'mock-model';
         break;
       case 'local':
-        // Self-hosted, usually keyless. Defaults to Ollama; point TEMPEST_LOCAL_BASE_URL at
+        // Self-hosted, usually keyless. Defaults to Ollama; point VULNORA_LOCAL_BASE_URL at
         // any OpenAI-compatible server (LM Studio :1234/v1, vLLM :8000/v1, llama.cpp, Zhipu/z.ai
-        // /api/paas/v4) and TEMPEST_LOCAL_MODEL at the model tag you're serving.
+        // /api/paas/v4) and VULNORA_LOCAL_MODEL at the model tag you're serving.
         // Some OpenAI-compatible servers require a real bearer (Zhipu, Together, etc.) —
-        // TEMPEST_LOCAL_API_KEY (or a provider-specific env like ZAI_API_KEY) provides it.
-        baseUrl = process.env.TEMPEST_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api';
+        // VULNORA_LOCAL_API_KEY (or a provider-specific env like ZAI_API_KEY) provides it.
+        baseUrl = process.env.VULNORA_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api';
         // Placeholder ids from AVAILABLE_MODELS / the static UI are not real served model tags.
-        // Treat them as unset so TEMPEST_LOCAL_MODEL (or the llama3 default) wins; a real tag
+        // Treat them as unset so VULNORA_LOCAL_MODEL (or the llama3 default) wins; a real tag
         // passed in still takes priority.
-        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3';
-        apiKey = process.env.TEMPEST_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
+        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3';
+        apiKey = process.env.VULNORA_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
         break;
       default:
         throw new Error(`Unknown provider: ${actualProvider}`);
@@ -853,27 +854,27 @@ class ConfigManager {
   }
 
   /**
-   * Opt-in model fallback ladder. When TEMPEST_MODEL_FALLBACK is set, any primary-
+   * Opt-in model fallback ladder. When VULNORA_MODEL_FALLBACK is set, any primary-
    * model failure that the model can't self-recover from — a refusal, an empty 200,
    * or a hard error that survives same-model retries (rate-limit, 5xx, timeout, dead
    * key, missing model, context blowout) — escalates across the OTHER configured
    * providers in priority order (openrouter → venice → anthropic → openai), each with its own
-   * key/model. TEMPEST_MODEL_FALLBACK=local selects the configured local/Ollama
+   * key/model. VULNORA_MODEL_FALLBACK=local selects the configured local/Ollama
    * model as the sole fallback. OFF by default (no surprise model-switching). On a refusal the real
    * authorization context is restated — honest escalation, no jailbreak prompts
    * (see LLMBackbone.chat).
    */
   private buildFallbackChain(primary: LLMProvider): FallbackEntry[] {
-    const flag = (process.env.TEMPEST_MODEL_FALLBACK || '').trim().toLowerCase();
+    const flag = (process.env.VULNORA_MODEL_FALLBACK || '').trim().toLowerCase();
     if (!flag || ['0', 'false', 'off', 'no'].includes(flag)) return [];
     const chain: FallbackEntry[] = [];
     if (['local', 'ollama'].includes(flag)) {
       if (primary !== 'local') {
         chain.push({
           provider: 'local',
-          model: process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3',
-          apiKey: process.env.TEMPEST_LOCAL_API_KEY?.trim() || undefined,
-          baseUrl: process.env.TEMPEST_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api',
+          model: process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3',
+          apiKey: process.env.VULNORA_LOCAL_API_KEY?.trim() || undefined,
+          baseUrl: process.env.VULNORA_LOCAL_BASE_URL?.trim() || 'http://localhost:11434/api',
         });
       }
       return chain;
@@ -935,7 +936,7 @@ class ConfigManager {
         this.config.set('defaultModel', this.config.get('codex').defaultModel);
         break;
       case 'local':
-        this.config.set('defaultModel', process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3');
+        this.config.set('defaultModel', process.env.VULNORA_LOCAL_MODEL?.trim() || 'llama3');
         break;
     }
   }
@@ -1019,9 +1020,9 @@ class ConfigManager {
    * Create a .env template file
    */
   createEnvTemplate(filePath: string = join(process.cwd(), '.env.template')): void {
-    const template = `# T3MP3ST Environment Configuration
-# Save this file as ~/.t3mp3st/.env and fill in your API keys
-# The setup script writes the same T3MP3ST-owned file.
+    const template = `# VULNORA Environment Configuration
+# Save this file as ~/.vulnora/.env and fill in your API keys
+# The setup script writes the same VULNORA-owned file.
 
 # OpenRouter API Key (recommended - access to multiple models)
 # Get your key at: https://openrouter.ai/keys
@@ -1058,15 +1059,15 @@ GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 
 # Local model (Ollama / LM Studio / vLLM / llama.cpp, or any OpenAI-compatible server)
-# Point TEMPEST_LOCAL_BASE_URL at the server root (Ollama default shown below).
+# Point VULNORA_LOCAL_BASE_URL at the server root (Ollama default shown below).
 # For an OpenAI-compatible server, use a versioned path: LM Studio :1234/v1,
 # vLLM :8000/v1, or e.g. Zhipu/z.ai /api/paas/v4 — any /vN path speaks the
 # OpenAI wire (/chat/completions, choices[]); otherwise the Ollama native format is used.
 # Most local servers are keyless; if yours requires a bearer (Zhipu, Together, …)
-# set TEMPEST_LOCAL_API_KEY (ZAI_API_KEY / ZHIPUAI_API_KEY are accepted as aliases).
-TEMPEST_LOCAL_BASE_URL=http://localhost:11434/api
-TEMPEST_LOCAL_MODEL=llama3
-TEMPEST_LOCAL_API_KEY=
+# set VULNORA_LOCAL_API_KEY (ZAI_API_KEY / ZHIPUAI_API_KEY are accepted as aliases).
+VULNORA_LOCAL_BASE_URL=http://localhost:11434/api
+VULNORA_LOCAL_MODEL=llama3
+VULNORA_LOCAL_API_KEY=
 `;
     writeFileSync(filePath, template);
   }

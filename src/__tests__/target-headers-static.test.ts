@@ -6,8 +6,8 @@ import { Arsenal, BUILTIN_TOOLS, createToolContext } from '../arsenal/index.js';
 const httpTool = BUILTIN_TOOLS.find(tool => tool.name === 'http_request');
 const technologyTool = BUILTIN_TOOLS.find(tool => tool.name === 'technology_detect');
 if (!httpTool || !technologyTool) throw new Error('Required HTTP tools are not registered');
-const originalOrigin = process.env.TEMPEST_TARGET_ORIGIN;
-const originalHeaders = process.env.TEMPEST_TARGET_HEADERS;
+const originalOrigin = process.env.VULNORA_TARGET_ORIGIN;
+const originalHeaders = process.env.VULNORA_TARGET_HEADERS;
 
 function response(status = 200, headers: Record<string, string> = {}): Response {
   const normalized = new Map(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
@@ -23,8 +23,8 @@ function response(status = 200, headers: Record<string, string> = {}): Response 
 }
 
 function configure(origin = 'https://target.example') {
-  process.env.TEMPEST_TARGET_ORIGIN = origin;
-  process.env.TEMPEST_TARGET_HEADERS = JSON.stringify({
+  process.env.VULNORA_TARGET_ORIGIN = origin;
+  process.env.VULNORA_TARGET_HEADERS = JSON.stringify({
     Authorization: 'Bearer configured-secret',
     'X-Tenant': 'acme',
   });
@@ -33,10 +33,10 @@ function configure(origin = 'https://target.example') {
 beforeEach(() => configure());
 
 afterEach(() => {
-  if (originalOrigin === undefined) delete process.env.TEMPEST_TARGET_ORIGIN;
-  else process.env.TEMPEST_TARGET_ORIGIN = originalOrigin;
-  if (originalHeaders === undefined) delete process.env.TEMPEST_TARGET_HEADERS;
-  else process.env.TEMPEST_TARGET_HEADERS = originalHeaders;
+  if (originalOrigin === undefined) delete process.env.VULNORA_TARGET_ORIGIN;
+  else process.env.VULNORA_TARGET_ORIGIN = originalOrigin;
+  if (originalHeaders === undefined) delete process.env.VULNORA_TARGET_HEADERS;
+  else process.env.VULNORA_TARGET_HEADERS = originalHeaders;
   vi.unstubAllGlobals();
 });
 
@@ -58,10 +58,10 @@ describe('target header binding', () => {
     const mockFetch = vi.fn().mockResolvedValue(response());
     vi.stubGlobal('fetch', mockFetch);
 
-    delete process.env.TEMPEST_TARGET_ORIGIN;
+    delete process.env.VULNORA_TARGET_ORIGIN;
     await httpTool.handler(createToolContext(undefined, { url: 'https://target.example' }));
-    process.env.TEMPEST_TARGET_ORIGIN = 'https://target.example';
-    process.env.TEMPEST_TARGET_HEADERS = JSON.stringify({ Authorization: 123 });
+    process.env.VULNORA_TARGET_ORIGIN = 'https://target.example';
+    process.env.VULNORA_TARGET_HEADERS = JSON.stringify({ Authorization: 123 });
     await httpTool.handler(createToolContext(undefined, { url: 'https://target.example' }));
 
     expect(new Headers(mockFetch.mock.calls[0][1].headers).has('authorization')).toBe(false);
@@ -75,7 +75,7 @@ describe('target header binding', () => {
     configure('https://target.example/api');
     await httpTool.handler(createToolContext(undefined, { url: 'https://target.example/api' }));
     configure();
-    process.env.TEMPEST_TARGET_HEADERS = JSON.stringify({ Host: 'other.example' });
+    process.env.VULNORA_TARGET_HEADERS = JSON.stringify({ Host: 'other.example' });
     await httpTool.handler(createToolContext(undefined, { url: 'https://target.example/api' }));
 
     expect(new Headers(mockFetch.mock.calls[0][1].headers).has('authorization')).toBe(false);

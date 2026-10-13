@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Decomposition Orchestrator
+ * VULNORA Decomposition Orchestrator
  *
  * The "master builder" pattern: an orchestrator model (opus) holds the full
  * offensive objective, decomposes it into individually-innocuous analytical

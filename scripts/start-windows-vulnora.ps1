@@ -4,7 +4,7 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [En
 $ollamaProcess = $null
 $model = 'huihui_ai/qwen3-coder-abliterated:30b'
 $needsModel = ($args.Count -eq 0 -or $args[0] -in 'interactive', 'test')
-$providerCheck = Join-Path $env:USERPROFILE '.t3mp3st\sandbox\providers-verified'
+$providerCheck = Join-Path $env:USERPROFILE '.vulnora\sandbox\providers-verified'
 try {
     if ($needsModel) {
         try { $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 }
@@ -25,12 +25,12 @@ try {
         }
     }
     if ($needsModel -and -not (Test-Path $providerCheck)) {
-        & wsl.exe -d Tempest-Arsenal --user tempest --exec bash /home/tempest/app/scripts/start-linux-tempest.sh --verify-providers
+        & wsl.exe -d Vulnora-Arsenal --user vulnora --exec bash /home/vulnora/app/scripts/start-linux-vulnora.sh --verify-providers
         if ($LASTEXITCODE -ne 0) { throw 'Codex/Ollama-Verbindungstest fehlgeschlagen. Linux-CLI wurde nicht gestartet.' }
         [IO.File]::WriteAllText($providerCheck, (Get-Date -Format o))
     }
-    & wsl.exe -d Tempest-Arsenal --user tempest --exec bash /home/tempest/app/scripts/start-linux-tempest.sh @args
-    if ($LASTEXITCODE -ne 0) { throw "Tempest wurde mit Fehlercode $LASTEXITCODE beendet." }
+    & wsl.exe -d Vulnora-Arsenal --user vulnora --exec bash /home/vulnora/app/scripts/start-linux-vulnora.sh @args
+    if ($LASTEXITCODE -ne 0) { throw "Vulnora wurde mit Fehlercode $LASTEXITCODE beendet." }
 } finally {
     if ($needsModel) {
         try {

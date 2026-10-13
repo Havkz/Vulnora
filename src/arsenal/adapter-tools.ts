@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Arsenal — Kali+ adapter → CustomTool factory (Phase-1)
+ * VULNORA Arsenal — Kali+ adapter → CustomTool factory (Phase-1)
  *
  * Turns the catalogued Kali+ `ToolAdapter`s (src/arsenal/catalog.ts) into real, arg-templated,
  * scope-checked, gracefully-degrading `CustomTool`s (src/types/index.ts) that the engine's Arsenal

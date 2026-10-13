@@ -1,6 +1,6 @@
-# T3MP3ST Maintainer Addon
+# VULNORA Maintainer Addon
 
-Project-local AIWG addon for running T3MP3ST repository maintenance with
+Project-local AIWG addon for running VULNORA repository maintenance with
 repeatable quality gates. It captures the maintainer process for PR audits,
 merge trains, issue response, and release-readiness checks.
 
@@ -21,7 +21,7 @@ Use it when:
 ## Layout
 
 ```
-.aiwg/addons/t3mp3st-maintainer/
+.aiwg/addons/vulnora-maintainer/
 ├── manifest.json
 ├── README.md
 ├── agents/
@@ -32,25 +32,25 @@ Use it when:
 
 ## Skills
 
-- `t3mp3st-queue-audit` — classify the whole PR/issue queue before touching it.
-- `t3mp3st-pr-audit` — audit a single PR with current checkout and GitHub state.
-- `t3mp3st-merge-train` — merge validated PRs one at a time with post-merge
+- `vulnora-queue-audit` — classify the whole PR/issue queue before touching it.
+- `vulnora-pr-audit` — audit a single PR with current checkout and GitHub state.
+- `vulnora-merge-train` — merge validated PRs one at a time with post-merge
   checks.
-- `t3mp3st-issue-steward` — triage and respond to open issues without jumping
+- `vulnora-issue-steward` — triage and respond to open issues without jumping
   straight to implementation.
 
 ## Agents
 
-- `t3mp3st-maintainer-steward`
-- `t3mp3st-pr-auditor`
-- `t3mp3st-issue-steward`
-- `t3mp3st-release-integrator`
+- `vulnora-maintainer-steward`
+- `vulnora-pr-auditor`
+- `vulnora-issue-steward`
+- `vulnora-release-integrator`
 
 ## Flows
 
-- `t3mp3st-pr-audit-flow`
-- `t3mp3st-merge-train-flow`
-- `t3mp3st-issue-steward-flow`
+- `vulnora-pr-audit-flow`
+- `vulnora-merge-train-flow`
+- `vulnora-issue-steward-flow`
 
 ## Templates
 
@@ -71,15 +71,15 @@ Use it when:
 Discover and inspect:
 
 ```bash
-aiwg discover "t3mp3st merge train"
-aiwg show skill t3mp3st-merge-train
-aiwg discover "t3mp3st pr audit"
-aiwg show skill t3mp3st-pr-audit
+aiwg discover "vulnora merge train"
+aiwg show skill vulnora-merge-train
+aiwg discover "vulnora pr audit"
+aiwg show skill vulnora-pr-audit
 ```
 
 Deploy to configured providers:
 
 ```bash
-aiwg use t3mp3st-maintainer
+aiwg use vulnora-maintainer
 aiwg doctor --project-local
 ```

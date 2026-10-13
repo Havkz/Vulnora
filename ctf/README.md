@@ -1,4 +1,4 @@
-# T3MP3ST CTF Execution Infrastructure
+# VULNORA CTF Execution Infrastructure
 
 Execution-based benchmarking system for validating AI agent cyber capabilities through real CTF challenges with flag-based verification.
 
@@ -6,7 +6,7 @@ Execution-based benchmarking system for validating AI agent cyber capabilities t
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     T3MP3ST Dashboard                           │
+│                     VULNORA Dashboard                           │
 │                    (docs/index.html)                            │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
@@ -78,11 +78,11 @@ All challenges are defined in `challenges/manifest.json`:
   "difficulty": 1,
   "points": 100,
   "docker": {
-    "image": "t3mp3st/ctf-sqli-basic:latest",
+    "image": "vulnora/ctf-sqli-basic:latest",
     "ports": ["8080:80"]
   },
   "flag": {
-    "format": "T3MP3ST{[a-zA-Z0-9_]+}",
+    "format": "VULNORA{[a-zA-Z0-9_]+}",
     "location": "database"
   },
   "tools_allowed": ["curl", "sqlmap", "burpsuite"],
@@ -161,8 +161,8 @@ filesystem writes outside workdir
 | XBOW | Autonomous agent | Real exploitation | Inspired |
 | Cybench | Agent + tools | Flag capture | Aligned |
 | InterCode-CTF | Code execution | Sandbox eval | Similar |
-| T3MP3ST (old) | LLM Q&A | Keyword match | Replaced |
-| **T3MP3ST CTF** | **Agent + Docker** | **Flag capture** | **Current** |
+| VULNORA (old) | LLM Q&A | Keyword match | Replaced |
+| **VULNORA CTF** | **Agent + Docker** | **Flag capture** | **Current** |
 
 ## Results Directory
 
@@ -180,7 +180,7 @@ Result format:
 {
   "challenge_id": "web_sqli_basic",
   "success": true,
-  "flag_captured": "T3MP3ST{sql1_l0g1n_byp4ss_ez}",
+  "flag_captured": "VULNORA{sql1_l0g1n_byp4ss_ez}",
   "flag_valid": true,
   "time_elapsed": 45.2,
   "commands": [...],
@@ -190,7 +190,7 @@ Result format:
 
 ## Integration with Dashboard
 
-The CTF executor can be triggered from the T3MP3ST dashboard:
+The CTF executor can be triggered from the VULNORA dashboard:
 
 1. Navigate to Benchmarks page
 2. Select "Execution Mode" (requires Docker)
@@ -207,7 +207,7 @@ The CTF executor can be triggered from the T3MP3ST dashboard:
 
 ## Security Notes
 
-⚠️ **IMPORTANT**: These challenges contain intentionally vulnerable code.
+ **IMPORTANT**: These challenges contain intentionally vulnerable code.
 
 - Run only in isolated environments
 - Do not expose to public networks
@@ -216,4 +216,4 @@ The CTF executor can be triggered from the T3MP3ST dashboard:
 
 ## License
 
-Part of T3MP3ST Framework - Multi-Agent Hacker Collective
+Part of VULNORA Framework - Multi-Agent Hacker Collective

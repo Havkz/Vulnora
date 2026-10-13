@@ -83,7 +83,7 @@ function isGitHubHttpsRepoUrl(input: string): boolean {
 }
 
 function getGitHubRepoToken(): string | undefined {
-  return process.env.T3MP3ST_GITHUB_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
+  return process.env.VULNORA_GITHUB_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
 }
 
 export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource {
@@ -93,10 +93,10 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource 
 
   const token = getGitHubRepoToken();
   if (!token) {
-    throw new RepoCloneError('private GitHub repo scans require T3MP3ST_GITHUB_TOKEN or GITHUB_TOKEN');
+    throw new RepoCloneError('private GitHub repo scans require VULNORA_GITHUB_TOKEN or GITHUB_TOKEN');
   }
 
-  const tempRoot = mkdtempSync(joinPath(tmpdir(), 't3mp3st-repo-'));
+  const tempRoot = mkdtempSync(joinPath(tmpdir(), 'vulnora-repo-'));
   const cloneDir = joinPath(tempRoot, 'repo');
   const askPassPath = joinPath(tempRoot, 'git-askpass.sh');
   try {
@@ -106,7 +106,7 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource 
         '#!/bin/sh',
         'case "$1" in',
         "*Username*) printf '%s\\n' 'x-access-token' ;;",
-        '*) printf "%s\\n" "$T3MP3ST_GIT_TOKEN" ;;',
+        '*) printf "%s\\n" "$VULNORA_GIT_TOKEN" ;;',
         'esac',
         '',
       ].join('\n'),
@@ -125,7 +125,7 @@ export function cloneGitHubRepoForAnalysis(repoUrl: string): ResolvedRepoSource 
         ...process.env,
         GIT_ASKPASS: askPassPath,
         GIT_TERMINAL_PROMPT: '0',
-        T3MP3ST_GIT_TOKEN: token,
+        VULNORA_GIT_TOKEN: token,
       },
     });
 
@@ -164,7 +164,7 @@ export function resolveRepoSourceForAnalysis(input: unknown): ResolvedRepoSource
  *      the check (we validate the resolved target, not the string),
  *   2. require it to exist AND be a directory,
  *   3. confine it to an allowed ROOT — the operator's home by default, overridable
- *      with T3MP3ST_REPO_ROOT for repos kept elsewhere (/opt, /srv, a volume).
+ *      with VULNORA_REPO_ROOT for repos kept elsewhere (/opt, /srv, a volume).
  * Returns the canonical, contained absolute path to hand to the reader.
  */
 export function resolveContainedRepoPath(input: unknown): string {
@@ -173,9 +173,9 @@ export function resolveContainedRepoPath(input: unknown): string {
   }
   let root: string;
   try {
-    root = realpathSync(resolve(process.env.T3MP3ST_REPO_ROOT || homedir()));
+    root = realpathSync(resolve(process.env.VULNORA_REPO_ROOT || homedir()));
   } catch {
-    throw new RepoPathError('configured T3MP3ST_REPO_ROOT does not resolve to an existing path');
+    throw new RepoPathError('configured VULNORA_REPO_ROOT does not resolve to an existing path');
   }
   let real: string;
   try {
@@ -198,7 +198,7 @@ export function resolveContainedRepoPath(input: unknown): string {
   const rel = relative(root, real);
   if (rel !== '' && (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel))) {
     throw new RepoPathError(
-      `repoPath resolves outside the allowed root (${root}). Set T3MP3ST_REPO_ROOT to analyze a repo kept elsewhere.`,
+      `repoPath resolves outside the allowed root (${root}). Set VULNORA_REPO_ROOT to analyze a repo kept elsewhere.`,
     );
   }
   return real;
@@ -206,7 +206,7 @@ export function resolveContainedRepoPath(input: unknown): string {
 
 /**
  * Ingest a local repo and pack it into a single security-ordered source blob
- * suitable for handing to `TempestCommand.setWhiteboxSource` (or any consumer
+ * suitable for handing to `VulnoraCommand.setWhiteboxSource` (or any consumer
  * that wants the highest-priority code first).
  *
  * @param repoPath  Absolute path to a LOCAL repo you own, or a GitHub HTTPS repo URL with token auth.
@@ -261,21 +261,21 @@ export interface WhiteboxAnalysisResult {
  * like the rest of the server.
  *
  * Env overrides (optional, mirroring the CLI flags):
- *   TEMPEST_ORCHESTRATOR_PROVIDER / TEMPEST_ORCHESTRATOR_MODEL
- *   TEMPEST_WORKER_PROVIDER       / TEMPEST_WORKER_MODEL
+ *   VULNORA_ORCHESTRATOR_PROVIDER / VULNORA_ORCHESTRATOR_MODEL
+ *   VULNORA_WORKER_PROVIDER       / VULNORA_WORKER_MODEL
  */
 function buildDecompositionConfig(): DecompositionConfig {
   const orchestratorProvider =
-    (process.env.TEMPEST_ORCHESTRATOR_PROVIDER as LLMProvider) || 'openrouter';
+    (process.env.VULNORA_ORCHESTRATOR_PROVIDER as LLMProvider) || 'openrouter';
   const workerProvider =
-    (process.env.TEMPEST_WORKER_PROVIDER as LLMProvider) || 'openrouter';
+    (process.env.VULNORA_WORKER_PROVIDER as LLMProvider) || 'openrouter';
   const orchestratorModel = config.getLLMConfig(
     orchestratorProvider,
-    process.env.TEMPEST_ORCHESTRATOR_MODEL || 'anthropic/claude-opus-4.8',
+    process.env.VULNORA_ORCHESTRATOR_MODEL || 'anthropic/claude-opus-4.8',
   );
   const workerModel = config.getLLMConfig(
     workerProvider,
-    process.env.TEMPEST_WORKER_MODEL || 'anthropic/claude-fable-5',
+    process.env.VULNORA_WORKER_MODEL || 'anthropic/claude-fable-5',
   );
   return {
     orchestratorModel,

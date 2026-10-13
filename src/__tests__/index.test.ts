@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Core Tests
+ * VULNORA Core Tests
  *
  * Basic test suite for core functionality.
  */
@@ -298,7 +298,7 @@ describe('OpGeneral v2 Campaign Control', () => {
     const general = generalWithResponse({
       codename: 'IRON CURRENT',
       summary: 'Authorized local web/API weird-machine hunt.',
-      targets: [{ address: 'http://127.0.0.1:3333/api/health', expectedType: 'web_application', priority: 1, rationale: 'Local T3MP3ST API' }],
+      targets: [{ address: 'http://127.0.0.1:3333/api/health', expectedType: 'web_application', priority: 1, rationale: 'Local VULNORA API' }],
       objectives: [{ description: 'Find boundary failures in the local control plane', priority: 1, successCriteria: 'Evidence-backed hypotheses and retests', phase: 'reconnaissance' }],
       operators: [{ archetype: 'scanner', count: 2, deployPhase: 'reconnaissance', briefing: 'Probe local UI/API edges safely' }],
       roe: { scope: ['http://127.0.0.1:3333/api/health'], exclusions: ['external targets'], maxDetections: 1, destructiveAllowed: false, requireApproval: [] },
@@ -399,7 +399,7 @@ describe('Wedged-dispatch timeout backstop', () => {
 
   it('mission completion stops the command loop so status/timer do not stay active', async () => {
     const mod = await import('../index.js');
-    const command = new mod.TempestCommand({
+    const command = new mod.VulnoraCommand({
       name: 'Lifecycle Op',
       llm: { provider: 'mock', model: 'mock-model' },
     });
@@ -421,12 +421,12 @@ describe('Wedged-dispatch timeout backstop', () => {
 
   it('a wedged mission stalls instead of advancing after required recon dispatches time out', async () => {
     // Tiny backstop so the test is fast and deterministic.
-    const prev = process.env.T3MP3ST_TASK_TIMEOUT_MS;
-    process.env.T3MP3ST_TASK_TIMEOUT_MS = '30';
+    const prev = process.env.VULNORA_TASK_TIMEOUT_MS;
+    process.env.VULNORA_TASK_TIMEOUT_MS = '30';
     try {
       // Re-import with the env override in place so resolveTaskTimeoutMs() reads it.
       const mod = await import('../index.js');
-      const command = new mod.TempestCommand({
+      const command = new mod.VulnoraCommand({
         name: 'Wedge Op',
         llm: { provider: 'mock', model: 'mock-model' },
       });
@@ -461,8 +461,8 @@ describe('Wedged-dispatch timeout backstop', () => {
       );
       expect(stuck).toBe(false);
     } finally {
-      if (prev === undefined) delete process.env.T3MP3ST_TASK_TIMEOUT_MS;
-      else process.env.T3MP3ST_TASK_TIMEOUT_MS = prev;
+      if (prev === undefined) delete process.env.VULNORA_TASK_TIMEOUT_MS;
+      else process.env.VULNORA_TASK_TIMEOUT_MS = prev;
     }
   }, 15000);
 });

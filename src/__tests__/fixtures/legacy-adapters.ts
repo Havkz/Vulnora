@@ -1,6 +1,6 @@
 import { TOOL_ADAPTERS, type ToolAdapter } from '../../arsenal/catalog.js';
 
-// Legacy inputs exercise factory safety; these are never registered by Tempest.
+// Legacy inputs exercise factory safety; these are never registered by Vulnora.
 const base = TOOL_ADAPTERS.find(adapter => adapter.id === 'file');
 if (!base) throw new Error('Missing file adapter fixture');
 export const LEGACY_ADAPTERS: ToolAdapter[] = [

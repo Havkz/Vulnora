@@ -170,20 +170,20 @@ async function main() {
   });
 
   decomposer.on('decomposition:queries_planned', ({ round, queries }) => {
-    console.log(`  📋 ${queries.length} queries planned:`);
+    console.log(`   ${queries.length} queries planned:`);
     for (const q of queries) {
       console.log(`     [${q.category}] ${q.query.slice(0, 90)}${q.query.length > 90 ? '...' : ''}`);
     }
   });
 
   decomposer.on('decomposition:query_result', ({ round, result }) => {
-    const icon = result.status === 'answered' ? '✅' : result.status === 'refused' ? '🚫' : '❌';
+    const icon = result.status === 'answered' ? '✅' : result.status === 'refused' ? '' : '❌';
     const preview = result.rawResponse.slice(0, 100).replace(/\n/g, ' ');
     console.log(`  ${icon} ${result.queryId}: ${preview}...`);
   });
 
   decomposer.on('decomposition:synthesis', ({ round, synthesis }) => {
-    console.log(`\n  🧠 Synthesis: ${synthesis.findings.length} findings, ${synthesis.gaps.length} gaps, confidence=${synthesis.confidence}`);
+    console.log(`\n   Synthesis: ${synthesis.findings.length} findings, ${synthesis.gaps.length} gaps, confidence=${synthesis.confidence}`);
     for (const f of synthesis.findings) {
       console.log(`     [${f.severity || f.type}] ${f.title}`);
     }
@@ -193,7 +193,7 @@ async function main() {
   });
 
   decomposer.on('decomposition:round_complete', ({ round, durationMs }) => {
-    console.log(`  ⏱  round ${round} complete in ${(durationMs / 1000).toFixed(1)}s`);
+    console.log(`    round ${round} complete in ${(durationMs / 1000).toFixed(1)}s`);
   });
 
   // run it

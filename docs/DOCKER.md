@@ -1,6 +1,6 @@
-# T3MP3ST Docker Deployment
+# VULNORA Docker Deployment
 
-Run T3MP3ST in a containerized environment. The Docker setup provides a minimal Node.js runtime with persistent volumes for reports and evidence.
+Run VULNORA in a containerized environment. The Docker setup provides a minimal Node.js runtime with persistent volumes for reports and evidence.
 
 ## Quick Start
 
@@ -168,7 +168,7 @@ docker compose down -v
 
 Remove the image:
 ```bash
-docker rmi t3mp3st-app
+docker rmi vulnora-app
 ```
 
 Full cleanup (use with caution):
@@ -178,7 +178,7 @@ docker system prune -a --volumes
 
 ## Security Notes
 
-**⚠️ CRITICAL: External Exposure Risk**
+** CRITICAL: External Exposure Risk**
 
 The Docker setup binds the server to `0.0.0.0` inside the container to allow port forwarding. This disables the Host-header/DNS-rebinding guard in `server.ts`.
 

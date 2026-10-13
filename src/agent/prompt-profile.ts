@@ -34,7 +34,7 @@ export const AGENT_PROMPT_PROFILES: Record<AgentPromptProfileName, AgentPromptPr
 export function resolveAgentPromptProfile(name: AgentPromptProfileName): AgentPromptProfile {
   const profile = AGENT_PROMPT_PROFILES[name];
   if (name !== 'small_model_30b') return { ...profile };
-  const configured = Number(process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET || profile.maxTotalTokens);
+  const configured = Number(process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET || profile.maxTotalTokens);
   const maxTotalTokens = Number.isFinite(configured) && configured >= 2_000
     ? Math.min(50_000, Math.round(configured))
     : profile.maxTotalTokens;

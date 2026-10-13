@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST MCP Server v3.0
+ * VULNORA MCP Server v3.0
  *
- * Production-grade Model Context Protocol server exposing t3mp3st security
+ * Production-grade Model Context Protocol server exposing vulnora security
  * tooling (security_recon — nmap/DNS reconnaissance).
  *
  */
@@ -187,7 +187,7 @@ async function handleToolCall(name: string, args: Record<string, unknown>): Prom
 // =============================================================================
 
 const server = new Server(
-  { name: 't3mp3st-chef-specials', version: '3.0.0' },
+  { name: 'vulnora-chef-specials', version: '3.0.0' },
   { capabilities: { tools: {} } }
 );
 
@@ -208,7 +208,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: any) => {
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error('[T3MP3ST MCP] server running — security_recon (nmap/DNS recon)');
+  console.error('[VULNORA MCP] server running — security_recon (nmap/DNS recon)');
 }
 
 main().catch(console.error);

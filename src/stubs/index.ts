@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Stub Modules
+ * VULNORA Stub Modules
  *
  * Placeholder implementations for advanced modules.
  * These provide the interface structure for future implementation.

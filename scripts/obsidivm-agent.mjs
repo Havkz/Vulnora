@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST as OBSIDIVM agent — :8889 PLINY CODE protocol shim.
+ * VULNORA as OBSIDIVM agent — :8889 PLINY CODE protocol shim.
  *
  * OBSIDIVM's warroom + evolve.py expect an external agent server at :8889
  * with this contract:
@@ -10,29 +10,29 @@
  *   GET  /api/events                              → SSE stream
  *   POST /api/stop-all                            → { ok }
  *
- * This shim translates each of those into t3mp3st operations:
- *   - /api/launch    → POST t3mp3st /api/general/auto with the prompt as
+ * This shim translates each of those into vulnora operations:
+ *   - /api/launch    → POST vulnora /api/general/auto with the prompt as
  *                       objective + extracted target URL as scope hint.
- *                       Auto-clears approval gates. Maps t3mp3st missionName
+ *                       Auto-clears approval gates. Maps vulnora missionName
  *                       (codename) to an internal session_id.
  *   - /api/sessions  → returns the in-memory session map, augmented with
- *                       live status from t3mp3st findings/sitreps ledgers.
- *   - /api/session/log → fetches t3mp3st findings + sitreps + evidence for
+ *                       live status from vulnora findings/sitreps ledgers.
+ *   - /api/session/log → fetches vulnora findings + sitreps + evidence for
  *                       the mapped mission and returns them as a transcript
  *                       OBSIDIVM's scorer can consume.
- *   - /api/events    → bridges t3mp3st's SSE feed (best-effort) and emits
+ *   - /api/events    → bridges vulnora's SSE feed (best-effort) and emits
  *                       periodic heartbeats.
- *   - /api/stop-all  → marks all sessions stopped (t3mp3st doesn't expose
+ *   - /api/stop-all  → marks all sessions stopped (vulnora doesn't expose
  *                       a kill API; the mission flag is local).
  *
  * Usage:
  *   node scripts/obsidivm-agent.mjs                       # default ports
  *   node scripts/obsidivm-agent.mjs --port 8889 \
- *                                   --t3mp3st http://127.0.0.1:3333
+ *                                   --vulnora http://127.0.0.1:3333
  *   node scripts/obsidivm-agent.mjs --verbose
  *
  * Env:
- *   T3MP3ST_API_URL   default http://127.0.0.1:3333
+ *   VULNORA_API_URL   default http://127.0.0.1:3333
  *   AGENT_PORT        default 8889
  *   OPENROUTER_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY
  *     (auto-detected from env, .env at repo root, or macOS Keychain)
@@ -67,7 +67,7 @@ if (process.platform === 'darwin') {
   for (const name of ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY']) {
     if (process.env[name]) continue;
     try {
-      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 't3mp3st-bench-keys', '-w'],
+      const v = execFileSync('security', ['find-generic-password', '-a', name, '-s', 'vulnora-bench-keys', '-w'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
       if (v) process.env[name] = v;
     } catch {}
@@ -86,14 +86,14 @@ function detectProvider() {
 function parseArgs(argv) {
   const a = {
     port: parseInt(process.env.AGENT_PORT || '8889', 10),
-    t3mp3st: process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333',
+    vulnora: process.env.VULNORA_API_URL || 'http://127.0.0.1:3333',
     model: 'claude-opus-4-7',
     verbose: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const k = argv[i];
     if      (k === '--port')    a.port = parseInt(argv[++i], 10);
-    else if (k === '--t3mp3st') a.t3mp3st = argv[++i];
+    else if (k === '--vulnora') a.vulnora = argv[++i];
     else if (k === '--model')   a.model = argv[++i];
     else if (k === '-v' || k === '--verbose') a.verbose = true;
     else if (k === '-h' || k === '--help')    { help(); process.exit(0); }
@@ -102,10 +102,10 @@ function parseArgs(argv) {
 }
 
 function help() {
-  console.log(`t3mp3st-as-OBSIDIVM-agent (:8889 shim)
+  console.log(`vulnora-as-OBSIDIVM-agent (:8889 shim)
 
   --port <n>          Listen port (default 8889; what warroom expects)
-  --t3mp3st <url>     t3mp3st base URL (default http://127.0.0.1:3333)
+  --vulnora <url>     vulnora base URL (default http://127.0.0.1:3333)
   --model <name>      LLM model (default claude-opus-4-7)
   -v, --verbose
 `);
@@ -142,7 +142,7 @@ function extractCommand(prompt) {
   return m ? '/' + m[1] : null;
 }
 
-// ----- t3mp3st client ------------------------------------------------------
+// ----- vulnora client ------------------------------------------------------
 
 function normalizeModel(model, provider) {
   if (provider === 'openrouter') {
@@ -182,7 +182,7 @@ Produce a structured transcript covering every distinct vulnerability you confir
     scopeHints: targetUrl ? [targetUrl] : undefined,
   };
 
-  const url = `${opts.t3mp3st}/api/general/auto`;
+  const url = `${opts.vulnora}/api/general/auto`;
   const call = async () => {
     const r = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: r.status, ok: r.ok, body: await r.text() };
@@ -193,7 +193,7 @@ Produce a structured transcript covering every distinct vulnerability you confir
     let approvalId = null;
     try { approvalId = JSON.parse(attempt.body)?.approval?.id; } catch {}
     if (!approvalId) break;
-    const ar = await fetch(`${opts.t3mp3st}/api/approvals/${approvalId}/approve`, {
+    const ar = await fetch(`${opts.vulnora}/api/approvals/${approvalId}/approve`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ approvedBy: 'obsidivm-agent', ttlMinutes: 30 }),
     });
@@ -201,15 +201,15 @@ Produce a structured transcript covering every distinct vulnerability you confir
     body.approvalId = approvalId;
     attempt = await call();
   }
-  if (!attempt.ok) throw new Error(`t3mp3st auto failed ${attempt.status}: ${attempt.body.slice(0, 200)}`);
+  if (!attempt.ok) throw new Error(`vulnora auto failed ${attempt.status}: ${attempt.body.slice(0, 200)}`);
   return { data: JSON.parse(attempt.body), targetUrl, command };
 }
 
 async function fetchT3mp3stMissionState(opts, missionId) {
   const [findings, evidence, sitreps] = await Promise.all([
-    fetch(`${opts.t3mp3st}/api/findings`).then(r => r.json()).catch(() => ({ findings: [] })),
-    fetch(`${opts.t3mp3st}/api/evidence`).then(r => r.json()).catch(() => ({ evidence: [] })),
-    fetch(`${opts.t3mp3st}/api/general/sitreps`).then(r => r.json()).catch(() => ({ sitreps: [] })),
+    fetch(`${opts.vulnora}/api/findings`).then(r => r.json()).catch(() => ({ findings: [] })),
+    fetch(`${opts.vulnora}/api/evidence`).then(r => r.json()).catch(() => ({ evidence: [] })),
+    fetch(`${opts.vulnora}/api/general/sitreps`).then(r => r.json()).catch(() => ({ sitreps: [] })),
   ]);
   return {
     findings: (findings.findings || []).filter(f => !missionId || f.missionId === missionId),
@@ -220,7 +220,7 @@ async function fetchT3mp3stMissionState(opts, missionId) {
 
 function buildTranscript(session, state) {
   const lines = [];
-  lines.push(`# T3MP3ST mission ${session.missionId || ''}`);
+  lines.push(`# VULNORA mission ${session.missionId || ''}`);
   lines.push(`Target: ${session.target_url || '(none)'}`);
   lines.push(`Command: ${session.cmd || '(none)'}`);
   lines.push(`Status: ${session.status}`);
@@ -320,7 +320,7 @@ function makeServer(opts) {
         sessions.set(id, session);
         broadcastSSE('session_started', { id, prompt, target: session.target_url });
 
-        // Async: dispatch the t3mp3st mission, update session as it progresses.
+        // Async: dispatch the vulnora mission, update session as it progresses.
         (async () => {
           try {
             const { data, targetUrl, command } = await dispatchT3mp3stMission(prompt, opts);
@@ -329,7 +329,7 @@ function makeServer(opts) {
             session.missionId = data?.execution?.missionName || data?.plan?.codename || null;
             session.plan = data?.plan || null;
             session.status = 'running';
-            session.log_lines.push(`[${new Date().toISOString()}] t3mp3st mission dispatched: ${session.missionId}`);
+            session.log_lines.push(`[${new Date().toISOString()}] vulnora mission dispatched: ${session.missionId}`);
             broadcastSSE('session_dispatched', { id, missionId: session.missionId });
           } catch (e) {
             session.status = 'failed';
@@ -415,8 +415,8 @@ function makeServer(opts) {
       if (req.method === 'GET' && (path === '/health' || path === '/api/health')) {
         sendJSON(res, 200, {
           ok: true,
-          shim: 't3mp3st-as-obsidivm-agent',
-          t3mp3st: opts.t3mp3st,
+          shim: 'vulnora-as-obsidivm-agent',
+          vulnora: opts.vulnora,
           sessions: sessions.size,
           provider: detectProvider()?.provider || null,
         });
@@ -434,9 +434,9 @@ function makeServer(opts) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const provider = detectProvider();
-  console.log(`t3mp3st-as-OBSIDIVM-agent`);
+  console.log(`vulnora-as-OBSIDIVM-agent`);
   console.log(`  listen   :${opts.port}  (OBSIDIVM warroom + evolve.py expect this)`);
-  console.log(`  t3mp3st  ${opts.t3mp3st}`);
+  console.log(`  vulnora  ${opts.vulnora}`);
   console.log(`  provider ${provider ? provider.provider : '(none — launches will fail until you set OPENROUTER/ANTHROPIC/OPENAI key)'}`);
   console.log(`  model    ${opts.model}`);
   const server = makeServer(opts);

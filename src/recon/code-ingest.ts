@@ -1,7 +1,7 @@
 /**
  * code-ingest — security-aware static code SELECTION layer.
  *
- * ⚠️ HONEST SCOPING (read this before trusting the output):
+ *  HONEST SCOPING (read this before trusting the output):
  *
  *   This is a PYTHON-ONLY, regex-based "AST-lite" PROTOTYPE — it is NOT a real
  *   parser. It scans `.py` files with line-oriented regexes to find `def`/`class`

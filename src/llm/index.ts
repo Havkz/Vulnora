@@ -1,5 +1,5 @@
 /**
- * T3MP3ST LLM Backbone
+ * VULNORA LLM Backbone
  *
  * Multi-provider LLM integration supporting:
  * - OpenRouter (recommended - access to Claude, GPT-4, Llama, etc.)
@@ -90,9 +90,9 @@ interface FallbackAuditEntry {
 }
 
 function fallbackAuditPath(): string | null {
-  const override = process.env.TEMPEST_FALLBACK_AUDIT_LOG?.trim();
+  const override = process.env.VULNORA_FALLBACK_AUDIT_LOG?.trim();
   if (override && ['0', 'false', 'off', 'no'].includes(override.toLowerCase())) return null;
-  return override || join(homedir(), '.t3mp3st', 'logs', 'model-fallback.jsonl');
+  return override || join(homedir(), '.vulnora', 'logs', 'model-fallback.jsonl');
 }
 
 function fallbackConversation(messages: LLMMessage[]): Array<{ role: string; name?: string; content: string }> {
@@ -110,7 +110,7 @@ async function appendFallbackAudit(entry: FallbackAuditEntry): Promise<void> {
     const directory = dirname(path);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const record = redactSecrets({
-      schema: 't3mp3st.model-fallback/v1',
+      schema: 'vulnora.model-fallback/v1',
       timestamp: new Date().toISOString(),
       ...entry,
     });
@@ -119,7 +119,7 @@ async function appendFallbackAudit(entry: FallbackAuditEntry): Promise<void> {
   } catch (error) {
     // Audit logging is best-effort: never turn a successful model recovery into a
     // failed mission just because the local log directory is unavailable.
-    console.warn('[T3MP3ST] Could not write fallback audit log:', error instanceof Error ? error.message : error);
+    console.warn('[VULNORA] Could not write fallback audit log:', error instanceof Error ? error.message : error);
   }
 }
 
@@ -252,8 +252,8 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     const url = `${baseUrl}/chat/completions`;
 
     // Get site info from config
-    const siteUrl = config.get('openrouter').siteUrl || 'https://github.com/tempest';
-    const siteName = config.get('openrouter').siteName || 'T3MP3ST';
+    const siteUrl = config.get('openrouter').siteUrl || 'https://github.com/Havkz/Vulnora';
+    const siteName = config.get('openrouter').siteName || 'VULNORA';
 
     const requestBody: Record<string, unknown> = {
       model: this.config.model,
@@ -328,8 +328,8 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     const baseUrl = this.config.baseUrl || 'https://openrouter.ai/api/v1';
     const url = `${baseUrl}/chat/completions`;
 
-    const siteUrl = config.get('openrouter').siteUrl || 'https://github.com/tempest';
-    const siteName = config.get('openrouter').siteName || 'T3MP3ST';
+    const siteUrl = config.get('openrouter').siteUrl || 'https://github.com/Havkz/Vulnora';
+    const siteName = config.get('openrouter').siteName || 'VULNORA';
 
     const requestBody = {
       model: this.config.model,
@@ -441,7 +441,7 @@ class LiteLLMAdapter extends OpenRouterAdapter {
     if (!this.config.baseUrl) {
       return {
         valid: false,
-        error: 'LiteLLM proxy base URL is required. Set LITELLM_BASE_URL or configure via tempest setup. Docs: https://docs.litellm.ai/docs/proxy/quick_start',
+        error: 'LiteLLM proxy base URL is required. Set LITELLM_BASE_URL or configure via vulnora setup. Docs: https://docs.litellm.ai/docs/proxy/quick_start',
       };
     }
     return { valid: true };
@@ -795,7 +795,7 @@ class MockAdapter implements LLMProviderAdapter {
 
 // Local model over HTTP — a fully self-hosted, keyless backbone. Talks to Ollama's
 // native /api/chat by default, or any OpenAI-compatible local server (LM Studio,
-// vLLM, llama.cpp, Ollama's own /v1) when TEMPEST_LOCAL_BASE_URL is a /v1 endpoint.
+// vLLM, llama.cpp, Ollama's own /v1) when VULNORA_LOCAL_BASE_URL is a /v1 endpoint.
 // Tool-calling is done over TEXT (renderToolContract + parseTextToolCalls, defined
 // below and shared with the CLI-agent adapters): it works on ANY local model,
 // whether or not it supports native function-calling — without it a local model
@@ -828,7 +828,7 @@ class LocalAdapter implements LLMProviderAdapter {
   // back into tool calls after the round-trip.
   private buildMessages(messages: LLMMessage[], options?: ChatOptions): { role: string; content: string }[] {
     const contract = renderToolContract(options?.tools, true);
-    const preamble = 'You are the planning brain for T3MP3ST, an authorized security-assessment harness.'
+    const preamble = 'You are the planning brain for VULNORA, an authorized security-assessment harness.'
       + (contract
         ? ' Request tools through the action contract; the harness executes them and returns real results.' + contract
         : ' Operate in planning and analysis mode; when JSON is requested, return ONLY the requested block — no preamble.');
@@ -883,7 +883,7 @@ class LocalAdapter implements LLMProviderAdapter {
       merged[i].content = compactContent(merged[i].content, perMessageLimit);
     }
 
-    const configuredBudget = Number(process.env.TEMPEST_LOCAL_CONTEXT_CHARS || 24_000);
+    const configuredBudget = Number(process.env.VULNORA_LOCAL_CONTEXT_CHARS || 24_000);
     const contextBudget = Number.isFinite(configuredBudget) && configuredBudget >= 8_000
       ? configuredBudget
       : 24_000;
@@ -918,7 +918,7 @@ class LocalAdapter implements LLMProviderAdapter {
     const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
-    const keepAlive = process.env.TEMPEST_LOCAL_KEEP_ALIVE;
+    const keepAlive = process.env.VULNORA_LOCAL_KEEP_ALIVE;
     const requestBody = openaiWire
       ? { model: this.config.model, messages: wireMessages, max_tokens: maxTokens, temperature, stream: false }
       : {
@@ -931,11 +931,11 @@ class LocalAdapter implements LLMProviderAdapter {
             temperature,
             // Ollama otherwise defaults many models to only 4096 tokens even when
             // the model advertises a much larger context window.
-            num_ctx: Math.max(4096, Number(process.env.TEMPEST_LOCAL_NUM_CTX || 32768) || 32768),
+            num_ctx: Math.max(4096, Number(process.env.VULNORA_LOCAL_NUM_CTX || 32768) || 32768),
           },
         };
 
-    const configuredLocalTimeout = Number(process.env.TEMPEST_LOCAL_TIMEOUT_MS || 3600000);
+    const configuredLocalTimeout = Number(process.env.VULNORA_LOCAL_TIMEOUT_MS || 3600000);
     const localTimeoutMs = Number.isFinite(configuredLocalTimeout) && configuredLocalTimeout > 0
       ? configuredLocalTimeout
       : 3600000;
@@ -1151,7 +1151,7 @@ class CodexAdapter implements LLMProviderAdapter {
 
   private formatPrompt(messages: LLMMessage[], options?: ChatOptions): string {
     const parts = [
-      'You are acting as the Codex-backed planning brain for T3MP3ST, an authorized offensive-security harness.',
+      'You are acting as the Codex-backed planning brain for VULNORA, an authorized offensive-security harness.',
       'Do not modify files and do not run active probes yourself.',
     ];
     const contract = renderToolContract(options?.tools);
@@ -1172,7 +1172,7 @@ class CodexAdapter implements LLMProviderAdapter {
       return `${rendered.slice(0, side)}${marker}${rendered.slice(-side)}`;
     };
     const renderedMessages = messages.map(compactMessage);
-    const configuredBudget = Number(process.env.TEMPEST_CODEX_PROMPT_CHARS || 400_000);
+    const configuredBudget = Number(process.env.VULNORA_CODEX_PROMPT_CHARS || 400_000);
     const promptBudget = Number.isFinite(configuredBudget) && configuredBudget >= 100_000
       ? Math.min(configuredBudget, 900_000)
       : 400_000;
@@ -1194,7 +1194,7 @@ class CodexAdapter implements LLMProviderAdapter {
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
-    const workDir = await mkdtemp(join(tmpdir(), 't3mp3st-codex-'));
+    const workDir = await mkdtemp(join(tmpdir(), 'vulnora-codex-'));
     const outputPath = join(workDir, 'last-message.txt');
     const prompt = this.formatPrompt(messages, options);
     const command = config.get('codex').command || 'codex';
@@ -1230,7 +1230,7 @@ class CodexAdapter implements LLMProviderAdapter {
 
         let stdout = '';
         let stderr = '';
-        const envTimeout = Number(process.env.TEMPEST_CODEX_TIMEOUT_MS || 600000);
+        const envTimeout = Number(process.env.VULNORA_CODEX_TIMEOUT_MS || 600000);
         const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 600000;
         const timer = setTimeout(() => {
           child.kill('SIGTERM');
@@ -1293,7 +1293,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
   }
   private formatPrompt(messages: LLMMessage[], options?: ChatOptions): string {
     const parts = [
-      'You are the local-agent planning brain for T3MP3ST, an authorized offensive-security harness.',
+      'You are the local-agent planning brain for VULNORA, an authorized offensive-security harness.',
     ];
     const contract = renderToolContract(options?.tools, true);
     if (contract) {

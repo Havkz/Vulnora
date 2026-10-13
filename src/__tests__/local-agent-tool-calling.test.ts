@@ -231,7 +231,7 @@ describe('local-model (HTTP) backbone surfaces toolCalls — the keyless-path fi
     const body = JSON.parse((spy.mock.calls[0][1] as { body: string }).body);
     expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user']);
     expect(body.messages.filter((m: { role: string }) => m.role === 'system')).toHaveLength(1);
-    expect(body.messages[0].content).toContain('planning brain for T3MP3ST');
+    expect(body.messages[0].content).toContain('planning brain for VULNORA');
     expect(body.messages[0].content).toContain('Operator profile system prompt');
   });
 
@@ -244,7 +244,7 @@ describe('local-model (HTTP) backbone surfaces toolCalls — the keyless-path fi
     ]);
     const body = JSON.parse((spy.mock.calls[0][1] as { body: string }).body);
     expect(body.messages.map((m: { role: string }) => m.role)).toEqual(['system', 'user']);
-    expect(body.messages[0].content).toContain('planning brain for T3MP3ST');
+    expect(body.messages[0].content).toContain('planning brain for VULNORA');
     expect(body.messages[0].content).toContain('AUTHORIZATION CONTEXT');
   });
 });

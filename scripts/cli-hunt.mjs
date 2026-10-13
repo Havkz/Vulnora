@@ -2,14 +2,14 @@
 /**
  * cli-hunt — BYO-SUBSCRIPTION zero-day hunter.  ⚡ MAXIMUM POWAAAH, $0 marginal cost.
  *
- * The subscription-agent FINDS; T3MP3ST VERIFIES. Instead of burning metered API
+ * The subscription-agent FINDS; VULNORA VERIFIES. Instead of burning metered API
  * tokens, this drives the autonomous coding agent behind your flat-rate plan —
  * Codex (ChatGPT/Codex sub) or Claude Code (Claude Max sub) — to do a read-only
  * coordinated-disclosure source audit of a target repo. The finding it returns is
- * emitted in T3MP3ST's standard schema and flows straight into the existing
+ * emitted in VULNORA's standard schema and flows straight into the existing
  * verify → refute → disclose pipeline (the part that makes a finding real).
  *
- *   FINDER (cheap, your subscription)  →  VERIFIER (T3MP3ST's integrity pipeline)
+ *   FINDER (cheap, your subscription)  →  VERIFIER (VULNORA's integrity pipeline)
  *
  * The agent runs READ-ONLY (no writes, no network) over the target. "Clean" is a
  * valid, respected result — the prompt is built to fight fabrication, not invite it.
@@ -171,7 +171,7 @@ function main() {
 
   const findings = extractFindings(text);
   if (findings === null) {
-    console.log(`  ⚠ could not parse a findings array from the agent output. Raw tail:\n${text.slice(-600)}`);
+    console.log(`   could not parse a findings array from the agent output. Raw tail:\n${text.slice(-600)}`);
     process.exit(3);
   }
   if (findings.length === 0) {
@@ -186,7 +186,7 @@ function main() {
   const outPath = path.join(outDir, `${slug}.json`);
   fs.writeFileSync(outPath, JSON.stringify({ slug, ...top, all_findings: findings }, null, 2));
 
-  console.log(`  🎯 FINDING: [${top.severity}/${top.confidence}] ${top.cwe} ${top.file}:${top.line ?? '?'} — ${top.title}`);
+  console.log(`   FINDING: [${top.severity}/${top.confidence}] ${top.cwe} ${top.file}:${top.line ?? '?'} — ${top.title}`);
   console.log(`     ${top.summary}`);
   console.log(`     written: ${path.relative(REPO_ROOT, outPath)}  (gitignored — held for verification)`);
 

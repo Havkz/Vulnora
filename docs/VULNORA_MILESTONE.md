@@ -99,4 +99,14 @@ offering a resumable menu. A completed project opens its results without startin
 
 ## Progress
 
-- Preparation complete; implementation and runtime acceptance remain pending.
+- Preparation committed and pushed as `51486c4`.
+- Shared VoidAccess tokens, logo snapshot and application/config namespace implementation
+  are wired into CLI/setup/report formatting. Legacy library imports retain aliases.
+- Migration tests cover preservation, non-overwrite, exclusion of provider credentials,
+  repeated migration, and hash records; files publish only after a flush.
+- Branding intermediate regression: 50 suites, 552 passed, 16 POSIX skipped, 11 preflight
+  checks passed; build passes; lint has zero errors and 195 existing warnings.
+- Installer no longer copies Codex credentials or modifies its config. Supported
+  CLI availability/authentication and installation remain to be verified in milestone 5/6.
+- Persistent projects, granular recovery, new interactive UI, adaptive scanning and
+  installed command remain pending. The existing installed runtime has not been replaced.

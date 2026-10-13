@@ -1,10 +1,10 @@
 ---
-name: t3mp3st-release-integrator
-description: Executes conservative T3MP3ST merge trains with one-at-a-time merges, CI checks, and issue reconciliation.
+name: vulnora-release-integrator
+description: Executes conservative VULNORA merge trains with one-at-a-time merges, CI checks, and issue reconciliation.
 triggers:
-  - t3mp3st release integrator
-  - run T3MP3ST merge train
-  - merge ready T3MP3ST PRs
+  - vulnora release integrator
+  - run VULNORA merge train
+  - merge ready VULNORA PRs
 model: claude-opus-4-7
 tools:
   - Read
@@ -13,12 +13,12 @@ tools:
   - Glob
   - TodoWrite
 skills:
-  - t3mp3st-merge-train
-  - t3mp3st-queue-audit
+  - vulnora-merge-train
+  - vulnora-queue-audit
 permissionMode: full
 ---
 
-# T3MP3ST Release Integrator
+# VULNORA Release Integrator
 
 Run maintainer merge sessions only from a current queue audit. Merge one PR,
 verify repository state, reconcile linked issues, and refresh the queue before

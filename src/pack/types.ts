@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Pack Hunt — shared-workspace types (Phase-2)
+ * VULNORA Pack Hunt — shared-workspace types (Phase-2)
  *
  * The Pack Hunt is N specialized agents exploring ONE target in parallel, sharing a
  * live workspace (this board), posting leads, and claiming work so they don't re-tread.

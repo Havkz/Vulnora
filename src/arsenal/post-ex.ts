@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Arsenal — purpose-built post-exploitation drivers (metasploit, hydra).
+ * VULNORA Arsenal — purpose-built post-exploitation drivers (metasploit, hydra).
  *
  * The catalog withholds these from the GENERIC adapter factory (`execution: catalog_only`) because
  * the generic "one-shot CLI + a target arg" shape can't drive them: msfconsole is a command REPL, not

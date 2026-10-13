@@ -1,20 +1,20 @@
 #!/bin/bash
-# T3MP3ST API Key Setup Script
+# VULNORA API Key Setup Script
 
 set -euo pipefail
 umask 077
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║           T3MP3ST API KEY CONFIGURATION                   ║"
+echo "║           VULNORA API KEY CONFIGURATION                   ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
-ENV_FILE="$HOME/.t3mp3st/.env"
+ENV_FILE="$HOME/.vulnora/.env"
 mkdir -p "$(dirname "$ENV_FILE")"
 
 if [ -f "$ENV_FILE" ]; then
-    echo "[*] Existing T3MP3ST env file found; it will be replaced after you enter a new key."
+    echo "[*] Existing VULNORA env file found; it will be replaced after you enter a new key."
 fi
 
 echo ""

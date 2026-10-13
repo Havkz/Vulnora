@@ -99,10 +99,10 @@ If clean, set verdict:"clean" and findings:[].`;
 // ---- fetch + pin the live source -----------------------------------------
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'wild-'));
 const clone = path.join(work, 'repo');
-console.log(`\n⚠  SECURITY: the audited repo is UNTRUSTED input. The agent shell has the`);
+console.log(`\n  SECURITY: the audited repo is UNTRUSTED input. The agent shell has the`);
 console.log(`   operator's secrets stripped + network/container tooling blocked, but a`);
 console.log(`   command denylist is NOT a hard boundary. For untrusted targets, run`);
-console.log(`   t3mp3st inside a disposable, network-isolated container/VM and pass API`);
+console.log(`   vulnora inside a disposable, network-isolated container/VM and pass API`);
 console.log(`   keys via env (never a committed .env).`);
 console.log(`\n════ WILD HUNT — coordinated-disclosure audit ════`);
 console.log(`repo   : ${repoSlug}  (${repoUrl})`);
@@ -140,7 +140,7 @@ if (scopedPaths.length) {
   scopeLabel = scopedPaths.join(', ');
 } else {
   if (args.paths && args.paths.length) {
-    console.error(`\n⚠  none of --paths [${args.paths.join(', ')}] exist in this repo's layout — auditing the WHOLE repo instead of refusing.`);
+    console.error(`\n  none of --paths [${args.paths.join(', ')}] exist in this repo's layout — auditing the WHOLE repo instead of refusing.`);
     console.error(`   (scope widened honestly; re-run with a corrected --paths to narrow it.)\n`);
   }
   await execFile('bash', ['-lc', `cp -R "${clone}/." "${sandbox}/" && rm -rf "${sandbox}/.git"`]);
@@ -165,7 +165,7 @@ const backbone = new LLMBackbone({
 });
 const tally = { fallback: 0, byReason: {} };
 backbone.on('request:fallback', e => { tally.fallback++; tally.byReason[e.reason || '?'] = (tally.byReason[e.reason || '?'] || 0) + 1; if (!String(e.reason).startsWith('recovered')) console.log(`  ↪ ladder: ${e.fromModel}→${e.toModel} (${e.reason})`); });
-backbone.on('request:refusal', e => console.log(`  ⚠ refusal on ${e.model}`));
+backbone.on('request:refusal', e => console.log(`   refusal on ${e.model}`));
 
 // ---- agentic audit loop ---------------------------------------------------
 const tools = [{ name: 'bash', description: 'Read/grep the source tree (read-only). Output capped 16KB.',

@@ -118,7 +118,7 @@ function exists(id) { return id && fs.existsSync(R('bench', 'cybench', 'challeng
 function runnable(rung) { return exists(rung.id) && (!rung.svc || brutal); }
 
 function runGauntlet() {
-  console.log(`\n${C.b}${C.t}████ t3mp3st · THE GAUNTLET ████${C.x}`);
+  console.log(`\n${C.b}${C.t}████ vulnora · THE GAUNTLET ████${C.x}`);
   console.log(`${C.d}the small-yet-difficult canary — hardest offline challenge per category · live-tools · strict pass@1${C.x}\n`);
   const set = GAUNTLET.filter((c) => exists(c.id));
   for (const c of GAUNTLET) console.log(`  ${exists(c.id) ? C.g + '●' : C.r + '✗'}${C.x} ${c.cat.padEnd(12)} ${C.d}${c.label}  (${c.id})${C.x}`);
@@ -142,7 +142,7 @@ function runGauntlet() {
 }
 
 function banner() {
-  console.log(`\n${C.b}${C.t}████ t3mp3st · RED-TEAM CAPABILITY LADDER ████${C.x}`);
+  console.log(`\n${C.b}${C.t}████ vulnora · RED-TEAM CAPABILITY LADDER ████${C.x}`);
   console.log(`${C.d}warm → hard → brutal per category · live-tools hunter · provenance-strict · pass@1${C.x}`);
   console.log(`${C.d}local challenges only · service tiers (◆) need docker + --brutal${C.x}\n`);
 }

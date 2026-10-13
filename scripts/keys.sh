@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# T3MP3ST key vault — tiny macOS Keychain wrapper for LLM / agent secrets.
+# VULNORA key vault — tiny macOS Keychain wrapper for LLM / agent secrets.
 #
 # Zero-install: uses the built-in `security` command. Encrypted at rest by
 # macOS login keychain (unlocked when you're logged in).
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SERVICE="t3mp3st-bench-keys"
+SERVICE="vulnora-bench-keys"
 
 # Curated list of well-known keys the bench / agents read.
 # Add more here as you start using new providers.
@@ -146,7 +146,7 @@ cmd_exec() {
 
 cmd_help() {
   cat >&2 <<EOF
-T3MP3ST key vault (macOS Keychain, service="$SERVICE")
+VULNORA key vault (macOS Keychain, service="$SERVICE")
 
   $0 set    KEYNAME            store a key (hidden prompt)
   $0 get    KEYNAME            print key value to stdout

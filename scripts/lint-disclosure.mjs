@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 const HARD = [
   [/\/(?:tmp|Users|home|private|var\/folders)\//, 'local filesystem path'],
   [/wild-recon|crit-hunt|bench\/wild-hunt|\.claude\/|\/Desktop\//, 'internal repo/scratch path'],
-  [/\bt3mp3st\b|\bwild-hunt\b|\bcrit-hunt\b|verify-finding|disclosure-gen|gate-precision|refute-finding|\brefuter\b/i, 'internal tooling name'],
+  [/\bvulnora\b|\bwild-hunt\b|\bcrit-hunt\b|verify-finding|disclosure-gen|gate-precision|refute-finding|\brefuter\b/i, 'internal tooling name'],
   [/INTERNAL\s*[—-]\s*STRIP|STRIP BEFORE SENDING|<!--\s*─+\s*INTERNAL/, 'internal STRIP-before-sending block'],
   [/\bTODO\b|\bFIXME\b|\bXXX:/, 'internal TODO/FIXME marker'],
   [/\[your[- ][a-z -]*\]|<your[- ][a-z-]*>|TODO[- ]EMAIL|REPLACE[- ]ME/i, 'unfilled reporter placeholder'],
@@ -58,7 +58,7 @@ function lintDisclosure(text, { target = '' } = {}) {
 // ── self-test ──
 function selfTest() {
   let pass = 0, fail = 0; const ok = (l, c) => (c ? (pass++, console.log(`  ✅ ${l}`)) : (fail++, console.log(`  ❌ ${l}`)));
-  const dirty = 'Reproduce: bash /tmp/crit-hunt/x/run.sh\nFound via t3mp3st wild-hunt after auditing OtherLib.\n<!-- ── INTERNAL — STRIP BEFORE SENDING -->\nReporter: [your-email]\nTODO: confirm';
+  const dirty = 'Reproduce: bash /tmp/crit-hunt/x/run.sh\nFound via vulnora wild-hunt after auditing OtherLib.\n<!-- ── INTERNAL — STRIP BEFORE SENDING -->\nReporter: [your-email]\nTODO: confirm';
   const di = lintDisclosure(dirty, { target: 'AcmeVendor/widget' });
   ok('flags local path', di.some((x) => x.label.includes('local filesystem')));
   ok('flags internal tooling name', di.some((x) => x.label.includes('tooling')));
@@ -98,7 +98,7 @@ function main() {
   console.log(`\n════════ vendor-cleanliness lint ${target ? `(target: ${target}) ` : ''}════════\n`);
   if (!issues.length) console.log('  ✅ clean — no leaks detected');
   for (const b of blocks) console.log(`  ❌ BLOCK ${b.file}:${b.line} — ${b.label}: "${b.snippet}"`);
-  for (const w of warns) console.log(`  ⚠ warn  ${w.file}:${w.line} — ${w.label}: "${w.snippet}"`);
+  for (const w of warns) console.log(`   warn  ${w.file}:${w.line} — ${w.label}: "${w.snippet}"`);
   console.log(`\n  ${blocks.length} blocking · ${warns.length} warning(s)\n`);
   process.exit(blocks.length ? 3 : 0);
 }

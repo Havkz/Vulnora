@@ -10,8 +10,8 @@ const FORBIDDEN_TARGET_HEADERS = new Set([
 
 /** Parse an exact-origin binding and its default headers. Invalid configuration fails closed. */
 export function parseTargetHeaderConfig(): TargetHeaderConfig | null {
-  const rawOrigin = process.env.TEMPEST_TARGET_ORIGIN?.trim();
-  const rawHeaders = process.env.TEMPEST_TARGET_HEADERS?.trim();
+  const rawOrigin = process.env.VULNORA_TARGET_ORIGIN?.trim();
+  const rawHeaders = process.env.VULNORA_TARGET_HEADERS?.trim();
   if (!rawOrigin || !rawHeaders) return null;
 
   try {

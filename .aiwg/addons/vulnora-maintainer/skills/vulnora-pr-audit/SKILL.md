@@ -1,16 +1,16 @@
 ---
-namespace: t3mp3st-maintainer
-name: t3mp3st-pr-audit
+namespace: vulnora-maintainer
+name: vulnora-pr-audit
 platforms: [all]
-description: Audit one T3MP3ST pull request as a maintainer, focusing on correctness, security boundaries, tests, and merge readiness.
+description: Audit one VULNORA pull request as a maintainer, focusing on correctness, security boundaries, tests, and merge readiness.
 triggers:
-  - t3mp3st pr audit
-  - audit T3MP3ST PR
-  - review T3MP3ST pull request
+  - vulnora pr audit
+  - audit VULNORA PR
+  - review VULNORA pull request
   - maintainer audit PR
 requires:
   - pr-number: one pull request number or URL
-  - github: elder-plinius/T3MP3ST tracker access
+  - github: elder-plinius/VULNORA tracker access
 ensures:
   - current-head-reviewed: audit records the exact PR head SHA
   - local-or-ci-verification: relevant tests and CI status are recorded
@@ -22,7 +22,7 @@ commandHint:
   category: code-review
 ---
 
-# T3MP3ST PR Audit
+# VULNORA PR Audit
 
 Use this for a single pull request before approval or merge.
 

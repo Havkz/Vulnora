@@ -6,7 +6,7 @@ description: Maintainer merge-session report with per-PR gates, merge results, i
 # Merge Train Report
 
 Date: `<YYYY-MM-DD>`
-Repository: `elder-plinius/T3MP3ST`
+Repository: `elder-plinius/VULNORA`
 Operator: `<maintainer>`
 Method default: `<squash | merge | rebase>`
 

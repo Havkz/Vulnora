@@ -1,4 +1,4 @@
-# T3MP3ST Kali Linux+ arsenal image  →  cybench-tools:latest  (linux/amd64)
+# VULNORA Kali Linux+ arsenal image  →  cybench-tools:latest  (linux/amd64)
 #
 # NORTH STAR: a 1337 hacker group of specialist experts wielding a real Kali Linux+ arsenal.
 # This is the reproducible loadout — the hunter mounts it via --tools-image for RE/crypto/pwn

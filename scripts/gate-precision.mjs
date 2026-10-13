@@ -67,7 +67,7 @@ function main() {
   const proofs = fps.map((fp) => ({ id: fp.id, proof: liveProve(fp) })).filter((p) => p.proof);
 
   const L = [];
-  L.push('# Gate-precision receipt — t3mp3st');
+  L.push('# Gate-precision receipt — vulnora');
   L.push('');
   L.push('> The honest measure of *"the verifier is the moat"*: of the candidate findings an LLM hunter **surfaced**, how many survive verification — and what rejects the rest. Confirmed findings are aggregate counts only (held under coordinated-disclosure until patched); the false-positive ledger (safe/guarded code) is detailed in `false-positives.json`.');
   L.push('');

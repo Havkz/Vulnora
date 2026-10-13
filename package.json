@@ -1,7 +1,7 @@
 {
-  "name": "t3mp3st",
+  "name": "vulnora",
   "version": "1.0.0",
-  "description": "Tactical Execution Multi-agent Platform for Elite Security Testing",
+  "description": "Persistent AI-assisted website and API security testing CLI",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
@@ -41,7 +41,7 @@
     "obsidivm:bench": "node scripts/obsidivm-bench.mjs",
     "obsidivm:bench:stub": "node scripts/obsidivm-bench.mjs --hunter stub",
     "obsidivm:bench:live": "node scripts/obsidivm-bench.mjs --hunter live",
-    "obsidivm:bench:t3mp3st": "node scripts/obsidivm-bench.mjs --hunter t3mp3st",
+    "obsidivm:bench:vulnora": "node scripts/obsidivm-bench.mjs --hunter vulnora",
     "obsidivm:agent": "node scripts/obsidivm-agent.mjs",
     "obsidivm:evolve": "node scripts/obsidivm-evolve.mjs",
     "obsidivm:evolve:reset": "node scripts/obsidivm-evolve.mjs --reset",
@@ -90,8 +90,7 @@
     "test:update": "node scripts/test-update.mjs"
   },
   "bin": {
-    "tempest": "./dist/cli.js",
-    "t3mp3st": "./dist/cli.js"
+    "vulnora": "./dist/cli.js"
   },
   "keywords": [
     "penetration-testing",
@@ -101,11 +100,11 @@
     "ai",
     "llm"
   ],
-  "author": "t3mp3st contributors",
+  "author": "vulnora contributors",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/elder-plinius/t3mp3st.git"
+    "url": "git+https://github.com/Havkz/Vulnora.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",

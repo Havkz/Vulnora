@@ -1,16 +1,16 @@
 {
-  "id": "t3mp3st-maintainer",
+  "id": "vulnora-maintainer",
   "type": "addon",
-  "name": "t3mp3st-maintainer",
+  "name": "vulnora-maintainer",
   "version": "0.1.0",
-  "description": "Project-local maintainer operations for T3MP3ST PR, issue, and release stewardship.",
+  "description": "Project-local maintainer operations for VULNORA PR, issue, and release stewardship.",
   "manifestVersion": "1",
   "platforms": {
     "claude": "full",
     "codex": "full"
   },
   "keywords": [
-    "t3mp3st",
+    "vulnora",
     "maintainer",
     "pull-requests",
     "issues",

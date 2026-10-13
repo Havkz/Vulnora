@@ -31,7 +31,7 @@ describe('API key environment handling hardening', () => {
     const block = configLoadEnvBlock();
 
     expect(block).not.toContain("join(process.cwd(), '.env')");
-    expect(block).toContain("join(homedir(), '.t3mp3st', '.env')");
+    expect(block).toContain("join(homedir(), '.vulnora', '.env')");
   });
 
   it('the API server does not re-enable caller-cwd dotenv loading', () => {
@@ -39,19 +39,19 @@ describe('API key environment handling hardening', () => {
     expect(serverSource).not.toMatch(/\bdotenv\.config\s*\(/);
   });
 
-  it('setup-api.sh writes the same T3MP3ST-owned env file that ConfigManager reads', () => {
+  it('setup-api.sh writes the same VULNORA-owned env file that ConfigManager reads', () => {
     const block = configLoadEnvBlock();
 
     expect(setupScript).not.toMatch(/dirname "\$0"\).*\.\.\/\.env/);
-    expect(setupScript).toMatch(/\.t3mp3st/);
+    expect(setupScript).toMatch(/\.vulnora/);
     expect(setupScript).toMatch(/mkdir\s+-p\s+"\$\(dirname "\$ENV_FILE"\)"/);
-    expect(block).toContain("join(homedir(), '.t3mp3st', '.env')");
+    expect(block).toContain("join(homedir(), '.vulnora', '.env')");
   });
 
-  it('env template points users at the T3MP3ST-owned env file, not a caller-cwd .env', () => {
+  it('env template points users at the VULNORA-owned env file, not a caller-cwd .env', () => {
     const block = envTemplateBlock();
 
-    expect(block).toContain('~/.t3mp3st/.env');
+    expect(block).toContain('~/.vulnora/.env');
     expect(block).not.toContain('Copy this file to .env');
   });
 

@@ -17,7 +17,7 @@
  */
 import process from 'node:process';
 
-const baseUrl = (process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333').replace(/\/$/, '');
+const baseUrl = (process.env.VULNORA_API_URL || 'http://127.0.0.1:3333').replace(/\/$/, '');
 const jsonMode = process.argv.includes('--json');
 const fixMode = process.argv.includes('--fix');
 const strict = process.argv.includes('--strict');
@@ -69,7 +69,7 @@ function main(status) {
   }
 
   const pct = ready.length ? Math.round((installed.length / ready.length) * 100) : 0;
-  console.log(`\n⚔️  T3MP3ST ARSENAL READINESS  —  ${installed.length}/${ready.length} command-ready tools installed (${pct}%)\n`);
+  console.log(`\n  VULNORA ARSENAL READINESS  —  ${installed.length}/${ready.length} command-ready tools installed (${pct}%)\n`);
 
   // group by category for the "group of experts" view
   const byCat = {};

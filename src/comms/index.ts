@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Communications Channel
+ * VULNORA Communications Channel
  *
  * Inter-agent communication and message routing.
  */

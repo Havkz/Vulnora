@@ -5,7 +5,7 @@ export function createOllamaSession(config: LLMConfig) {
   const local = [config, ...(config.fallbackChain || [])].find(entry => entry.provider === 'local');
   const baseUrl = (local?.baseUrl || 'http://127.0.0.1:11434/api').replace(/\/$/, '');
   const enabled = Boolean(local) && /\/api$/.test(baseUrl);
-  const previousKeepAlive = process.env.TEMPEST_LOCAL_KEEP_ALIVE;
+  const previousKeepAlive = process.env.VULNORA_LOCAL_KEEP_ALIVE;
   const controller = new AbortController();
   let active = false;
   let stopping: Promise<void> | undefined;
@@ -16,7 +16,7 @@ export function createOllamaSession(config: LLMConfig) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: local?.model, stream: false, keep_alive: keepAlive,
-        ...(keepAlive < 0 ? { options: { num_ctx: Math.max(4096, Number(process.env.TEMPEST_LOCAL_NUM_CTX || 32768) || 32768) } } : {}),
+        ...(keepAlive < 0 ? { options: { num_ctx: Math.max(4096, Number(process.env.VULNORA_LOCAL_NUM_CTX || 32768) || 32768) } } : {}),
       }),
       signal,
     });
@@ -28,7 +28,7 @@ export function createOllamaSession(config: LLMConfig) {
     async start(): Promise<void> {
       if (!enabled) return;
       active = true;
-      process.env.TEMPEST_LOCAL_KEEP_ALIVE = '-1';
+      process.env.VULNORA_LOCAL_KEEP_ALIVE = '-1';
       await request(-1, AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]));
     },
     async stop(): Promise<void> {
@@ -37,8 +37,8 @@ export function createOllamaSession(config: LLMConfig) {
         controller.abort();
         try { await request(0, AbortSignal.timeout(30000)); }
         finally {
-          if (previousKeepAlive === undefined) delete process.env.TEMPEST_LOCAL_KEEP_ALIVE;
-          else process.env.TEMPEST_LOCAL_KEEP_ALIVE = previousKeepAlive;
+          if (previousKeepAlive === undefined) delete process.env.VULNORA_LOCAL_KEEP_ALIVE;
+          else process.env.VULNORA_LOCAL_KEEP_ALIVE = previousKeepAlive;
         }
       })();
       await stopping;

@@ -1,5 +1,5 @@
 /**
- * T3MP3ST × OBSIDIVM — cross-generation ablation analysis.
+ * VULNORA × OBSIDIVM — cross-generation ablation analysis.
  *
  * Tracks a proposals-ledger keyed by stable proposal id (target_id/finding_id).
  * After each generation the ledger gains:
@@ -183,7 +183,7 @@ export function rebuildAccumulator() {
   }
 
   const lines = [
-    '# T3MP3ST × OBSIDIVM — Learned Tactics (curated by ablation)',
+    '# VULNORA × OBSIDIVM — Learned Tactics (curated by ablation)',
     '',
     'These tactics survived ablation pruning. Sorted by lifetime lift contribution.',
     `Total alive: ${alive.length}.  Last rebuild: ${new Date().toISOString()}.`,

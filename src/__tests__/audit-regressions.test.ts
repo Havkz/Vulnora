@@ -22,7 +22,7 @@ const directories: string[] = [];
 const httpTool = BUILTIN_TOOLS.find(tool => tool.name === 'http_request')!;
 
 async function scratch(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 't3mp3st-regression-'));
+  const directory = await mkdtemp(join(tmpdir(), 'vulnora-regression-'));
   directories.push(directory);
   return directory;
 }
@@ -113,8 +113,8 @@ describe('audit security regressions', () => {
     let outsideRequests = 0;
     const destination = await listen(createServer((_req, res) => { outsideRequests++; res.end('outside'); }), '127.0.0.2');
     const origin = await listen(createServer((_req, res) => { res.writeHead(302, { location: destination }); res.end(); }));
-    vi.stubEnv('TEMPEST_TARGET_ORIGIN', origin);
-    vi.stubEnv('TEMPEST_TARGET_HEADERS', authentication ? JSON.stringify({ Authorization: 'Bearer synthetic-secret' }) : '');
+    vi.stubEnv('VULNORA_TARGET_ORIGIN', origin);
+    vi.stubEnv('VULNORA_TARGET_HEADERS', authentication ? JSON.stringify({ Authorization: 'Bearer synthetic-secret' }) : '');
     const arsenal = new Arsenal();
     arsenal.register(httpTool);
     arsenal.setScope({ allowedHosts: ['127.0.0.1'], allowPrivate: false, allowLoopback: false });
@@ -127,8 +127,8 @@ describe('audit security regressions', () => {
   it('preserves manual redirects for built-in cookie probes with authentication configured', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(null, { status: 302, headers: { location: '/login', 'set-cookie': 'session=test; Secure; HttpOnly' } }));
     vi.stubGlobal('fetch', fetch);
-    vi.stubEnv('TEMPEST_TARGET_ORIGIN', 'https://target.test');
-    vi.stubEnv('TEMPEST_TARGET_HEADERS', JSON.stringify({ Authorization: 'Bearer synthetic-secret' }));
+    vi.stubEnv('VULNORA_TARGET_ORIGIN', 'https://target.test');
+    vi.stubEnv('VULNORA_TARGET_HEADERS', JSON.stringify({ Authorization: 'Bearer synthetic-secret' }));
     const cookieTool = BUILTIN_TOOLS.find(tool => tool.name === 'cookie_analysis')!;
     await cookieTool.handler(createToolContext(undefined, { url: 'https://target.test' }));
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -139,8 +139,8 @@ describe('audit security regressions', () => {
     const store = new JsonlEvidenceStore(path);
     const orchestrator = new ToolOrchestrator({ evidenceStore: store });
     const secret = 'synthetic-reflected-header';
-    vi.stubEnv('TEMPEST_TARGET_ORIGIN', 'https://target.test');
-    vi.stubEnv('TEMPEST_TARGET_HEADERS', JSON.stringify({ 'X-Private': secret }));
+    vi.stubEnv('VULNORA_TARGET_ORIGIN', 'https://target.test');
+    vi.stubEnv('VULNORA_TARGET_HEADERS', JSON.stringify({ 'X-Private': secret }));
     const body = `checking your browser ${secret}`;
     const result = await orchestrator.execute(httpTool, { parameters: { url: 'https://target.test', headers: { Authorization: 'Bearer explicit-synthetic-secret', 'X-Private': secret } } }, async () => ({
       success: true, output: body,
@@ -240,7 +240,7 @@ describe('provider and platform configuration', () => {
   it.each(['deepseek', 'gemini', 'xai', 'local'] as const)('retains the entire %s mission configuration in the actual server factory', async provider => {
     const source = await readFile(join(process.cwd(), 'src/server.ts'), 'utf8');
     const ast = ts.createSourceFile('server.ts', source, ts.ScriptTarget.Latest, true);
-    const factory = ast.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === 'createTempestCommandInstance');
+    const factory = ast.statements.find(statement => ts.isFunctionDeclaration(statement) && statement.name?.text === 'createVulnoraCommandInstance');
     expect(factory).toBeDefined();
     let captured: { llm: LLMConfig } | undefined;
     class Command {
@@ -248,10 +248,10 @@ describe('provider and platform configuration', () => {
       connectBroadcast(): void { /* fixture */ }
       on(): void { /* fixture */ }
     }
-    const context = vm.createContext({ tempestCommand: null, TempestCommand: Command, broadcastEvent: () => {} });
+    const context = vm.createContext({ vulnoraCommand: null, VulnoraCommand: Command, broadcastEvent: () => {} });
     vm.runInContext(ts.transpileModule(source.slice(factory!.getStart(ast), factory!.end), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
     const config: LLMConfig = { provider, model: 'test', apiKey: 'synthetic-key', baseUrl: 'https://custom.test/v1', timeout: 1234, maxTokens: 1024, temperature: 0.2, fallbackChain: [] };
-    context.createTempestCommandInstance('test', config);
+    context.createVulnoraCommandInstance('test', config);
     expect(captured?.llm).toEqual(config);
   });
 
@@ -270,12 +270,12 @@ describe('provider and platform configuration', () => {
 
   it('loads settings and .env from an explicit config directory', async () => {
     const directory = await scratch();
-    await writeFile(join(directory, '.env'), 'T3MP3ST_ISOLATION_TEST=config-directory\n');
-    vi.stubEnv('T3MP3ST_CONFIG_DIR', directory);
+    await writeFile(join(directory, '.env'), 'VULNORA_ISOLATION_TEST=config-directory\n');
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory);
     vi.resetModules();
     const { config } = await import('../config/index.js');
     expect(config.getConfigPath()).toBe(join(directory, 'config.json'));
-    expect(process.env.T3MP3ST_ISOLATION_TEST).toBe('config-directory');
-    delete process.env.T3MP3ST_ISOLATION_TEST;
+    expect(process.env.VULNORA_ISOLATION_TEST).toBe('config-directory');
+    delete process.env.VULNORA_ISOLATION_TEST;
   });
 });

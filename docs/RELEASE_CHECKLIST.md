@@ -1,6 +1,6 @@
 # Release Checklist
 
-A repeatable, artifact-first checklist for cutting a T3MP3ST release. The guiding rule is the
+A repeatable, artifact-first checklist for cutting a VULNORA release. The guiding rule is the
 same as the project itself: **every headline number re-derives from committed artifacts** — so a
 release isn't cut until the deterministic gates and the local smoke path are green.
 
@@ -24,10 +24,10 @@ npm run prompt:audit
 ## 2. Local API smoke (loopback only)
 
 ```bash
-T3MP3ST_PORT=<free-port> npm run server &                 # start on an isolated port
-T3MP3ST_PORT=<free-port> npm run smoke                    # health + endpoint smoke
-T3MP3ST_API_URL=http://127.0.0.1:<free-port> npm run exploit:smoke
-T3MP3ST_API_URL=http://127.0.0.1:<free-port> npm run field:drill
+VULNORA_PORT=<free-port> npm run server &                 # start on an isolated port
+VULNORA_PORT=<free-port> npm run smoke                    # health + endpoint smoke
+VULNORA_API_URL=http://127.0.0.1:<free-port> npm run exploit:smoke
+VULNORA_API_URL=http://127.0.0.1:<free-port> npm run field:drill
 npm run arsenal:smoke                                     # self-contained, 125 checks
 ```
 
@@ -46,11 +46,11 @@ The bash-only path needs **no** external tools. Specialist operators can use sta
 tooling if present on `PATH`; `npm run arsenal:doctor` reports what's installed. Missing tools
 degrade gracefully — they never fail the core run.
 
-## 5. ⚠️ Scope & safety
+## 5.  Scope & safety
 
 - **Never run live scans or exploitation against a target without an explicit authorization /
   scope receipt.** The default posture is owned / local / synthetic targets only.
-- The server binds `127.0.0.1` by default. If you set `T3MP3ST_HOST` to a non-loopback address,
+- The server binds `127.0.0.1` by default. If you set `VULNORA_HOST` to a non-loopback address,
   it prints an **EXPOSURE WARNING** — the API executes commands and has **no built-in auth**. Put
   a Bearer-token reverse proxy in front of it before any LAN / internet exposure.
 

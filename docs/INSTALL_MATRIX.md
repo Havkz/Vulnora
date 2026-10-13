@@ -1,4 +1,4 @@
-# T3MP3ST Install Matrix
+# VULNORA Install Matrix
 
 Use this as the team-facing view of what a workstation needs. The CLI and API remain useful without every binary installed, but local command readiness improves as these tools appear on `PATH`.
 
@@ -6,7 +6,7 @@ The runtime requires **Node.js 22.12.0 or newer**, npm and Git. CI checks Window
 
 Windows local agents use native executables or standard npm Node shims. npm shims launch their Node entrypoint directly, keeping prompts out of the command shell. Other `.cmd`/`.bat` wrappers are rejected; use a native executable for those installations.
 
-To isolate app settings, set `T3MP3ST_CONFIG_DIR` to an absolute directory. It holds `config.json` and the app's `.env`; home-directory env files are ignored while this override is set. Tests always use a temporary directory.
+To isolate app settings, set `VULNORA_CONFIG_DIR` to an absolute directory. It holds `config.json` and the app's `.env`; home-directory env files are ignored while this override is set. Tests always use a temporary directory.
 
 | Lane | Tools | macOS | Linux Notes | Execution |
 | --- | --- | --- | --- | --- |
@@ -27,7 +27,7 @@ brew doctor
 
 ## Website/API installation
 
-On Windows, the `tempest` launcher provisions a dedicated Kali distribution with all 23
+On Windows, the `vulnora` launcher provisions a dedicated Kali distribution with all 23
 external website/API adapters. See [Windows CLI setup](WINDOWS_ARSENAL.md).
 Mobile/desktop apps, cloud-account audits, smart contracts, binary analysis and general
 post-exploitation are excluded from the active arsenal and installers.

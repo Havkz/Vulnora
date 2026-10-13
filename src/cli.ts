@@ -1,27 +1,24 @@
 #!/usr/bin/env node
 /**
- * T3MP3ST CLI
+ * VULNORA CLI
  *
- * Command-line interface for T3MP3ST operations.
+ * Command-line interface for VULNORA operations.
  */
 
 import { Command } from 'commander';
 import inquirer from 'inquirer';
-import chalk from 'chalk';
 import boxen from 'boxen';
 import ora from 'ora';
 import Table from 'cli-table3';
-import gradient from 'gradient-string';
-import figlet from 'figlet';
+import { renderLogo, theme } from './ui/theme.js';
 import { shouldPrintOrchestrationEvent } from './live-log-policy.js';
 
 import {
-  createAutoTempest,
-  createTestTempest,
+  createAutoVulnora,
+  createTestVulnora,
   createStealthOperation,
   createAggressiveOperation,
-  getBanner,
-  type Tempest,
+  type Vulnora,
   type OperatorArchetype,
   type ScanProgressEvent,
 } from './index.js';
@@ -44,10 +41,10 @@ import { formatTerminalReport } from './terminal-report.js';
 // failure from terminating the interactive terminal; the affected tool result
 // remains red and the operator loop can continue or retry.
 process.on('uncaughtException', (error) => {
-  console.error(`[T3MP3ST] uncaught transport error: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`[VULNORA] uncaught transport error: ${error instanceof Error ? error.message : String(error)}`);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error(`[T3MP3ST] unhandled transport rejection: ${reason instanceof Error ? reason.message : String(reason)}`);
+  console.error(`[VULNORA] unhandled transport rejection: ${reason instanceof Error ? reason.message : String(reason)}`);
 });
 
 // =============================================================================
@@ -55,16 +52,7 @@ process.on('unhandledRejection', (reason) => {
 // =============================================================================
 
 function showBanner(): void {
-  try {
-    const text = figlet.textSync('T3MP3ST', {
-      font: 'ANSI Shadow',
-      horizontalLayout: 'default',
-    });
-    console.log(gradient.pastel.multiline(text));
-  } catch {
-    console.log(chalk.cyan(getBanner()));
-  }
-  console.log(chalk.gray('  Tactical Execution Multi-agent Platform for Elite Security Testing\n'));
+  console.log('\n' + renderLogo(process.stdout.columns || 80).join('\n') + '\n');
 }
 
 function showBox(title: string, content: string, borderColor: string = 'cyan'): void {
@@ -81,19 +69,19 @@ function showBox(title: string, content: string, borderColor: string = 'cyan'): 
 }
 
 function showSuccess(message: string): void {
-  console.log(chalk.green('✓ ') + message);
+  console.log(theme.success('✓ ') + message);
 }
 
 function showError(message: string): void {
-  console.log(chalk.red('✗ ') + message);
+  console.log(theme.error('✗ ') + message);
 }
 
 function showInfo(message: string): void {
-  console.log(chalk.blue('ℹ ') + message);
+  console.log(theme.active('ℹ ') + message);
 }
 
 function showWarning(message: string): void {
-  console.log(chalk.yellow('⚠ ') + message);
+  console.log(theme.warning(' ') + message);
 }
 
 // =============================================================================
@@ -108,17 +96,17 @@ type LiveLogController = {
   enabled: boolean;
 };
 
-const liveLogControllers = new WeakMap<Tempest, LiveLogController>();
+const liveLogControllers = new WeakMap<Vulnora, LiveLogController>();
 
 // Keep event details close to neutral gray. The small hue shift groups each
 // detail with its label without turning a full terminal row into a color block.
 const liveDetailColors = {
-  cyan: chalk.hex('#72a2a2'),
-  magenta: chalk.hex('#a278a2'),
-  blue: chalk.hex('#7096b3'),
-  green: chalk.hex('#78a178'),
-  yellow: chalk.hex('#aa985c'),
-  red: chalk.hex('#aa7474'),
+  cyan: theme.detail,
+  magenta: theme.detail,
+  blue: theme.detail,
+  green: theme.detail,
+  yellow: theme.detail,
+  red: theme.detail,
 };
 
 function printLiveLine(
@@ -127,7 +115,7 @@ function printLiveLine(
   color: (text: string) => string,
   context = '',
   timestamp = Date.now(),
-  detailColor: (text: string) => string = chalk.dim
+  detailColor: (text: string) => string = theme.muted
 ): void {
   const time = new Date(timestamp).toLocaleTimeString('de-DE', { hour12: false });
   const labelWidth = 15;
@@ -136,7 +124,7 @@ function printLiveLine(
   const raw = formatLiveDetail(context ? `${context} · ${detail}` : detail, 10000);
   const available = Math.max(12, terminalWidth - prefixWidth);
   const compact = raw.length > available ? `${raw.slice(0, Math.max(1, available - 1))}…` : raw;
-  console.log(`${chalk.gray(time)} ${color(label.padEnd(labelWidth))} ${detailColor(compact)}`);
+  console.log(`${theme.muted(time)} ${color(label.padEnd(labelWidth))} ${detailColor(compact)}`);
 }
 
 function toolDisplayName(toolName?: string): string {
@@ -307,10 +295,10 @@ function isTargetFetchFailure(toolName: string | undefined, detail: string): boo
 }
 
 function waitingSummary(
-  tempest: Tempest,
+  vulnora: Vulnora,
   activeActivities: Map<string, { command: string }>
 ): string | null {
-  const busy = tempest.command.getStatus().operators.busy;
+  const busy = vulnora.command.getStatus().operators.busy;
   if (busy === 0) return null;
   const running = [...activeActivities.values()]
     .map((activity, index) => `${index + 1}. ${activity.command}`)
@@ -331,20 +319,20 @@ function printLiveEvent(event: ScanProgressEvent): void {
     color: (text: string) => string;
     detailColor: (text: string) => string;
   }> = {
-    task_started: { text: 'START', color: chalk.cyan.bold, detailColor: liveDetailColors.cyan },
-    thinking: { text: 'THINK', color: chalk.magenta.bold, detailColor: liveDetailColors.magenta },
-    tool_call: { text: 'TOOL', color: chalk.blue.bold, detailColor: liveDetailColors.blue },
+    task_started: { text: 'START', color: theme.active.bold, detailColor: liveDetailColors.cyan },
+    thinking: { text: 'THINK', color: theme.accent.bold, detailColor: liveDetailColors.magenta },
+    tool_call: { text: 'TOOL', color: theme.active.bold, detailColor: liveDetailColors.blue },
     tool_result: {
       text: policyDenied ? 'DENIED' : orchestrationSkipped ? 'SKIPPED' : 'RESULT',
-      color: policyDenied || orchestrationSkipped ? chalk.yellow.bold : event.success === false && !targetFetchFailure ? chalk.red.bold : chalk.green.bold,
+      color: policyDenied || orchestrationSkipped ? theme.warning.bold : event.success === false && !targetFetchFailure ? theme.error.bold : theme.success.bold,
       detailColor: policyDenied || orchestrationSkipped ? liveDetailColors.yellow : event.success === false && !targetFetchFailure ? liveDetailColors.red : liveDetailColors.green,
     },
     task_completed: {
       text: 'DONE',
-      color: event.success === false ? chalk.yellow.bold : chalk.green.bold,
+      color: event.success === false ? theme.warning.bold : theme.success.bold,
       detailColor: event.success === false ? liveDetailColors.yellow : liveDetailColors.green,
     },
-    task_failed: { text: 'ERROR', color: chalk.red.bold, detailColor: liveDetailColors.red },
+    task_failed: { text: 'ERROR', color: theme.error.bold, detailColor: liveDetailColors.red },
   };
   const label = labels[event.kind];
   const detail = event.kind === 'tool_call'
@@ -357,14 +345,14 @@ function printLiveEvent(event: ScanProgressEvent): void {
   printLiveLine(label.text, detail, label.color, context, event.timestamp, label.detailColor);
 }
 
-function attachLiveLogs(tempest: Tempest): void {
+function attachLiveLogs(vulnora: Vulnora): void {
   const controller: LiveLogController = { enabled: false };
   const pendingFallbackModels = new Map<string, number>();
   const activeActivities = new Map<string, { command: string }>();
   let lastLiveEventAt = Date.now();
   let idleWaitingShown = false;
-  liveLogControllers.set(tempest, controller);
-  tempest.command.on('scan:progress', event => {
+  liveLogControllers.set(vulnora, controller);
+  vulnora.command.on('scan:progress', event => {
     lastLiveEventAt = Date.now();
     idleWaitingShown = false;
     if (event.kind === 'task_started') {
@@ -385,8 +373,8 @@ function attachLiveLogs(tempest: Tempest): void {
       if (event.kind === 'task_completed' || event.kind === 'task_failed') {
         queueMicrotask(() => {
           if (!controller.enabled) return;
-          const waiting = waitingSummary(tempest, activeActivities);
-          if (waiting) printLiveLine('WAITING...', waiting, chalk.yellow.bold, '', Date.now(), liveDetailColors.yellow);
+          const waiting = waitingSummary(vulnora, activeActivities);
+          if (waiting) printLiveLine('WAITING...', waiting, theme.warning.bold, '', Date.now(), liveDetailColors.yellow);
         });
       }
     }
@@ -394,20 +382,20 @@ function attachLiveLogs(tempest: Tempest): void {
 
   // Only surface policy decisions here. Successful executions already have TOOL
   // and RESULT lines; printing EXECUTED again would make the live view noisier.
-  tempest.command.on('orchestration:event', event => {
+  vulnora.command.on('orchestration:event', event => {
     if (!shouldPrintOrchestrationEvent(event.action)) return;
     lastLiveEventAt = Date.now();
     idleWaitingShown = false;
     if (!controller.enabled) return;
     const styles = {
-      SKIPPED: { label: chalk.yellow.bold, detail: liveDetailColors.yellow },
-      USED: { label: chalk.cyan.bold, detail: liveDetailColors.cyan },
-      DEFERRED: { label: chalk.yellow.bold, detail: liveDetailColors.yellow },
-      STOPPED: { label: chalk.red.bold, detail: liveDetailColors.red },
-      REPEATED: { label: chalk.magenta.bold, detail: liveDetailColors.magenta },
-      BLOCKED: { label: chalk.red.bold, detail: liveDetailColors.red },
-      FAILED: { label: chalk.red.bold, detail: liveDetailColors.red },
-      EXECUTED: { label: chalk.green.bold, detail: liveDetailColors.green },
+      SKIPPED: { label: theme.warning.bold, detail: liveDetailColors.yellow },
+      USED: { label: theme.active.bold, detail: liveDetailColors.cyan },
+      DEFERRED: { label: theme.warning.bold, detail: liveDetailColors.yellow },
+      STOPPED: { label: theme.error.bold, detail: liveDetailColors.red },
+      REPEATED: { label: theme.accent.bold, detail: liveDetailColors.magenta },
+      BLOCKED: { label: theme.error.bold, detail: liveDetailColors.red },
+      FAILED: { label: theme.error.bold, detail: liveDetailColors.red },
+      EXECUTED: { label: theme.success.bold, detail: liveDetailColors.green },
     } as const;
     const style = styles[event.action as keyof typeof styles] || styles.FAILED;
     const compactTarget = event.target.length > 72 ? `${event.target.slice(0, 71)}…` : event.target;
@@ -425,38 +413,38 @@ function attachLiveLogs(tempest: Tempest): void {
   // progress event arms the two-minute inactivity check again.
   const idleWaitingTimer = setInterval(() => {
     if (!controller.enabled || idleWaitingShown || Date.now() - lastLiveEventAt < 120_000) return;
-    const waiting = waitingSummary(tempest, activeActivities);
+    const waiting = waitingSummary(vulnora, activeActivities);
     if (!waiting) return;
-    printLiveLine('WAITING...', waiting, chalk.yellow.bold, '', Date.now(), liveDetailColors.yellow);
+    printLiveLine('WAITING...', waiting, theme.warning.bold, '', Date.now(), liveDetailColors.yellow);
     idleWaitingShown = true;
   }, 15_000);
   idleWaitingTimer.unref();
-  tempest.command.once('command:stopped', () => clearInterval(idleWaitingTimer));
+  vulnora.command.once('command:stopped', () => clearInterval(idleWaitingTimer));
 
   // A task-level DONE is intentionally compact because many of them appear during a
   // mission. Make the one mission-level completion unmistakable and emit it only after
   // MissionControl has completed every configured phase and stopped the command loop.
-  tempest.mission.once('mission:completed', mission => {
+  vulnora.mission.once('mission:completed', mission => {
     if (!controller.enabled) return;
     printLiveLine(
       'OPERATION DONE',
       `${mission.status} · ${mission.name}`,
-      chalk.bgGreen.black.bold,
+      theme.success.bold,
       '',
       mission.completedAt ?? Date.now(),
-      chalk.greenBright.bold
+      theme.success.bold
     );
   });
 
-  tempest.llm.on('request:retry', ({ attempt, maxAttempts, error }) => {
-    if (controller.enabled) printLiveLine('RETRY', error.message, chalk.yellow.bold, `${attempt}/${maxAttempts}`, Date.now(), liveDetailColors.yellow);
+  vulnora.llm.on('request:retry', ({ attempt, maxAttempts, error }) => {
+    if (controller.enabled) printLiveLine('RETRY', error.message, theme.warning.bold, `${attempt}/${maxAttempts}`, Date.now(), liveDetailColors.yellow);
   });
 
-  tempest.llm.on('request:refusal', ({ provider, model, preview }) => {
-    if (controller.enabled) printLiveLine('REFUSED', preview, chalk.red.bold, `${provider}/${model}`, Date.now(), liveDetailColors.red);
+  vulnora.llm.on('request:refusal', ({ provider, model, preview }) => {
+    if (controller.enabled) printLiveLine('REFUSED', preview, theme.error.bold, `${provider}/${model}`, Date.now(), liveDetailColors.red);
   });
 
-  tempest.llm.on('request:fallback', ({ fromModel, toModel, reason }) => {
+  vulnora.llm.on('request:fallback', ({ fromModel, toModel, reason }) => {
     const recovered = String(reason || '').startsWith('recovered_after:');
     if (!recovered && toModel) {
       pendingFallbackModels.set(toModel, (pendingFallbackModels.get(toModel) || 0) + 1);
@@ -465,7 +453,7 @@ function attachLiveLogs(tempest: Tempest): void {
       printLiveLine(
         recovered ? 'RECOVERED' : 'FALLBACK',
         `reason=${reason || 'unknown'}`,
-        recovered ? chalk.green.bold : chalk.yellow.bold,
+        recovered ? theme.success.bold : theme.warning.bold,
         `${fromModel} → ${toModel || 'none'}`,
         Date.now(),
         recovered ? liveDetailColors.green : liveDetailColors.yellow
@@ -473,21 +461,21 @@ function attachLiveLogs(tempest: Tempest): void {
     }
   });
 
-  tempest.llm.on('request:complete', ({ response, durationMs }) => {
+  vulnora.llm.on('request:complete', ({ response, durationMs }) => {
     const pending = pendingFallbackModels.get(response.model) || 0;
     if (pending === 0) return;
     if (pending === 1) pendingFallbackModels.delete(response.model);
     else pendingFallbackModels.set(response.model, pending - 1);
-    if (controller.enabled) printLiveLine('FALLBACK RESULT', response.content, chalk.green.bold, `${response.model} · ${durationMs} ms`, Date.now(), liveDetailColors.green);
+    if (controller.enabled) printLiveLine('FALLBACK RESULT', response.content, theme.success.bold, `${response.model} · ${durationMs} ms`, Date.now(), liveDetailColors.green);
   });
 
-  tempest.llm.on('request:error', ({ error }) => {
-    if (controller.enabled) printLiveLine('LLM ERROR', error.message, chalk.red.bold, '', Date.now(), liveDetailColors.red);
+  vulnora.llm.on('request:error', ({ error }) => {
+    if (controller.enabled) printLiveLine('LLM ERROR', error.message, theme.error.bold, '', Date.now(), liveDetailColors.red);
   });
 }
 
-function toggleLiveLogs(tempest: Tempest): void {
-  const controller = liveLogControllers.get(tempest);
+function toggleLiveLogs(vulnora: Vulnora): void {
+  const controller = liveLogControllers.get(vulnora);
   if (!controller) return;
   controller.enabled = !controller.enabled;
   if (controller.enabled) {
@@ -501,73 +489,73 @@ function toggleLiveLogs(tempest: Tempest): void {
 // STATUS DISPLAY
 // =============================================================================
 
-function displayStatus(tempest: Tempest): void {
-  const status = tempest.command.getStatus();
+function displayStatus(vulnora: Vulnora): void {
+  const status = vulnora.command.getStatus();
 
   console.log('');
-  console.log(chalk.bold.cyan('═══ OPERATION STATUS ═══'));
+  console.log(theme.active.bold('═══ OPERATION STATUS ═══'));
   console.log('');
 
   // Operation Info
-  console.log(chalk.bold('Operation:'), status.name);
-  console.log(chalk.bold('Status:'), status.running
-    ? (status.paused ? chalk.yellow('PAUSED') : chalk.green('RUNNING'))
-    : chalk.gray('STOPPED'));
-  console.log(chalk.bold('Tick Count:'), status.tickCount);
+  console.log(theme.emphasis('Operation:'), status.name);
+  console.log(theme.emphasis('Status:'), status.running
+    ? (status.paused ? theme.warning('PAUSED') : theme.success('RUNNING'))
+    : theme.muted('STOPPED'));
+  console.log(theme.emphasis('Tick Count:'), status.tickCount);
   console.log('');
 
   // Operators Table
   const opTable = new Table({
     head: [
-      chalk.cyan('Status'),
-      chalk.cyan('Count'),
+      theme.active('Status'),
+      theme.active('Count'),
     ],
     style: { head: [], border: [] },
   });
 
   opTable.push(
-    ['Available', chalk.green(status.operators.available.toString())],
-    ['Busy', chalk.yellow(status.operators.busy.toString())],
-    ['Cooldown', chalk.blue(status.operators.cooldown.toString())],
-    ['Burned', chalk.red(status.operators.burned.toString())],
-    [chalk.bold('Total'), chalk.bold(status.operators.total.toString())],
+    ['Available', theme.success(status.operators.available.toString())],
+    ['Busy', theme.warning(status.operators.busy.toString())],
+    ['Cooldown', theme.active(status.operators.cooldown.toString())],
+    ['Burned', theme.error(status.operators.burned.toString())],
+    [theme.emphasis('Total'), theme.emphasis(status.operators.total.toString())],
   );
 
-  console.log(chalk.bold('Operators:'));
+  console.log(theme.emphasis('Operators:'));
   console.log(opTable.toString());
   console.log('');
 
   // Findings Summary
   const findingsTable = new Table({
     head: [
-      chalk.cyan('Severity'),
-      chalk.cyan('Count'),
+      theme.active('Severity'),
+      theme.active('Count'),
     ],
     style: { head: [], border: [] },
   });
 
   findingsTable.push(
-    [chalk.red('Critical'), status.vault.bySeverity.critical.toString()],
-    [chalk.magenta('High'), status.vault.bySeverity.high.toString()],
-    [chalk.yellow('Medium'), status.vault.bySeverity.medium.toString()],
-    [chalk.blue('Low'), status.vault.bySeverity.low.toString()],
-    [chalk.gray('Info'), status.vault.bySeverity.info.toString()],
+    [theme.error('Critical'), status.vault.bySeverity.critical.toString()],
+    [theme.accent('High'), status.vault.bySeverity.high.toString()],
+    [theme.warning('Medium'), status.vault.bySeverity.medium.toString()],
+    [theme.active('Low'), status.vault.bySeverity.low.toString()],
+    [theme.muted('Info'), status.vault.bySeverity.info.toString()],
   );
 
-  console.log(chalk.bold('Findings:'));
+  console.log(theme.emphasis('Findings:'));
   console.log(findingsTable.toString());
   console.log('');
 
   // OPSEC Status
-  const opsecColor = status.opsec.riskLevel === 'critical' ? chalk.red :
-    status.opsec.riskLevel === 'high' ? chalk.yellow :
-    status.opsec.riskLevel === 'medium' ? chalk.blue : chalk.green;
+  const opsecColor = status.opsec.riskLevel === 'critical' ? theme.error :
+    status.opsec.riskLevel === 'high' ? theme.warning :
+    status.opsec.riskLevel === 'medium' ? theme.active : theme.success;
 
-  console.log(chalk.bold('OPSEC:'), opsecColor(status.opsec.riskLevel.toUpperCase()));
-  console.log(chalk.bold('Detections:'), `${status.opsec.activeDetections}/${status.opsec.totalDetections}`);
+  console.log(theme.emphasis('OPSEC:'), opsecColor(status.opsec.riskLevel.toUpperCase()));
+  console.log(theme.emphasis('Detections:'), `${status.opsec.activeDetections}/${status.opsec.totalDetections}`);
 
   if (status.opsec.abortRecommended) {
-    console.log(chalk.red.bold('⚠ ABORT RECOMMENDED'));
+    console.log(theme.error.bold(' ABORT RECOMMENDED'));
   }
 
   console.log('');
@@ -588,10 +576,10 @@ async function interactiveMode(): Promise<void> {
       'Setup Required',
       `No API keys configured. Please run setup first:
 
-${chalk.cyan('npx t3mp3st setup')}
+${theme.active('npx vulnora setup')}
 
 Or set environment variables:
-${chalk.gray('OPENROUTER_API_KEY=your-key-here')}`,
+${theme.muted('OPENROUTER_API_KEY=your-key-here')}`,
       'yellow'
     );
 
@@ -614,45 +602,45 @@ ${chalk.gray('OPENROUTER_API_KEY=your-key-here')}`,
 
   // Welcome message
   showBox(
-    'Welcome to T3MP3ST',
-    `Configured providers: ${providers.map(p => chalk.cyan(p)).join(', ')}
-Default: ${chalk.cyan(config.getLLMConfig().provider)} / ${chalk.cyan(config.getLLMConfig().model)}`,
+    'Welcome to VULNORA',
+    `Configured providers: ${providers.map(p => theme.active(p)).join(', ')}
+Default: ${theme.active(config.getLLMConfig().provider)} / ${theme.active(config.getLLMConfig().model)}`,
     'cyan'
   );
 
   // Main menu loop
   let running = true;
-  let tempest: Tempest | null = null;
+  let vulnora: Vulnora | null = null;
 
   while (running) {
     const choices = [
-      { name: '🚀 Start New Operation', value: 'new' },
+      { name: ' Start New Operation', value: 'new' },
     ];
 
-    if (tempest) {
-      const liveLogsOn = liveLogControllers.get(tempest)?.enabled === true;
+    if (vulnora) {
+      const liveLogsOn = liveLogControllers.get(vulnora)?.enabled === true;
       choices.push(
-        { name: '📊 View Status', value: 'status' },
-        { name: `📟 Live Logs (${liveLogsOn ? 'ON' : 'OFF'})`, value: 'live_logs' },
-        { name: '👤 Spawn Operator', value: 'spawn' },
-        { name: '🎯 Add Target', value: 'target' },
-        { name: '📋 Create Mission', value: 'mission' },
-        { name: '💬 Chat with AI', value: 'chat' },
-        { name: '📝 Generate Report', value: 'report' },
-        { name: '⏹️  Stop Operation', value: 'stop' },
+        { name: ' View Status', value: 'status' },
+        { name: ` Live Logs (${liveLogsOn ? 'ON' : 'OFF'})`, value: 'live_logs' },
+        { name: ' Spawn Operator', value: 'spawn' },
+        { name: ' Add Target', value: 'target' },
+        { name: ' Create Mission', value: 'mission' },
+        { name: ' Chat with AI', value: 'chat' },
+        { name: ' Generate Report', value: 'report' },
+        { name: '  Stop Operation', value: 'stop' },
       );
     }
 
     choices.push(
-      { name: '⚙️  Settings', value: 'settings' },
-      { name: '🚪 Exit', value: 'exit' },
+      { name: '  Settings', value: 'settings' },
+      { name: ' Exit', value: 'exit' },
     );
 
     const { action } = await inquirer.prompt([
       {
         type: 'list',
         name: 'action',
-        message: tempest ? `[${tempest.command.name}] What would you like to do?` : 'What would you like to do?',
+        message: vulnora ? `[${vulnora.command.name}] What would you like to do?` : 'What would you like to do?',
         choices,
       },
     ]);
@@ -660,41 +648,41 @@ Default: ${chalk.cyan(config.getLLMConfig().provider)} / ${chalk.cyan(config.get
     try {
       switch (action) {
         case 'new':
-          tempest = await startNewOperation();
+          vulnora = await startNewOperation();
           break;
         case 'status':
-          if (tempest) displayStatus(tempest);
+          if (vulnora) displayStatus(vulnora);
           break;
         case 'live_logs':
-          if (tempest) toggleLiveLogs(tempest);
+          if (vulnora) toggleLiveLogs(vulnora);
           break;
         case 'spawn':
-          if (tempest) await spawnOperator(tempest);
+          if (vulnora) await spawnOperator(vulnora);
           break;
         case 'target':
-          if (tempest) await addTarget(tempest);
+          if (vulnora) await addTarget(vulnora);
           break;
         case 'mission':
-          if (tempest) await createMission(tempest);
+          if (vulnora) await createMission(vulnora);
           break;
         case 'chat':
-          if (tempest) await chatWithAI(tempest);
+          if (vulnora) await chatWithAI(vulnora);
           break;
         case 'report':
-          if (tempest) await generateReport(tempest);
+          if (vulnora) await generateReport(vulnora);
           break;
         case 'stop':
-          if (tempest) {
-            tempest.command.stop();
+          if (vulnora) {
+            vulnora.command.stop();
             showSuccess('Operation stopped');
-            tempest = null;
+            vulnora = null;
           }
           break;
         case 'settings':
           await openSettings();
           break;
         case 'exit':
-          if (tempest) {
+          if (vulnora) {
             const { confirmExit } = await inquirer.prompt([
               {
                 type: 'confirm',
@@ -704,7 +692,7 @@ Default: ${chalk.cyan(config.getLLMConfig().provider)} / ${chalk.cyan(config.get
               },
             ]);
             if (!confirmExit) continue;
-            tempest.command.stop();
+            vulnora.command.stop();
           }
           running = false;
           break;
@@ -714,10 +702,10 @@ Default: ${chalk.cyan(config.getLLMConfig().provider)} / ${chalk.cyan(config.get
     }
   }
 
-  console.log(chalk.gray('\nGoodbye!\n'));
+  console.log(theme.muted('\nGoodbye!\n'));
 }
 
-async function startNewOperation(): Promise<Tempest> {
+async function startNewOperation(): Promise<Vulnora> {
   const { name, type } = await inquirer.prompt([
     {
       type: 'input',
@@ -740,32 +728,32 @@ async function startNewOperation(): Promise<Tempest> {
 
   const spinner = ora('Initializing operation...').start();
 
-  let tempest: Tempest;
+  let vulnora: Vulnora;
 
   switch (type) {
     case 'stealth':
-      tempest = createStealthOperation(name);
+      vulnora = createStealthOperation(name);
       break;
     case 'aggressive':
-      tempest = createAggressiveOperation(name);
+      vulnora = createAggressiveOperation(name);
       break;
     case 'test':
-      tempest = createTestTempest(name);
+      vulnora = createTestVulnora(name);
       break;
     default:
-      tempest = createAutoTempest(name);
+      vulnora = createAutoVulnora(name);
   }
 
-  attachLiveLogs(tempest);
-  tempest.command.start();
+  attachLiveLogs(vulnora);
+  vulnora.command.start();
   spinner.succeed(`Operation "${name}" started!`);
 
-  displayStatus(tempest);
+  displayStatus(vulnora);
 
-  return tempest;
+  return vulnora;
 }
 
-async function spawnOperator(tempest: Tempest): Promise<void> {
+async function spawnOperator(vulnora: Vulnora): Promise<void> {
   const archetypes: OperatorArchetype[] = [
     'recon', 'scanner', 'exploiter', 'infiltrator',
     'exfiltrator', 'ghost', 'coordinator', 'analyst',
@@ -786,16 +774,16 @@ async function spawnOperator(tempest: Tempest): Promise<void> {
       name: 'callsign',
       message: 'Operator callsign:',
       default: (answers: { archetype: string }) =>
-        `${answers.archetype.charAt(0).toUpperCase() + answers.archetype.slice(1)}-${tempest.cell.getAllOperators().length + 1}`,
+        `${answers.archetype.charAt(0).toUpperCase() + answers.archetype.slice(1)}-${vulnora.cell.getAllOperators().length + 1}`,
     },
   ]);
 
-  const operator = tempest.command.spawnOperator(callsign, archetype);
+  const operator = vulnora.command.spawnOperator(callsign, archetype);
   showSuccess(`Operator ${callsign} (${archetype}) spawned!`);
   showInfo(`ID: ${operator.id}`);
 }
 
-async function addTarget(tempest: Tempest): Promise<void> {
+async function addTarget(vulnora: Vulnora): Promise<void> {
   const { address, type, zone } = await inquirer.prompt([
     {
       type: 'input',
@@ -820,7 +808,7 @@ async function addTarget(tempest: Tempest): Promise<void> {
     },
   ]);
 
-  const target = tempest.targetEnv.addTarget({
+  const target = vulnora.targetEnv.addTarget({
     name: address,
     type,
     zone,
@@ -831,7 +819,7 @@ async function addTarget(tempest: Tempest): Promise<void> {
   showInfo(`ID: ${target.id}`);
 }
 
-async function createMission(tempest: Tempest): Promise<void> {
+async function createMission(vulnora: Vulnora): Promise<void> {
   const { name, objectives } = await inquirer.prompt([
     {
       type: 'input',
@@ -847,18 +835,18 @@ async function createMission(tempest: Tempest): Promise<void> {
     },
   ]);
 
-  const mission = tempest.mission.createMission({
+  const mission = vulnora.mission.createMission({
     name,
     objectives: objectives.split(',').map((o: string) => o.trim()),
   });
 
-  tempest.mission.startMission(mission.id);
+  vulnora.mission.startMission(mission.id);
 
   showSuccess(`Mission "${name}" created and started!`);
   showInfo(`ID: ${mission.id}`);
 }
 
-async function chatWithAI(tempest: Tempest): Promise<void> {
+async function chatWithAI(vulnora: Vulnora): Promise<void> {
   showInfo('Chat mode - type "exit" to return to menu\n');
 
   let chatting = true;
@@ -868,7 +856,7 @@ async function chatWithAI(tempest: Tempest): Promise<void> {
       {
         type: 'input',
         name: 'message',
-        message: chalk.cyan('You:'),
+        message: theme.active('You:'),
         validate: (input: string) => input.length > 0 || 'Enter a message',
       },
     ]);
@@ -881,9 +869,9 @@ async function chatWithAI(tempest: Tempest): Promise<void> {
     const spinner = ora('Thinking...').start();
 
     try {
-      const response = await tempest.llm.prompt(message);
+      const response = await vulnora.llm.prompt(message);
       spinner.stop();
-      console.log(chalk.green('AI:'), response);
+      console.log(theme.success('AI:'), response);
       console.log('');
     } catch (error) {
       spinner.fail('Error');
@@ -892,22 +880,22 @@ async function chatWithAI(tempest: Tempest): Promise<void> {
   }
 }
 
-async function generateReport(tempest: Tempest): Promise<void> {
-  const mission = tempest.mission.getActiveMission();
+async function generateReport(vulnora: Vulnora): Promise<void> {
+  const mission = vulnora.mission.getActiveMission();
 
   if (!mission) {
     // Create a temporary mission for report
-    const tempMission = tempest.mission.createMission({
+    const tempMission = vulnora.mission.createMission({
       name: 'Ad-hoc Report',
       objectives: ['Generate findings report'],
     });
-    tempest.mission.startMission(tempMission.id);
+    vulnora.mission.startMission(tempMission.id);
   }
 
   try {
-    const report = tempest.command.generateReport();
+    const report = vulnora.command.generateReport();
     console.log('');
-    console.log(chalk.bold.cyan('═══ ENGAGEMENT REPORT ═══'));
+    console.log(theme.active.bold('═══ ENGAGEMENT REPORT ═══'));
     console.log('');
     console.log(formatTerminalReport(report));
   } catch (error) {
@@ -935,14 +923,14 @@ async function openSettings(): Promise<void> {
     case 'view': {
       const settings = config.getAll();
       console.log('');
-      console.log(chalk.bold('Current Configuration:'));
-      console.log(chalk.cyan('  Provider:'), settings.defaultProvider);
-      console.log(chalk.cyan('  Model:'), settings.defaultModel);
-      console.log(chalk.cyan('  OpenRouter:'), hasApiKey('openrouter') ? chalk.green('configured') : chalk.red('not set'));
-      console.log(chalk.cyan('  Venice:'), hasApiKey('venice') ? chalk.green('configured') : chalk.red('not set'));
-      console.log(chalk.cyan('  Anthropic:'), hasApiKey('anthropic') ? chalk.green('configured') : chalk.red('not set'));
-      console.log(chalk.cyan('  OpenAI:'), hasApiKey('openai') ? chalk.green('configured') : chalk.red('not set'));
-      console.log(chalk.cyan('  DeepSeek:'), hasApiKey('deepseek') ? chalk.green('configured') : chalk.red('not set'));
+      console.log(theme.emphasis('Current Configuration:'));
+      console.log(theme.active('  Provider:'), settings.defaultProvider);
+      console.log(theme.active('  Model:'), settings.defaultModel);
+      console.log(theme.active('  OpenRouter:'), hasApiKey('openrouter') ? theme.success('configured') : theme.error('not set'));
+      console.log(theme.active('  Venice:'), hasApiKey('venice') ? theme.success('configured') : theme.error('not set'));
+      console.log(theme.active('  Anthropic:'), hasApiKey('anthropic') ? theme.success('configured') : theme.error('not set'));
+      console.log(theme.active('  OpenAI:'), hasApiKey('openai') ? theme.success('configured') : theme.error('not set'));
+      console.log(theme.active('  DeepSeek:'), hasApiKey('deepseek') ? theme.success('configured') : theme.error('not set'));
       console.log('');
       break;
     }
@@ -1025,8 +1013,8 @@ async function openSettings(): Promise<void> {
 const program = new Command();
 
 program
-  .name('t3mp3st')
-  .description('T3MP3ST - Tactical Execution Multi-agent Platform for Elite Security Testing')
+  .name('vulnora')
+  .description('Vulnora - persistent website and API security testing')
   .version('1.0.0');
 
 program
@@ -1053,21 +1041,21 @@ program
     showBanner();
     const settings = config.getAll();
 
-    console.log(chalk.bold('Configuration Status:\n'));
+    console.log(theme.emphasis('Configuration Status:\n'));
 
     const table = new Table({
       style: { head: [], border: [] },
     });
 
     table.push(
-      [chalk.cyan('Default Provider'), settings.defaultProvider],
-      [chalk.cyan('Default Model'), settings.defaultModel],
-      [chalk.cyan('OpenRouter API Key'), hasApiKey('openrouter') ? chalk.green('✓ Configured') : chalk.red('✗ Not set')],
-      [chalk.cyan('Venice API Key'), hasApiKey('venice') ? chalk.green('✓ Configured') : chalk.red('✗ Not set')],
-      [chalk.cyan('Anthropic API Key'), hasApiKey('anthropic') ? chalk.green('✓ Configured') : chalk.red('✗ Not set')],
-      [chalk.cyan('OpenAI API Key'), hasApiKey('openai') ? chalk.green('✓ Configured') : chalk.red('✗ Not set')],
-      [chalk.cyan('DeepSeek API Key'), hasApiKey('deepseek') ? chalk.green('✓ Configured') : chalk.red('✗ Not set')],
-      [chalk.cyan('Config Path'), config.getConfigPath()],
+      [theme.active('Default Provider'), settings.defaultProvider],
+      [theme.active('Default Model'), settings.defaultModel],
+      [theme.active('OpenRouter API Key'), hasApiKey('openrouter') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
+      [theme.active('Venice API Key'), hasApiKey('venice') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
+      [theme.active('Anthropic API Key'), hasApiKey('anthropic') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
+      [theme.active('OpenAI API Key'), hasApiKey('openai') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
+      [theme.active('DeepSeek API Key'), hasApiKey('deepseek') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
+      [theme.active('Config Path'), config.getConfigPath()],
     );
 
     console.log(table.toString());
@@ -1084,7 +1072,7 @@ program
 
     if (!['codex', 'local', 'local-agent', 'mock'].includes(provider) && !config.getLLMConfig().apiKey) {
       showError(`No API key configured for ${provider}`);
-      showInfo('Run "npx t3mp3st setup" to configure API keys');
+      showInfo('Run "npx vulnora setup" to configure API keys');
       process.exitCode = 1;
       return;
     }
@@ -1097,7 +1085,7 @@ program
 
       spinner.succeed('Connection successful!');
       console.log('');
-      console.log(chalk.cyan('Response:'), response);
+      console.log(theme.active('Response:'), response);
       console.log('');
     } catch (error) {
       spinner.fail('Connection failed');
@@ -1115,10 +1103,10 @@ program
     const provider = config.get('defaultProvider');
     const models = AVAILABLE_MODELS[provider];
 
-    console.log(chalk.bold(`Available models for ${provider}:\n`));
+    console.log(theme.emphasis(`Available models for ${provider}:\n`));
 
     const table = new Table({
-      head: [chalk.cyan('Model ID'), chalk.cyan('Name'), chalk.cyan('Context')],
+      head: [theme.active('Model ID'), theme.active('Name'), theme.active('Context')],
       style: { head: [], border: [] },
     });
 

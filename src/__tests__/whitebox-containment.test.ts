@@ -9,7 +9,7 @@
  *   - rejects dirs outside the root, '..' escapes, and symlinks that escape
  *   - rejects non-existent paths, files (non-dirs), and empty/non-string input
  *
- * The root is pinned via T3MP3ST_REPO_ROOT to a realpath'd temp dir so the test
+ * The root is pinned via VULNORA_REPO_ROOT to a realpath'd temp dir so the test
  * is independent of the operator's real home.
  */
 
@@ -32,26 +32,26 @@ vi.mock('node:fs', async (importOriginal) => {
 
 describe('resolveContainedRepoPath (B-03 path containment)', () => {
   let base: string; // realpath'd temp base holding both root/ and outside/
-  let root: string; // the allowed root (set as T3MP3ST_REPO_ROOT)
+  let root: string; // the allowed root (set as VULNORA_REPO_ROOT)
   let outside: string; // a sibling dir OUTSIDE the root
   let prevRoot: string | undefined;
 
   beforeAll(() => {
-    prevRoot = process.env.T3MP3ST_REPO_ROOT;
+    prevRoot = process.env.VULNORA_REPO_ROOT;
     // realpath the temp base up-front: on macOS /tmp -> /private/tmp is a symlink,
     // which would otherwise make our own fixtures look like they escape the root.
-    base = realpathSync(mkdtempSync(join(tmpdir(), 't3mp3st-contain-')));
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'vulnora-contain-')));
     root = join(base, 'root');
     outside = join(base, 'outside');
     mkdirSync(join(root, 'repo', 'sub'), { recursive: true });
     mkdirSync(outside, { recursive: true });
     writeFileSync(join(root, 'afile.txt'), 'x');
-    process.env.T3MP3ST_REPO_ROOT = root;
+    process.env.VULNORA_REPO_ROOT = root;
   });
 
   afterAll(() => {
-    if (prevRoot === undefined) delete process.env.T3MP3ST_REPO_ROOT;
-    else process.env.T3MP3ST_REPO_ROOT = prevRoot;
+    if (prevRoot === undefined) delete process.env.VULNORA_REPO_ROOT;
+    else process.env.VULNORA_REPO_ROOT = prevRoot;
     try { rmSync(base, { recursive: true, force: true }); } catch { /* noop */ }
   });
 
@@ -102,23 +102,23 @@ describe('resolveContainedRepoPath (B-03 path containment)', () => {
 
   it('treats GitHub HTTPS repo URLs as remote sources and requires a GitHub token before cloning', () => {
     const prev = process.env.GITHUB_TOKEN;
-    const prevT3 = process.env.T3MP3ST_GITHUB_TOKEN;
+    const prevT3 = process.env.VULNORA_GITHUB_TOKEN;
     delete process.env.GITHUB_TOKEN;
-    delete process.env.T3MP3ST_GITHUB_TOKEN;
+    delete process.env.VULNORA_GITHUB_TOKEN;
     try {
       expect(() => resolveRepoSourceForAnalysis('https://github.com/example/private-repo')).toThrow(RepoCloneError);
-      expect(() => resolveRepoSourceForAnalysis('https://github.com/example/private-repo')).toThrow(/T3MP3ST_GITHUB_TOKEN or GITHUB_TOKEN/);
+      expect(() => resolveRepoSourceForAnalysis('https://github.com/example/private-repo')).toThrow(/VULNORA_GITHUB_TOKEN or GITHUB_TOKEN/);
     } finally {
       if (prev === undefined) delete process.env.GITHUB_TOKEN;
       else process.env.GITHUB_TOKEN = prev;
-      if (prevT3 === undefined) delete process.env.T3MP3ST_GITHUB_TOKEN;
-      else process.env.T3MP3ST_GITHUB_TOKEN = prevT3;
+      if (prevT3 === undefined) delete process.env.VULNORA_GITHUB_TOKEN;
+      else process.env.VULNORA_GITHUB_TOKEN = prevT3;
     }
   });
 
   it('does not embed GitHub tokens in the git clone URL argument', () => {
     expect(whiteboxSource).toContain('GIT_ASKPASS');
-    expect(whiteboxSource).toContain('T3MP3ST_GIT_TOKEN');
+    expect(whiteboxSource).toContain('VULNORA_GIT_TOKEN');
     expect(whiteboxSource).not.toContain('githubCloneUrlWithToken');
     expect(whiteboxSource).not.toContain('url.password = token');
   });

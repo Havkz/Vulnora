@@ -10,7 +10,7 @@ import { join } from 'path';
 import { ingestRepository, crawl, type IngestConfig } from '../recon/code-ingest.js';
 
 function makeRepo(nFiles: number): string {
-  const dir = mkdtempSync(join(tmpdir(), 't3mp3st-ingest-limits-'));
+  const dir = mkdtempSync(join(tmpdir(), 'vulnora-ingest-limits-'));
   for (let i = 0; i < nFiles; i++) {
     writeFileSync(join(dir, `mod_${i}.py`), `def f_${i}(x):\n    return x + ${i}\n`);
   }
@@ -57,7 +57,7 @@ describe('ingest ceilings (bounded ingest, non-regressing)', () => {
   });
 
   it('an empty / non-Python repo yields 0 files (the ONLY case the whitebox guard throws on)', () => {
-    const dir = mkdtempSync(join(tmpdir(), 't3mp3st-ingest-empty-')); dirs.push(dir);
+    const dir = mkdtempSync(join(tmpdir(), 'vulnora-ingest-empty-')); dirs.push(dir);
     writeFileSync(join(dir, 'README.md'), '# not python\n');
     const res = ingestRepository(cfg(dir));
     expect(res.stats.files).toBe(0);
@@ -68,7 +68,7 @@ describe('ingest ceilings (bounded ingest, non-regressing)', () => {
     // A valid script (imports + top-level statements, no def/class) is legitimate input. The
     // whitebox empty-guard gates on stats.files===0, so this files>0 case proceeds — it must
     // NOT regress into a 500 (regression sweep finding #2).
-    const dir = mkdtempSync(join(tmpdir(), 't3mp3st-ingest-modlevel-')); dirs.push(dir);
+    const dir = mkdtempSync(join(tmpdir(), 'vulnora-ingest-modlevel-')); dirs.push(dir);
     writeFileSync(join(dir, 'app.py'), 'import os\nx = 1\nprint(os.getcwd(), x)\n');
     const res = ingestRepository(cfg(dir));
     expect(res.stats.files).toBe(1);          // there IS source

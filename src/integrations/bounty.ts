@@ -1,5 +1,5 @@
 /**
- * Bounty Platform Connectors — t3mp3st integrations for popular
+ * Bounty Platform Connectors — vulnora integrations for popular
  * bug-bounty and vulnerability-disclosure platforms.
  *
  * DESIGN INVARIANT: same as disclosure-gen — DRAFTS ONLY.
@@ -73,7 +73,7 @@ export interface BountyFinding {
   remediation: string;
   component?: string;
   versionsAffected?: string;
-  /** Structured evidence from t3mp3st's verify pipeline */
+  /** Structured evidence from vulnora's verify pipeline */
   evidence?: Array<{ type: string; content: string }>;
 }
 
@@ -528,7 +528,7 @@ export function listConnectors(): BountyPlatform[] {
 }
 
 /**
- * Convert a t3mp3st finding JSON (as used in bench/wild-hunt/findings/)
+ * Convert a vulnora finding JSON (as used in bench/wild-hunt/findings/)
  * into the BountyFinding format expected by connectors.
  */
 export function findingToBountyFinding(raw: Record<string, any>): BountyFinding {

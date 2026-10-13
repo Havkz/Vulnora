@@ -1,24 +1,25 @@
+import { renderLogo, createTheme } from './ui/theme.js';
 /**
- * T3MP3ST (TEMPEST)
+ * VULNORA (VULNORA)
  * Tactical Execution Multi-agent Platform for Elite Security Testing
  *
  * A sophisticated multi-agent framework for penetration testing and red team operations.
  *
  * @example
  * ```typescript
- * import { createTempest } from 't3mp3st';
+ * import { createVulnora } from 'vulnora';
  *
- * const tempest = createTempest({
+ * const vulnora = createVulnora({
  *   name: 'Operation Midnight',
  *   llm: { provider: 'openrouter', model: 'anthropic/claude-opus-4-8' },
  *   opsec: { level: 'covert' },
  * });
  *
  * // Spawn operators
- * const recon = tempest.cell.spawnOperator('Ghost-1', 'recon');
+ * const recon = vulnora.cell.spawnOperator('Ghost-1', 'recon');
  *
  * // Start operations
- * tempest.command.start();
+ * vulnora.command.start();
  * ```
  */
 
@@ -36,7 +37,7 @@ export * from './types/index.js';
 
 // Configuration
 export { config, getApiKey, setApiKey, hasApiKey, getLLMConfig, getConfiguredProviders, AVAILABLE_MODELS } from './config/index.js';
-export type { TempestSettings, ModelInfo } from './config/index.js';
+export type { VulnoraSettings, ModelInfo } from './config/index.js';
 
 // LLM
 export {
@@ -223,7 +224,7 @@ import {
 } from './types/index.js';
 
 import type {
-  TempestConfig,
+  VulnoraConfig,
   LLMConfig,
   RuntimeHooks,
   LLMProvider,
@@ -304,17 +305,17 @@ import {
 } from './stubs/index.js';
 
 // =============================================================================
-// TEMPEST COMMAND
+// VULNORA COMMAND
 // =============================================================================
 
 const DEFAULT_AGENT_MAX_ITERATIONS = 15;
-const LOCAL_AGENT_MAX_ITERATIONS = Number(process.env.T3MP3ST_LOCAL_AGENT_MAX_ITERATIONS || 30);
+const LOCAL_AGENT_MAX_ITERATIONS = Number(process.env.VULNORA_LOCAL_AGENT_MAX_ITERATIONS || 30);
 const MAX_PROGRESS_EVENTS = 300;
 
 /**
- * TEMPEST Command - Main orchestration controller
+ * VULNORA Command - Main orchestration controller
  */
-export class TempestCommand extends EventEmitter<CommandEvents> {
+export class VulnoraCommand extends EventEmitter<CommandEvents> {
   public readonly name: string;
   public readonly cell: OperatorCell;
   public readonly mission: MissionControl;
@@ -396,23 +397,23 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
 
   /**
    * Swarm coordination (Phase-2), OPT-IN so the swarm-vs-single-agent bake-off can toggle it: set
-   * `T3MP3ST_SWARM_COORD=on` to enable the finding→follow-up refinement loop. Off = the legacy
+   * `VULNORA_SWARM_COORD=on` to enable the finding→follow-up refinement loop. Off = the legacy
    * phase-sequenced queue (the single-agent-equivalent baseline). Default OFF until it's proven.
    */
-  private readonly coordinationEnabled = /^(1|true|on)$/i.test(process.env.T3MP3ST_SWARM_COORD ?? '');
+  private readonly coordinationEnabled = /^(1|true|on)$/i.test(process.env.VULNORA_SWARM_COORD ?? '');
   /** Findings that already spawned a follow-up (dedup — a finding chases exactly once). */
   private readonly spawnedFollowups = new Set<string>();
   /** Per-run cap on follow-up tasks so the refinement loop can never explode. */
-  private readonly maxFollowups = Number(process.env.T3MP3ST_SWARM_MAX_FOLLOWUPS) || 24;
+  private readonly maxFollowups = Number(process.env.VULNORA_SWARM_MAX_FOLLOWUPS) || 24;
   /** Coordination telemetry — the artifact that distinguishes a coordinated run from N solo agents. */
   private leadsPosted = 0;
   private followupsSpawned = 0;
 
-  constructor(config: TempestConfig) {
+  constructor(config: VulnoraConfig) {
     super();
     this.name = config.name;
     this.hooks = config.hooks || {};
-    this.taskTimeoutMs = TempestCommand.resolveTaskTimeoutMs(config.llm.provider);
+    this.taskTimeoutMs = VulnoraCommand.resolveTaskTimeoutMs(config.llm.provider);
 
     // Initialize LLM backbone
     this.llm = new LLMBackbone(config.llm);
@@ -429,20 +430,20 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Register built-in tools and external CLI wrappers. The built-in intrusive/credential probes
     // (sqli_scan, password_spray, …) are the pre-existing honest baseline and stay UNGATED by default —
     // zero regression: the headline benchmark and every prior run keep firing them freely. Opt in with
-    // T3MP3ST_GATE_BUILTINS=1 to stamp the spicy ones with a riskTier so the same approval gate that
+    // VULNORA_GATE_BUILTINS=1 to stamp the spicy ones with a riskTier so the same approval gate that
     // fences the specialist arsenal (metasploit/hydra) also fences them.
-    const gateBuiltins = /^(1|true|yes|on)$/i.test(process.env.T3MP3ST_GATE_BUILTINS ?? '');
+    const gateBuiltins = /^(1|true|yes|on)$/i.test(process.env.VULNORA_GATE_BUILTINS ?? '');
     this.arsenal.registerMany(gateBuiltins ? BUILTIN_TOOLS.map(stampSpicyBuiltin) : BUILTIN_TOOLS);
     this.arsenal.registerMany(EXTERNAL_TOOLS);
 
     // Capability approval + spicy-action warning gate. An intrusive/credential/dangerous tool is
     // INERT until it's approved. Two ways in: (1) headless — a pre-authorization allowlist up front
-    // via T3MP3ST_APPROVED_TOOLS (comma list) runs those tools free; (2) interactive — a host wires an
+    // via VULNORA_APPROVED_TOOLS (comma list) runs those tools free; (2) interactive — a host wires an
     // approver so the operator approves a tool once, then it's free. No approver + not pre-approved =
     // fail-safe DENY (an unattended run never self-fires an exploit). Every gated call is audited; the
     // spicy ones (exploits / cred attacks) surface a loud warning. Wired onto the arsenal below so the
     // gate runs inside Arsenal.execute() alongside the egress scope gate.
-    const preApprovedTools = (process.env.T3MP3ST_APPROVED_TOOLS ?? '')
+    const preApprovedTools = (process.env.VULNORA_APPROVED_TOOLS ?? '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
@@ -452,7 +453,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         // Loud, non-blocking warning so a spicy action is always SEEN. A host UI can also read
         // this.approval.getAudit() or replace the controller for a richer surface.
         // eslint-disable-next-line no-console
-        console.warn(`⚠️  SPICY ACTION [${req.risk}] ${req.operator ? req.operator + ' → ' : ''}${req.action}`);
+        console.warn(`  SPICY ACTION [${req.risk}] ${req.operator ? req.operator + ' → ' : ''}${req.action}`);
       },
       // Bridge every gated decision to the dashboard's live approval/audit feed (connectBroadcast
       // forwards this engine event to the SSE channel as `arsenal.approval`).
@@ -460,13 +461,13 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     });
     this.arsenal.setApprovalController(this.approval);
 
-    // Phase-1 (OPT-IN): arm the specialist arsenal. Gated behind T3MP3ST_FULL_ARSENAL so the honest
+    // Phase-1 (OPT-IN): arm the specialist arsenal. Gated behind VULNORA_FULL_ARSENAL so the honest
     // bash-only benchmark baseline (built-ins only) stays uncontaminated — a full-power / pack hunt
     // sets it. The generic factory NEVER mints catalog_only/import_only adapters; the post-ex drivers
     // (metasploit/hydra) are hand-written and each carries a riskTier so the approval gate above fences
     // them. The egress scope gate in Arsenal.execute() still fences every target; the in-handler
     // scopeOk here is a second belt-and-braces check on the resolved per-adapter target.
-    if (/^(1|true|on)$/i.test(process.env.T3MP3ST_FULL_ARSENAL ?? '')) {
+    if (/^(1|true|on)$/i.test(process.env.VULNORA_FULL_ARSENAL ?? '')) {
       const deps = {
         runSubprocess,
         isToolAvailable,
@@ -485,7 +486,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // different, scoring-oriented API (scoreRun/challengeToTasks/listChallenges,
     // it does not run agents itself) and different Challenge/Metrics shapes than
     // the `BenchmarkRunner` type this field is declared as. Wiring it in would
-    // require changing this field's type plus the `Tempest` interface/factory, so
+    // require changing this field's type plus the `Vulnora` interface/factory, so
     // it is intentionally left as the stub. The real benchmark is currently
     // CLI-only (see scripts/ + src/benchmark).
     this.benchmark = new BenchmarkRunner();
@@ -661,7 +662,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
       // [Phase-2 refinement loop] A TOOL-VERIFIED finding spawns a targeted follow-up task for the
       // NEXT kill-chain phase's operator — chase the verifiable feedback signal (the research's
       // load-bearing condition). Model-asserted findings spawn NO work (no chasing hallucinations).
-      // Dedup + a per-run cap keep the loop bounded. Gated by T3MP3ST_SWARM_COORD for the bake-off.
+      // Dedup + a per-run cap keep the loop bounded. Gated by VULNORA_SWARM_COORD for the bake-off.
       if (
         this.coordinationEnabled &&
         finding.verifyGate?.provenance === 'tool' &&
@@ -868,7 +869,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // Start tick loop (1 second interval). Catch any tick error so a single bad tick
     // (e.g. a spawn hitting the pool cap) can never take down the whole server process.
     this.tickInterval = setInterval(() => {
-      this.tick().catch(err => console.error('[T3MP3ST] tick error (mission continues):', err instanceof Error ? err.message : err));
+      this.tick().catch(err => console.error('[VULNORA] tick error (mission continues):', err instanceof Error ? err.message : err));
     }, 1000);
   }
 
@@ -954,7 +955,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
    * operator promise wedges. Deliberately large (default 5 min for API models,
    * 30 min for local-agent backends) so it does not kill legitimately slow local
    * CLI work; it only fires on truly-hung dispatches. Override via
-   * T3MP3ST_TASK_TIMEOUT_MS.
+   * VULNORA_TASK_TIMEOUT_MS.
    */
   private progressEvents: ScanProgressEvent[] = [];
 
@@ -966,7 +967,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     const DEFAULT_TASK_TIMEOUT_MS = 300000; // 5 minutes — generous backstop, not a deadline
     const LOCAL_AGENT_TASK_TIMEOUT_MS = 1800000; // local CLI agents can need multiple slow turns
     const CODEX_TASK_TIMEOUT_MS = 4500000; // 10m Codex + up to 60m Ollama fallback + recovery margin
-    const raw = process.env.T3MP3ST_TASK_TIMEOUT_MS;
+    const raw = process.env.VULNORA_TASK_TIMEOUT_MS;
     if ((raw !== null && raw !== undefined) && raw.trim() !== '') {
       const parsed = Number(raw);
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
@@ -1219,7 +1220,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
           vulnerability.evidenceStatus === 'validated' || vulnerability.evidenceStatus === 'exploitable'
         ).length;
         const activeTestingAllowed = Boolean(
-          process.env.T3MP3ST_AUTHORIZATION_RECEIPT?.trim()
+          process.env.VULNORA_AUTHORIZATION_RECEIPT?.trim()
           || this.approval.approvedTools().length > 0
           || target.metadata?.authorizationReceipt
           || target.metadata?.scopeReceipt
@@ -1360,7 +1361,7 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
         : `dispatch made no progress for ${Math.round(idleElapsed / 1000)}s after ${Math.round(elapsed / 1000)}s total (backstop ${Math.round(this.taskTimeoutMs / 1000)}s)`;
 
       // Clear a CLEAR event/log so a timed-out dispatch is never silent.
-      console.warn(`[T3MP3ST] task ${taskId} force-resolved as timeout — ${reason}`);
+      console.warn(`[VULNORA] task ${taskId} force-resolved as timeout — ${reason}`);
 
       // 1) Mark the task failed/timed-out via the queue (idempotent enough: fail()
       //    just stamps status:'failed'; if it somehow already completed, this is a
@@ -1467,12 +1468,12 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
     // tools registered during construction must also be visible to operators; retaining the
     // curated role allowlist here would leave the newly installed binaries registered but
     // unreachable. Approval and scope gates still apply at Arsenal.execute().
-    const fullArsenal = /^(1|true|on)$/i.test(process.env.T3MP3ST_FULL_ARSENAL ?? '');
+    const fullArsenal = /^(1|true|on)$/i.test(process.env.VULNORA_FULL_ARSENAL ?? '');
     const maxIterations = this.llm.getProvider() === 'local-agent'
       ? LOCAL_AGENT_MAX_ITERATIONS
       : DEFAULT_AGENT_MAX_ITERATIONS;
     const mission = this.mission.getActiveMission();
-    const configuredReceipt = process.env.T3MP3ST_AUTHORIZATION_RECEIPT?.trim();
+    const configuredReceipt = process.env.VULNORA_AUTHORIZATION_RECEIPT?.trim();
     const approvedTools = this.approval.approvedTools();
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
       sourceAgent: callsign,
@@ -1631,14 +1632,14 @@ export class TempestCommand extends EventEmitter<CommandEvents> {
 }
 
 // =============================================================================
-// TEMPEST INSTANCE
+// VULNORA INSTANCE
 // =============================================================================
 
 /**
- * Full T3MP3ST instance with all components
+ * Full VULNORA instance with all components
  */
-export interface Tempest {
-  command: TempestCommand;
+export interface Vulnora {
+  command: VulnoraCommand;
   cell: OperatorCell;
   mission: MissionControl;
   targetEnv: TargetEnvironment;
@@ -1676,10 +1677,10 @@ export interface Tempest {
 // =============================================================================
 
 /**
- * Create a TEMPEST instance
+ * Create a VULNORA instance
  */
-export function createTempest(config: TempestConfig): Tempest {
-  const command = new TempestCommand(config);
+export function createVulnora(config: VulnoraConfig): Vulnora {
+  const command = new VulnoraCommand(config);
 
   return {
     command,
@@ -1717,10 +1718,10 @@ export function createTempest(config: TempestConfig): Tempest {
 }
 
 /**
- * Create a minimal TEMPEST instance for testing
+ * Create a minimal VULNORA instance for testing
  */
-export function createTestTempest(name: string = 'Test Operation'): Tempest {
-  return createTempest({
+export function createTestVulnora(name: string = 'Test Operation'): Vulnora {
+  return createVulnora({
     name,
     llm: {
       provider: 'mock',
@@ -1747,12 +1748,12 @@ export function createTestTempest(name: string = 'Test Operation'): Tempest {
 }
 
 /**
- * Create a TEMPEST instance with the best available LLM provider
+ * Create a VULNORA instance with the best available LLM provider
  */
-export function createAutoTempest(name: string = 'Auto Operation'): Tempest {
+export function createAutoVulnora(name: string = 'Auto Operation'): Vulnora {
   const llmConfig = getLLMConfig();
 
-  return createTempest({
+  return createVulnora({
     name,
     llm: llmConfig,
     opsec: createBalancedOpsecConfig(),
@@ -1762,10 +1763,10 @@ export function createAutoTempest(name: string = 'Auto Operation'): Tempest {
 /**
  * Quick start for a stealth operation
  */
-export function createStealthOperation(name: string, llmConfig?: LLMConfig): Tempest {
+export function createStealthOperation(name: string, llmConfig?: LLMConfig): Vulnora {
   const config = llmConfig || getLLMConfig();
 
-  return createTempest({
+  return createVulnora({
     name,
     llm: config,
     opsec: {
@@ -1798,10 +1799,10 @@ export function createStealthOperation(name: string, llmConfig?: LLMConfig): Tem
 /**
  * Quick start for an aggressive operation
  */
-export function createAggressiveOperation(name: string, llmConfig?: LLMConfig): Tempest {
+export function createAggressiveOperation(name: string, llmConfig?: LLMConfig): Vulnora {
   const config = llmConfig || getLLMConfig();
 
-  return createTempest({
+  return createVulnora({
     name,
     llm: config,
     opsec: {
@@ -1839,23 +1840,12 @@ export function createAggressiveOperation(name: string, llmConfig?: LLMConfig): 
  * Get ASCII banner
  */
 export function getBanner(): string {
-  return `
- ▄▄▄█████▓▓█████  ███▄ ▄███▓ ██▓███  ▓█████   ██████ ▄▄▄█████▓
- ▓  ██▒ ▓▒▓█   ▀ ▓██▒▀█▀ ██▒▓██░  ██▒▓█   ▀ ▒██    ▒ ▓  ██▒ ▓▒
- ▒ ▓██░ ▒░▒███   ▓██    ▓██░▓██░ ██▓▒▒███   ░ ▓██▄   ▒ ▓██░ ▒░
- ░ ▓██▓ ░ ▒▓█  ▄ ▒██    ▒██ ▒██▄█▓▒ ▒▒▓█  ▄   ▒   ██▒░ ▓██▓ ░
-   ▒██▒ ░ ░▒████▒▒██▒   ░██▒▒██▒ ░  ░░▒████▒▒██████▒▒  ▒██▒ ░
-   ▒ ░░   ░░ ▒░ ░░ ▒░   ░  ░▒▓▒░ ░  ░░░ ▒░ ░▒ ▒▓▒ ▒ ░  ▒ ░░
-     ░     ░ ░  ░░  ░      ░░▒ ░      ░ ░  ░░ ░▒  ░ ░    ░
-   ░         ░   ░      ░   ░░          ░   ░  ░  ░    ░
-             ░  ░       ░               ░  ░      ░
-
-  T3MP3ST - Tactical Execution Multi-agent Platform
-            for Elite Security Testing
-
-  Multi-Agent Red Team / Penetration Testing Framework
-`;
+  return renderLogo(80, createTheme(0)).join('\n') + '\nVULNORA\n';
 }
 
 // Default export
-export default createTempest;
+export default createVulnora;
+
+// Legacy library names remain import-compatible; the CLI only exposes Vulnora.
+export { VulnoraCommand as TempestCommand, createVulnora as createTempest, createAutoVulnora as createAutoTempest, createTestVulnora as createTestTempest };
+export type { Vulnora as Tempest };

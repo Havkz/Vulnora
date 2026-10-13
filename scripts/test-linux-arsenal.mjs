@@ -9,7 +9,7 @@ for (const tool of TOOL_ADAPTERS.filter(tool => ['safe_command', 'receipt_requir
   if (tool.supportedPlatforms && !tool.supportedPlatforms.includes('linux')) continue;
   assert(installer.includes(packageAliases[tool.binary] || tool.binary), `Missing Linux installation recipe: ${tool.id}`);
 }
-assert(installer.indexOf('--offline --strict') < installer.indexOf('touch "$HOME/.tempest-arsenal-ready"'));
+assert(installer.indexOf('--offline --strict') < installer.indexOf('touch "$HOME/.vulnora-arsenal-ready"'));
 const doctor = spawnSync(process.execPath, ['scripts/arsenal-doctor.mjs', '--offline', '--json', '--strict'], {
   cwd: new URL('../', import.meta.url), env: { ...process.env, PATH: '' }, encoding: 'utf8',
 });

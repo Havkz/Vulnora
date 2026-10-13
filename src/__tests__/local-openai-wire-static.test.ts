@@ -37,7 +37,7 @@ describe('local OpenAI-compatible provider hardening', () => {
   it('getLLMConfig forwards an optional bearer for local servers that require auth', () => {
     const localCase = block(configSource, "case 'local':", 'break;');
 
-    expect(localCase).toContain('TEMPEST_LOCAL_API_KEY');
+    expect(localCase).toContain('VULNORA_LOCAL_API_KEY');
     // Provider-specific aliases are accepted as a convenience.
     expect(localCase).toMatch(/ZAI_API_KEY/);
     expect(localCase).toMatch(/ZHIPUAI_API_KEY/);
@@ -48,7 +48,7 @@ describe('local OpenAI-compatible provider hardening', () => {
 
     expect(localCase).toContain('local-model');
     expect(localCase).toContain('local/ollama');
-    expect(localCase).toContain('TEMPEST_LOCAL_MODEL');
+    expect(localCase).toContain('VULNORA_LOCAL_MODEL');
   });
 
   it('getApiKey resolves a local key from env without persisting it', () => {
@@ -57,7 +57,7 @@ describe('local OpenAI-compatible provider hardening', () => {
     const getApiKey = block(configSource, 'getApiKey(provider:', 'envVarMap');
 
     expect(getApiKey).toContain("provider === 'local'");
-    expect(getApiKey).toContain('TEMPEST_LOCAL_API_KEY');
+    expect(getApiKey).toContain('VULNORA_LOCAL_API_KEY');
   });
 
   it('the local key slot is part of the typed apiKeys store', () => {
@@ -67,8 +67,8 @@ describe('local OpenAI-compatible provider hardening', () => {
   it('the env template documents the local provider options', () => {
     const template = block(configSource, 'createEnvTemplate(', '`;');
 
-    expect(template).toContain('TEMPEST_LOCAL_BASE_URL');
-    expect(template).toContain('TEMPEST_LOCAL_MODEL');
-    expect(template).toContain('TEMPEST_LOCAL_API_KEY');
+    expect(template).toContain('VULNORA_LOCAL_BASE_URL');
+    expect(template).toContain('VULNORA_LOCAL_MODEL');
+    expect(template).toContain('VULNORA_LOCAL_API_KEY');
   });
 });

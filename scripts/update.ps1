@@ -1,14 +1,14 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Safe upstream sync for T3MP3ST from elder-plinius/T3MP3ST.
+  Safe upstream sync for VULNORA from elder-plinius/VULNORA.
 
 .DESCRIPTION
   Backs up local secrets/config/artifacts, fetches upstream main, applies the update,
   restores protected paths, then runs npm install.
 
   Config outside this repo is never touched:
-    %APPDATA%\t3mp3st-nodejs\Config\config.json  (npm run setup wizard)
+    %APPDATA%\vulnora-nodejs\Config\config.json  (npm run setup wizard)
     Local agent auth (~/.codex, %LOCALAPPDATA%\hermes, etc.)
 
 .PARAMETER DryRun
@@ -34,7 +34,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$UpstreamUrl = 'https://github.com/elder-plinius/T3MP3ST.git'
+$UpstreamUrl = 'https://github.com/elder-plinius/VULNORA.git'
 $UpstreamBranch = 'main'
 $UpstreamRemote = 'upstream'
 
@@ -139,7 +139,7 @@ function Get-FitBannerLines {
 function Write-Banner {
     try {
         if ($Host.UI.RawUI) {
-            $Host.UI.RawUI.WindowTitle = 'T3MP3ST Updater'
+            $Host.UI.RawUI.WindowTitle = 'VULNORA Updater'
         }
         chcp 65001 | Out-Null
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -153,9 +153,9 @@ function Write-Banner {
             Write-Host $line -ForegroundColor Cyan
         }
     } else {
-        Write-Host 'T3MP3ST' -ForegroundColor Cyan
+        Write-Host 'VULNORA' -ForegroundColor Cyan
     }
-    Write-Host '  T3MP3ST Updater' -ForegroundColor White
+    Write-Host '  VULNORA Updater' -ForegroundColor White
     Write-Host '  Safe upstream sync - secrets, config, and bench artifacts stay local' -ForegroundColor DarkGray
     Write-Host ''
 }
@@ -586,7 +586,7 @@ function Install-NpmPackages {
 Write-Banner
 
 if (-not (Test-Path (Join-Path $RepoRoot 'package.json'))) {
-    Write-Err "Not a T3MP3ST repo (package.json missing): $RepoRoot"
+    Write-Err "Not a VULNORA repo (package.json missing): $RepoRoot"
     exit 1
 }
 
@@ -621,7 +621,7 @@ if ($protected.Count -eq 0) {
 }
 
 Write-Rule 'Never touched (outside repo)'
-Write-PlanLine '-' '%APPDATA%\t3mp3st-nodejs\Config\config.json'
+Write-PlanLine '-' '%APPDATA%\vulnora-nodejs\Config\config.json'
 Write-PlanLine '-' 'Codex / Hermes local agent auth'
 
 $localSha = '(no git yet)'
@@ -659,7 +659,7 @@ if (-not $Force) {
 }
 
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backupRoot = Join-Path ([System.IO.Path]::GetTempPath()) "t3mp3st-update-backup-$timestamp"
+$backupRoot = Join-Path ([System.IO.Path]::GetTempPath()) "vulnora-update-backup-$timestamp"
 $oldSha = $localSha
 $script:StepTotal = 2 + $(if ($protected.Count -gt 0) { 2 } else { 0 })
 $script:StepIndex = 0

@@ -1,4 +1,4 @@
-name: T3MP3ST CI
+name: VULNORA CI
 
 on:
   pull_request:

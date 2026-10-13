@@ -1,14 +1,14 @@
 apiVersion: ops.aiwg.io/v1
 kind: OpsCapability
 metadata:
-  name: t3mp3st-issue-steward-flow
+  name: vulnora-issue-steward-flow
   labels:
     category: maintainer
-    repository: T3MP3ST
+    repository: VULNORA
   annotations:
     blast-radius: "issue comments or closures only when explicitly requested"
 spec:
-  description: Classify and steward T3MP3ST issues into response, implementation, feature tracking, closure, or security routing.
+  description: Classify and steward VULNORA issues into response, implementation, feature tracking, closure, or security routing.
   version: "0.1.0"
   inputs:
     - name: issues
@@ -36,7 +36,7 @@ spec:
   target_requirements:
     os: [linux, macos]
     capabilities: [git, gh]
-  agent: t3mp3st-issue-steward
+  agent: vulnora-issue-steward
   idempotent: true
   steps:
     - name: read-thread
@@ -50,5 +50,5 @@ spec:
     - name: draft
       description: Draft concise maintainer responses without posting unless mutation was requested.
   verification:
-    command: "gh issue list --repo elder-plinius/T3MP3ST --limit 1 >/dev/null"
+    command: "gh issue list --repo elder-plinius/VULNORA --limit 1 >/dev/null"
     expect: "command exits 0"

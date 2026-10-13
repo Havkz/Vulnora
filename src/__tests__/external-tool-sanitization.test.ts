@@ -25,8 +25,8 @@ describe('external tool argument sanitization', () => {
   });
 
   it('preserves commas inside header values and accepts newline-separated headers', () => {
-    expect(parseCurlHeaderLines('Accept: text/html,application/xhtml+xml\nUser-Agent: T3MP3ST'))
-      .toEqual(['Accept: text/html,application/xhtml+xml', 'User-Agent: T3MP3ST']);
+    expect(parseCurlHeaderLines('Accept: text/html,application/xhtml+xml\nUser-Agent: VULNORA'))
+      .toEqual(['Accept: text/html,application/xhtml+xml', 'User-Agent: VULNORA']);
   });
 
   it('splits comma-separated header fields only at a new header name', () => {

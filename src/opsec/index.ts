@@ -1,5 +1,5 @@
 /**
- * T3MP3ST OPSEC Controller
+ * VULNORA OPSEC Controller
  *
  * Manages operational security, detection monitoring, and evasion.
  */

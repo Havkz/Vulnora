@@ -316,7 +316,7 @@ describe('central tool orchestrator', () => {
 
   it('caches executable preflight data, supports refresh, and accepts template directories', async () => {
     const orchestrator = new ToolOrchestrator({ preflightTtlMs: 1 });
-    const templates = await mkdtemp(join(tmpdir(), 't3mp3st-templates-'));
+    const templates = await mkdtemp(join(tmpdir(), 'vulnora-templates-'));
     await orchestrator.execute(tool('curl_request'), context({ url: 'https://target.test/a', templates }), async () => httpResult());
     const first = orchestrator.getPreflightStatus().curl;
     expect(first?.available).toBe(true);
@@ -333,7 +333,7 @@ describe('central tool orchestrator', () => {
   });
 
   it('supports an optional persistent JSONL evidence store', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 't3mp3st-evidence-'));
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-evidence-'));
     const path = join(directory, 'evidence.jsonl');
     const store = new JsonlEvidenceStore(path);
     const orchestrator = new ToolOrchestrator({ evidenceStore: store });

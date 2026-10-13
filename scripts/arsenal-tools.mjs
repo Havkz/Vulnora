@@ -1,5 +1,5 @@
 /**
- * arsenal-tools.mjs — the t3mp3st execution bridge.
+ * arsenal-tools.mjs — the vulnora execution bridge.
  *
  * NORTH STAR: a 1337 hacker group of specialist experts wielding a real Kali Linux+
  * arsenal. This module turns catalogued tools (src/arsenal/catalog.ts) into FIRST-CLASS
@@ -43,7 +43,7 @@ const opt = (flag, value) => (value == null || value === '' ? '' : ` ${flag} ${q
  * loop (silent/quiet flags, no colour, batch mode, sane caps).
  */
 export const ARSENAL = {
-  // ── 🔍 recon / osint ──────────────────────────────────────────────────────
+  // ──  recon / osint ──────────────────────────────────────────────────────
   httpx: {
     family: 'recon',
     schema: fn('httpx', 'Probe a URL/host: status code, title, detected tech, server. Fast triage of a web target.', {
@@ -75,7 +75,7 @@ export const ARSENAL = {
     build: a => `nmap -Pn -T4 -sV${opt('-p', a.ports)} ${q(a.target)}`,
   },
 
-  // ── 🕸️ web exploitation ───────────────────────────────────────────────────
+  // ──  web exploitation ───────────────────────────────────────────────────
   ffuf: {
     family: 'web',
     schema: fn('ffuf', 'Content/parameter fuzzer. Put FUZZ in the URL where the wordlist is substituted.', {
@@ -132,7 +132,7 @@ export const ARSENAL = {
     build: a => `nuclei -u ${q(a.url)} -silent -nc${opt('-tags', a.tags)}`,
   },
 
-  // ── 🔐 crypto ──────────────────────────────────────────────────────────────
+  // ──  crypto ──────────────────────────────────────────────────────────────
   john: {
     family: 'crypto',
     schema: fn('john', 'John the Ripper: crack a hash file, then show recovered secrets.', {
@@ -152,7 +152,7 @@ export const ARSENAL = {
     build: a => `hashcat -m ${intOr(a.mode, 0)} -a 0 ${q(a.hashfile)} ${q(a.wordlist)} --quiet --potfile-disable ; hashcat -m ${intOr(a.mode, 0)} ${q(a.hashfile)} --show --potfile-disable`,
   },
 
-  // ── 🔑 secrets / supply-chain ──────────────────────────────────────────────
+  // ──  secrets / supply-chain ──────────────────────────────────────────────
   semgrep: {
     family: 'secrets',
     schema: fn('semgrep', 'Static analysis (SAST) over source. Default ruleset is "auto".', {

@@ -76,15 +76,15 @@ describe('agent prompt profiles', () => {
   });
 
   it('allows a bounded runtime override of the total 30B token budget', () => {
-    const previous = process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
+    const previous = process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
     try {
-      process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '9500';
+      process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '9500';
       expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(9500);
-      process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '500';
+      process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '500';
       expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(8000);
     } finally {
-      if (previous === undefined) delete process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
-      else process.env.T3MP3ST_SMALL_MODEL_TOTAL_TOKEN_BUDGET = previous;
+      if (previous === undefined) delete process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
+      else process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = previous;
     }
   });
 

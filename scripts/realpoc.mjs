@@ -123,7 +123,7 @@ function main() {
   const outAll = `${run.stdout || ''}\n${run.stderr || ''}`;
   const sig = rp.expect_signature || 'AddressSanitizer';
   const hit = outAll.includes(sig);
-  console.log(`  ran it: ${hit ? `💥 reproduced "${sig}"` : 'no expected signature'}`);
+  console.log(`  ran it: ${hit ? ` reproduced "${sig}"` : 'no expected signature'}`);
   if (hit) { const m = outAll.split('\n').find((l) => l.includes(sig)); if (m) console.log(`     ${m.trim().slice(0, 110)}`); }
 
   console.log(`\n  ${hit ? '✅ REAL-SOURCE POC CONFIRMED' : '❌ did not reproduce'} — the bug ${hit ? 'fires in the actual repo code (verbatim), not a transcription' : 'did not fire'}\n`);

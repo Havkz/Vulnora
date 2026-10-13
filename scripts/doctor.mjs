@@ -3,7 +3,7 @@ import { access, readFile } from 'node:fs/promises';
 import { commandExists } from './ops-preflight.mjs';
 import process from 'node:process';
 
-const baseUrl = (process.env.T3MP3ST_API_URL || 'http://127.0.0.1:3333').replace(/\/$/, '');
+const baseUrl = (process.env.VULNORA_API_URL || 'http://127.0.0.1:3333').replace(/\/$/, '');
 const jsonMode = process.argv.includes('--json');
 const strictMode = process.argv.includes('--strict');
 const checks = [];
@@ -115,16 +115,16 @@ async function main() {
     const preflight = await apiGet('/api/preflight');
     check('Capability preflight', preflight.ok && typeof preflight.data.score === 'number', `${preflight.data.score ?? 'n/a'}/100`);
     const arsenal = await apiGet('/api/arsenal/status');
-    check('Arsenal status', arsenal.ok && arsenal.data.schema_version === 't3mp3st_arsenal_status/v1', `${arsenal.data.summary?.installedCommandReady ?? 0}/${arsenal.data.summary?.commandReady ?? 0} installed`);
+    check('Arsenal status', arsenal.ok && arsenal.data.schema_version === 'vulnora_arsenal_status/v1', `${arsenal.data.summary?.installedCommandReady ?? 0}/${arsenal.data.summary?.commandReady ?? 0} installed`);
     check('Arsenal does not fake empty coverage', arsenal.ok && arsenal.data.summary?.unmodeled === false, `unmodeled=${arsenal.data.summary?.unmodeled}`);
     const activation = await apiGet('/api/arsenal/activation');
-    check('Arsenal activation plan', activation.ok && activation.data.schema_version === 't3mp3st_arsenal_activation/v1', `${activation.data.summary?.total || 0} wired / doc ${activation.data.localPlanDoc || 'missing'}`);
+    check('Arsenal activation plan', activation.ok && activation.data.schema_version === 'vulnora_arsenal_activation/v1', `${activation.data.summary?.total || 0} wired / doc ${activation.data.localPlanDoc || 'missing'}`);
   }
 
   const blocks = checks.filter(item => !item.passed && item.severity === 'block');
   const warnings = checks.filter(item => !item.passed && item.severity === 'warn');
   const result = {
-    tool: 't3mp3st-doctor',
+    tool: 'vulnora-doctor',
     startedAt,
     finishedAt: new Date().toISOString(),
     baseUrl,
@@ -142,7 +142,7 @@ async function main() {
   if (jsonMode) {
     console.log(JSON.stringify(result, null, 2));
   } else {
-    console.log(`T3MP3ST doctor: ${result.passed ? 'PASS' : 'CHECK REQUIRED'}`);
+    console.log(`VULNORA doctor: ${result.passed ? 'PASS' : 'CHECK REQUIRED'}`);
     console.log(`${result.summary.passed}/${result.summary.checks} checks passed, ${result.summary.warnings} warning(s), ${result.summary.blockers} blocker(s)`);
     for (const item of checks) {
       const marker = item.passed ? 'ok' : item.severity === 'warn' ? 'warn' : 'block';

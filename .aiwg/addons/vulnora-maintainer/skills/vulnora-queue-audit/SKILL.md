@@ -1,16 +1,16 @@
 ---
-namespace: t3mp3st-maintainer
-name: t3mp3st-queue-audit
+namespace: vulnora-maintainer
+name: vulnora-queue-audit
 platforms: [all]
-description: Audit the full T3MP3ST maintainer queue before merge or issue work; classifies PRs and issues by readiness, risk, and next action.
+description: Audit the full VULNORA maintainer queue before merge or issue work; classifies PRs and issues by readiness, risk, and next action.
 triggers:
-  - t3mp3st queue audit
-  - audit the T3MP3ST maintainer queue
-  - classify open T3MP3ST PRs and issues
-  - what can we merge in T3MP3ST
+  - vulnora queue audit
+  - audit the VULNORA maintainer queue
+  - classify open VULNORA PRs and issues
+  - what can we merge in VULNORA
 requires:
-  - github: elder-plinius/T3MP3ST tracker access through gh or connector
-  - local-checkout: current T3MP3ST workspace
+  - github: elder-plinius/VULNORA tracker access through gh or connector
+  - local-checkout: current VULNORA workspace
 ensures:
   - pr-readiness-table: every open PR is grouped by merge-ready, re-audit, rebase, changes-requested, or unknown
   - issue-action-table: every open issue is grouped by close-via-PR, needs-response, address-issues, feature-track, or defer
@@ -22,7 +22,7 @@ commandHint:
   category: project-management
 ---
 
-# T3MP3ST Queue Audit
+# VULNORA Queue Audit
 
 Use this skill before any maintainer merge session. It is read-only by default.
 
@@ -39,7 +39,7 @@ Use this skill before any maintainer merge session. It is read-only by default.
    - `gh auth status`
    - `git status --short --branch`
    - `git remote -v`
-   - ensure `upstream` is `elder-plinius/T3MP3ST`.
+   - ensure `upstream` is `elder-plinius/VULNORA`.
 2. Fetch open PR metadata:
    - number, title, author, head SHA, merge state, review decision, status checks,
      last update, labels.
@@ -86,7 +86,7 @@ Use this skill before any maintainer merge session. It is read-only by default.
 Use `templates/queue-audit-report.md` as the standard report format.
 
 ```markdown
-## T3MP3ST Queue Audit
+## VULNORA Queue Audit
 
 ### Ready Merge Candidates
 | PR | Title | Evidence | Risk | Suggested Order |

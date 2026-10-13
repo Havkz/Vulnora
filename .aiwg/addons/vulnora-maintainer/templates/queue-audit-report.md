@@ -1,12 +1,12 @@
 ---
 name: queue-audit-report
-description: Full T3MP3ST maintainer queue audit report for open PRs, issues, readiness, blockers, and suggested merge order.
+description: Full VULNORA maintainer queue audit report for open PRs, issues, readiness, blockers, and suggested merge order.
 ---
 
-# T3MP3ST Queue Audit
+# VULNORA Queue Audit
 
 Date: `<YYYY-MM-DD>`
-Repository: `elder-plinius/T3MP3ST`
+Repository: `elder-plinius/VULNORA`
 Audit scope: `<all open PRs/issues | filtered scope>`
 
 ## Summary

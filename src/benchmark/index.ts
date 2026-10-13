@@ -1,7 +1,7 @@
 /**
- * T3MP3ST Benchmark Framework
+ * VULNORA Benchmark Framework
  *
- * Measures T3MP3ST's effectiveness against known-vulnerable targets.
+ * Measures VULNORA's effectiveness against known-vulnerable targets.
  * Compares discovered findings to a ground truth to compute precision,
  * recall, and time-to-finding metrics.
  */

@@ -387,19 +387,19 @@ export function applyCiteCheck(verdicts, repoRoot) {
     const g = v.killing_guard;
     if (!g || !String(g.quote || '').trim()) {
       v.guard_check = 'guardless'; v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
-      console.log(`    ⚠ REFUTED vote cites no verifiable guard (guardless/empty-quote) — downgraded to SURVIVED`);
+      console.log(`     REFUTED vote cites no verifiable guard (guardless/empty-quote) — downgraded to SURVIVED`);
       continue;
     }
     if (!repoRoot) {
       v.guard_check = 'unchecked-no-repo'; v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
-      console.log(`    ⚠ no --repo to cite-check ${g.file}:${g.line} — unverifiable REFUTE downgraded to SURVIVED (fail-safe)`);
+      console.log(`     no --repo to cite-check ${g.file}:${g.line} — unverifiable REFUTE downgraded to SURVIVED (fail-safe)`);
       continue;
     }
     const gc = guardExistsInSource(g, repoRoot);
     v.guard_check = gc;
     if (gc === 'hallucinated' || gc === 'file-missing') {
       v.original_verdict = 'REFUTED'; v.verdict = 'SURVIVED';
-      console.log(`    ⚠ killing-guard NOT in source (${gc}) — REFUTED vote rejected: ${g.file}:${g.line} "${String(g.quote).slice(0, 48)}"`);
+      console.log(`     killing-guard NOT in source (${gc}) — REFUTED vote rejected: ${g.file}:${g.line} "${String(g.quote).slice(0, 48)}"`);
     }
   }
   return verdicts;
@@ -515,7 +515,7 @@ async function main() {
   const outPath = path.join(path.dirname(fp), `${f.slug || 'finding'}.refutation_report.json`);
   fs.writeFileSync(outPath, JSON.stringify({ slug: f.slug, ...adj, verdicts, at: f.commit ? `commit ${f.commit}` : undefined }, null, 2));
 
-  console.log(`\n  ${adj.verdict === 'SURVIVED' ? '✅' : '⚠'} ${adj.verdict} — ${adj.refutedCount}/${adj.total} refuters found a killing guard`);
+  console.log(`\n  ${adj.verdict === 'SURVIVED' ? '✅' : ''} ${adj.verdict} — ${adj.refutedCount}/${adj.total} refuters found a killing guard`);
   for (const g of adj.killing_guards) if (g) console.log(`     - ${g.file}:${g.line} ${g.quote ? `(${g.quote})` : ''}`);
   console.log(`  report: ${path.relative(REPO, outPath)}\n`);
   process.exit(adj.verdict === 'SURVIVED' ? 0 : 3);

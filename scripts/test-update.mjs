@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Integration tests for the T3MP3ST updater.
+ * Integration tests for the VULNORA updater.
  * Each test runs the updater in a temporary sandbox repo so real repository state
  * is never touched.
  */
@@ -89,7 +89,7 @@ function cleanup(dir) {
 }
 
 function makeSandbox() {
-  const dir = join(tmpdir(), `t3mp3st-update-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const dir = join(tmpdir(), `vulnora-update-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
   mkdirSync(join(dir, 'scripts'), { recursive: true });
 
@@ -108,7 +108,7 @@ function makeSandbox() {
     writeFileSync(join(dir, 'scripts', f), content);
   }
 
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 't3mp3st-test-sandbox', version: '0.0.0' }, null, 2));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'vulnora-test-sandbox', version: '0.0.0' }, null, 2));
   writeFileSync(join(dir, '.env'), 'SECRET=local-secret\n');
   writeFileSync(join(dir, '.env.example'), 'SECRET=your-secret\n');
   mkdirSync(join(dir, 'reports'), { recursive: true });
@@ -147,7 +147,7 @@ function runBash(sandbox, args = []) {
 function makeEmptySandbox() {
   // Same as makeSandbox but with NO .env, reports/, or evidence/ -- exercises
   // the zero-protected-path path that the reviewer flagged.
-  const dir = join(tmpdir(), `t3mp3st-update-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const dir = join(tmpdir(), `vulnora-update-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   mkdirSync(dir, { recursive: true });
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   const files = ['update.ps1', 'update.sh', 'update-protected.txt', 'update-banner.txt', 'update.mjs'];
@@ -158,7 +158,7 @@ function makeEmptySandbox() {
     }
     writeFileSync(join(dir, 'scripts', f), content);
   }
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 't3mp3st-test-empty', version: '0.0.0' }, null, 2));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'vulnora-test-empty', version: '0.0.0' }, null, 2));
   writeFileSync(join(dir, 'unprotected.txt'), 'I should be replaced\n');
   return dir;
 }

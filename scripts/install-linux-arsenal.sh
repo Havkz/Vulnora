@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run inside the dedicated Kali distribution as the unprivileged Tempest user.
+# Run inside the dedicated Kali distribution as the unprivileged Vulnora user.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export DEBIAN_FRONTEND=noninteractive
@@ -43,4 +43,4 @@ npm run build
 nuclei -update-templates
 node scripts/arsenal-doctor.mjs --offline --json > "$HOME/arsenal-readiness.json"
 node scripts/arsenal-doctor.mjs --offline --strict
-touch "$HOME/.tempest-arsenal-ready"
+touch "$HOME/.vulnora-arsenal-ready"

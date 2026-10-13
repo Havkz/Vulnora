@@ -1,4 +1,4 @@
-# T3MP3ST: Research Directions & Evolutionary Vision
+# VULNORA: Research Directions & Evolutionary Vision
 
 ## Beyond the Kill Chain — Toward Autonomous Adversarial Intelligence
 
@@ -8,7 +8,7 @@
 
 ## Abstract
 
-T3MP3ST v1.0 established a multi-agent framework for orchestrating penetration testing across a structured kill chain. This document looks forward. It identifies seven evolutionary vectors that would transform T3MP3ST from a *tool framework* into something closer to an *adversarial intelligence system* — one capable of reasoning about novel attack surfaces, adapting strategies mid-engagement, learning from operational history, and coordinating swarm-scale operations across distributed infrastructure. Each vector is analyzed for technical feasibility, architectural implications, and open research questions.
+VULNORA v1.0 established a multi-agent framework for orchestrating penetration testing across a structured kill chain. This document looks forward. It identifies seven evolutionary vectors that would transform VULNORA from a *tool framework* into something closer to an *adversarial intelligence system* — one capable of reasoning about novel attack surfaces, adapting strategies mid-engagement, learning from operational history, and coordinating swarm-scale operations across distributed infrastructure. Each vector is analyzed for technical feasibility, architectural implications, and open research questions.
 
 This is not a roadmap. It is a cartography of the possible.
 
@@ -35,7 +35,7 @@ This is not a roadmap. It is a cartography of the possible.
 
 #### 1.1 The Current State
 
-T3MP3ST v1.0 operators are prompt-specialized: each archetype receives a system prompt that constrains its reasoning to a domain (reconnaissance, exploitation, etc.). Task execution follows a simple pattern — the operator receives a task description, optionally enters a ReAct loop with tool access, and produces structured output. The LLM does the thinking, but the *architecture* of that thinking is flat.
+VULNORA v1.0 operators are prompt-specialized: each archetype receives a system prompt that constrains its reasoning to a domain (reconnaissance, exploitation, etc.). Task execution follows a simple pattern — the operator receives a task description, optionally enters a ReAct loop with tool access, and produces structured output. The LLM does the thinking, but the *architecture* of that thinking is flat.
 
 This works. It solves many tasks. But it has a ceiling.
 
@@ -120,7 +120,7 @@ Implementation path:
 
 #### 2.1 Beyond Team Factories
 
-T3MP3ST v1.0 coordinates operators through a centralized dispatcher: MissionControl assigns tasks to operators based on archetype matching. This is a *command hierarchy*. It works for small teams (5-10 operators) but has fundamental scaling limitations:
+VULNORA v1.0 coordinates operators through a centralized dispatcher: MissionControl assigns tasks to operators based on archetype matching. This is a *command hierarchy*. It works for small teams (5-10 operators) but has fundamental scaling limitations:
 
 - Single point of failure (the coordinator)
 - O(N) communication overhead for status updates
@@ -131,7 +131,7 @@ T3MP3ST v1.0 coordinates operators through a centralized dispatcher: MissionCont
 
 In nature, ant colonies coordinate millions of agents without central command through *stigmergy* — agents modify the shared environment (pheromone trails), and other agents respond to those modifications. The result is emergent collective intelligence that far exceeds any individual agent's capability.
 
-**Applied to T3MP3ST:**
+**Applied to VULNORA:**
 
 ```
 +----------+     writes to     +------------------+     reads from     +----------+
@@ -194,11 +194,11 @@ This creates a system that is resilient to operator loss — if the designated s
 
 Defensive AI is advancing rapidly. EDR systems use behavioral ML to detect anomalous process execution. WAFs use neural networks to identify attack payloads. SIEM platforms use graph neural networks to detect lateral movement patterns. Network detection systems use autoencoders to flag anomalous traffic.
 
-T3MP3ST currently addresses this through static OPSEC levels (silent/covert/loud) and hardcoded timing parameters. This is the equivalent of bringing a playbook to a chess match — it works against predictable defenses but fails against adaptive ones.
+VULNORA currently addresses this through static OPSEC levels (silent/covert/loud) and hardcoded timing parameters. This is the equivalent of bringing a playbook to a chess match — it works against predictable defenses but fails against adaptive ones.
 
 #### 3.2 Defensive Model Awareness
 
-Future T3MP3ST operators need to reason about *what the defender's models see*:
+Future VULNORA operators need to reason about *what the defender's models see*:
 
 **Payload Mutation**: Rather than selecting from a static payload database, generate payloads that minimize the probability of detection by known WAF architectures:
 
@@ -227,7 +227,7 @@ This is a constrained optimization problem. The payload must be *both* evasive a
 This entire dynamic can be modeled as a generative adversarial process:
 
 ```
-Generator (T3MP3ST):  Produces attack actions
+Generator (VULNORA):  Produces attack actions
 Discriminator (Blue): Classifies actions as malicious/benign
 Training signal:      Did we get detected? Did we succeed?
 ```
@@ -254,9 +254,9 @@ This pushes toward *black-box adversarial ML* techniques: gradient-free optimiza
 
 #### 4.1 From Engagement to Continuous Assurance
 
-Current T3MP3ST operates in *engagement mode*: start mission, run kill chain, collect findings, generate report, stop. This mirrors traditional penetration testing — a point-in-time assessment.
+Current VULNORA operates in *engagement mode*: start mission, run kill chain, collect findings, generate report, stop. This mirrors traditional penetration testing — a point-in-time assessment.
 
-The industry is moving toward *continuous security validation*. Attack surface management, breach and attack simulation (BAS), and continuous penetration testing are growing categories. T3MP3ST's architecture is uniquely positioned for this shift, but requires fundamental changes.
+The industry is moving toward *continuous security validation*. Attack surface management, breach and attack simulation (BAS), and continuous penetration testing are growing categories. VULNORA's architecture is uniquely positioned for this shift, but requires fundamental changes.
 
 #### 4.2 The Continuous Operation Model
 
@@ -323,7 +323,7 @@ This requires a *notification policy engine* — configurable rules about what t
 
 #### 5.1 The Knowledge Problem
 
-T3MP3ST v1.0 contains several embedded knowledge stores:
+VULNORA v1.0 contains several embedded knowledge stores:
 - 20 CVE entries in the KnowledgeBase
 - 40+ MITRE ATT&CK techniques
 - 200+ payload entries across categories
@@ -392,7 +392,7 @@ Output: {
 
 #### 5.4 Experiential Knowledge
 
-Beyond external knowledge, T3MP3ST should build knowledge from its own operations:
+Beyond external knowledge, VULNORA should build knowledge from its own operations:
 
 - **Technique effectiveness history**: "SQL injection via UNION SELECT worked on 73% of PHP/MySQL targets but only 12% of Node.js/PostgreSQL targets"
 - **Detection correlation**: "dir_bruteforce with >100 req/s triggers Cloudflare rate limiting 89% of the time, but <10 req/s succeeds undetected in 95% of cases"
@@ -415,7 +415,7 @@ This experiential knowledge creates a *feedback loop* that improves with each en
 
 #### 6.1 The Architectural Constraint
 
-T3MP3ST v1.0 runs as a single Node.js process. All operators share the same event loop, the same network stack, and the same IP address. This creates several limitations:
+VULNORA v1.0 runs as a single Node.js process. All operators share the same event loop, the same network stack, and the same IP address. This creates several limitations:
 
 - **Attribution**: All traffic originates from one IP — trivial to block
 - **Performance**: CPU-bound operations (hash cracking, large scans) block the event loop
@@ -426,7 +426,7 @@ T3MP3ST v1.0 runs as a single Node.js process. All operators share the same even
 
 ```
 +------------------------------------------------------------------+
-|                    T3MP3ST COMMAND CENTER                          |
+|                    VULNORA COMMAND CENTER                          |
 |  (Orchestration, Knowledge Base, Evidence Vault, Reporting)       |
 +------------------------------------------------------------------+
          |              |              |              |
@@ -467,7 +467,7 @@ Edge Agent (~5MB):
   - Memory-only execution (no disk writes)
 ```
 
-This enables authorized internal testing without deploying the full T3MP3ST stack inside the target environment. The edge agent acts as the "hands" while the Command Center provides the "brain."
+This enables authorized internal testing without deploying the full VULNORA stack inside the target environment. The edge agent acts as the "hands" while the Command Center provides the "brain."
 
 #### 6.4 State Synchronization
 
@@ -495,7 +495,7 @@ CRDTs guarantee eventual consistency without coordination — perfect for a dist
 
 #### 7.1 The Benchmark Gap
 
-T3MP3ST v1.0 integrates with Cybench (40 tasks) and NYU CTF Bench (200 tasks). These are primarily flag-capture CTF challenges — they test the ability to solve known puzzles with known answers.
+VULNORA v1.0 integrates with Cybench (40 tasks) and NYU CTF Bench (200 tasks). These are primarily flag-capture CTF challenges — they test the ability to solve known puzzles with known answers.
 
 This is useful but insufficient. Real penetration testing requires capabilities that CTF benchmarks don't measure:
 
@@ -506,7 +506,7 @@ This is useful but insufficient. Real penetration testing requires capabilities 
 - **Efficiency**: How many actions did you take? How much time/money did you spend?
 - **Adaptability**: Can you handle unexpected conditions (WAF, honeypot, non-standard configurations)?
 
-#### 7.2 The T3MP3ST Evaluation Framework
+#### 7.2 The VULNORA Evaluation Framework
 
 A comprehensive evaluation framework should measure across five dimensions:
 
@@ -514,7 +514,7 @@ A comprehensive evaluation framework should measure across five dimensions:
 ```
 DR = |vulnerabilities_found| / |vulnerabilities_present|
 ```
-Requires ground-truth vulnerable environments. Docker-based challenge infrastructure (like T3MP3ST's CTF system) can provide this, but must be expanded to include:
+Requires ground-truth vulnerable environments. Docker-based challenge infrastructure (like VULNORA's CTF system) can provide this, but must be expanded to include:
 - Multi-vulnerability applications (not just one vuln per challenge)
 - Realistic enterprise topologies (not just single hosts)
 - Configuration-dependent vulnerabilities (not just code bugs)
@@ -529,7 +529,7 @@ False positive rate matters enormously for operational tools. A tool that report
 ```
 SS = 1 - (|detections| / |detection_opportunities|)
 ```
-Requires adversarial monitoring infrastructure: deploy IDS/EDR on benchmark targets and measure what T3MP3ST's operations trigger. This creates a principled OPSEC benchmark.
+Requires adversarial monitoring infrastructure: deploy IDS/EDR on benchmark targets and measure what VULNORA's operations trigger. This creates a principled OPSEC benchmark.
 
 **4. Operational Efficiency**
 ```
@@ -603,7 +603,7 @@ No single vector achieves this alone. The compound effect of all seven transform
 
 ### The Maturity Model
 
-| Level | Name | Characteristics | T3MP3ST Version |
+| Level | Name | Characteristics | VULNORA Version |
 |-------|------|-----------------|-----------------|
 | L0 | Scanner | Fixed tools, fixed targets, fixed sequence | Pre-v1.0 |
 | L1 | Framework | Orchestrated tools, configurable targets, kill chain phases | **v1.0 (current)** |
@@ -611,7 +611,7 @@ No single vector achieves this alone. The compound effect of all seven transform
 | L3 | Swarm | Emergent coordination, distributed operation, experiential learning | v3.0 target |
 | L4 | Intelligence | Adversarial ontologies, continuous operation, meta-game awareness | Long-term vision |
 
-The jump from L1 to L2 is the most important and most tractable. It requires improvements to cognitive architecture (Vector 1) and knowledge systems (Vector 5) but can be achieved within the existing single-process architecture. The jump from L2 to L3 is the most architecturally demanding, requiring distributed execution (Vector 6) and swarm coordination (Vector 2). L4 is speculative — it requires breakthroughs in adversarial ML (Vector 3) and evaluation science (Vector 7) that are active research areas beyond T3MP3ST specifically.
+The jump from L1 to L2 is the most important and most tractable. It requires improvements to cognitive architecture (Vector 1) and knowledge systems (Vector 5) but can be achieved within the existing single-process architecture. The jump from L2 to L3 is the most architecturally demanding, requiring distributed execution (Vector 6) and swarm coordination (Vector 2). L4 is speculative — it requires breakthroughs in adversarial ML (Vector 3) and evaluation science (Vector 7) that are active research areas beyond VULNORA specifically.
 
 ---
 
@@ -619,7 +619,7 @@ The jump from L1 to L2 is the most important and most tractable. It requires imp
 
 ### Constraints That Enable
 
-Every capability described in this document increases T3MP3ST's offensive potential. Without commensurate investment in ethical constraints, this potential becomes a liability. The ethical framework is not an afterthought — it is load-bearing architecture.
+Every capability described in this document increases VULNORA's offensive potential. Without commensurate investment in ethical constraints, this potential becomes a liability. The ethical framework is not an afterthought — it is load-bearing architecture.
 
 ### Principles
 
@@ -677,11 +677,11 @@ When should a human trust the system's assessment and when should they verify? I
 
 ## Conclusion
 
-T3MP3ST v1.0 is a framework. It orchestrates tools and agents through a structured pipeline. The seven vectors described here trace a path from framework to intelligence system — a path that is technically demanding but increasingly tractable as LLM capabilities advance, distributed systems mature, and the security community builds shared evaluation infrastructure.
+VULNORA v1.0 is a framework. It orchestrates tools and agents through a structured pipeline. The seven vectors described here trace a path from framework to intelligence system — a path that is technically demanding but increasingly tractable as LLM capabilities advance, distributed systems mature, and the security community builds shared evaluation infrastructure.
 
 The most important insight is that these vectors are *multiplicative*, not additive. A system with better reasoning (Vector 1) AND experiential knowledge (Vector 5) is not 2x better than one with just reasoning — it's qualitatively different, because the knowledge informs the reasoning which generates new knowledge.
 
-The second most important insight is that we don't need all seven vectors to make progress. The cognitive architecture improvements (Vector 1) are achievable now, with current LLM capabilities and the existing T3MP3ST codebase. They alone would represent a significant advance in autonomous security testing capability.
+The second most important insight is that we don't need all seven vectors to make progress. The cognitive architecture improvements (Vector 1) are achievable now, with current LLM capabilities and the existing VULNORA codebase. They alone would represent a significant advance in autonomous security testing capability.
 
 The future is not a single breakthrough. It is a compound effect — many improvements, each modest, combining into something that doesn't yet exist.
 

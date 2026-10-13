@@ -383,9 +383,9 @@ export class ToolOrchestrator {
     this.defaultBudgets = { ...DEFAULT_BUDGETS, ...(options.budgets || {}) };
     this.onEvent = options.onEvent;
     this.dnsResolver = options.dnsResolver || resolve4;
-    this.preflightTtlMs = options.preflightTtlMs ?? Number(process.env.T3MP3ST_PREFLIGHT_TTL_MS || 5 * 60_000);
+    this.preflightTtlMs = options.preflightTtlMs ?? Number(process.env.VULNORA_PREFLIGHT_TTL_MS || 5 * 60_000);
     this.evidenceStore = options.evidenceStore || evidenceStoreFromEnvironment();
-    this.explicitRepeatLimit = options.explicitRepeatLimit ?? Number(process.env.T3MP3ST_EXPLICIT_REPEAT_LIMIT || 2);
+    this.explicitRepeatLimit = options.explicitRepeatLimit ?? Number(process.env.VULNORA_EXPLICIT_REPEAT_LIMIT || 2);
     void this.evidenceStore.load().catch(() => {});
   }
   private readonly defaultBudgets: TargetBudgets;
@@ -565,7 +565,7 @@ export class ToolOrchestrator {
   private async detectWildcard(domain: string): Promise<{ detected: boolean; addresses: string[]; checkedAt: number }> {
     const existing = this.wildcardDns.get(domain);
     if (existing && Date.now() - existing.checkedAt <= this.cacheTtlMs) return existing;
-    const random = `t3mp3st-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}.${domain}`;
+    const random = `vulnora-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}.${domain}`;
     let addresses: string[] = [];
     try { addresses = await this.dnsResolver(random); } catch { /* NXDOMAIN means no wildcard */ }
     const state = { detected: addresses.length > 0, addresses: [...new Set(addresses)].sort(), checkedAt: Date.now() };
@@ -584,9 +584,9 @@ export class ToolOrchestrator {
     this.hostTails.set(call.host, tail);
     await previous.catch(() => {});
     try {
-      const configuredDelay = Number(process.env.T3MP3ST_DEFENSIVE_REQUEST_INTERVAL_MS || 750);
+      const configuredDelay = Number(process.env.VULNORA_DEFENSIVE_REQUEST_INTERVAL_MS || 750);
       const baseDelay = AGGRESSIVE_TOOLS.test(call.toolName) ? configuredDelay * 2 : configuredDelay;
-      const jitter = Number(process.env.T3MP3ST_DEFENSIVE_JITTER_MS || 500);
+      const jitter = Number(process.env.VULNORA_DEFENSIVE_JITTER_MS || 500);
       const wait = Math.max(0, baseDelay - (Date.now() - (this.lastHostRequest.get(call.host) || 0))) + Math.floor(Math.random() * Math.max(1, jitter));
       if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
       this.lastHostRequest.set(call.host, Date.now());
@@ -682,7 +682,7 @@ export class ToolOrchestrator {
   private blockedByEdge(call: NormalizedToolCall): ToolResult | null {
     const state = this.networkState(call.host);
     if (state.blockState !== 'probable_edge_block') return null;
-    const backoffMs = Number(process.env.T3MP3ST_EDGE_BACKOFF_MS || 60_000);
+    const backoffMs = Number(process.env.VULNORA_EDGE_BACKOFF_MS || 60_000);
     const healthCheck = call.toolCategory === 'http_fetch' && ['GET', 'HEAD'].includes(call.method || 'GET') && Date.now() - (state.blockedAt || 0) >= backoffMs && state.healthChecks < 1;
     if (healthCheck) { state.healthChecks++; this.emit('REPEATED', 'controlled health check after edge backoff', call); return null; }
     this.metrics.blockedCalls++;

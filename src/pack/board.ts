@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Pack Hunt — PackBoard (Phase-2 shared workspace / lead-board)
+ * VULNORA Pack Hunt — PackBoard (Phase-2 shared workspace / lead-board)
  *
  * An APPEND-ONLY event log + folded projections (a leads map, live claims, per-agent
  * heartbeats), on the same EventEmitter discipline as `EvidenceVault`

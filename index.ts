@@ -1,5 +1,5 @@
 /**
- * T3MP3ST (TEMPEST)
+ * VULNORA (VULNORA)
  * Tactical Execution Multi-agent Platform for Elite Security Testing
  *
  * Re-exports from the main implementation in ./src

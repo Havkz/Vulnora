@@ -172,11 +172,11 @@ export class Semaphore {
 /**
  * Global concurrency cap over ALL local-agent (LLM backbone) calls across a pack hunt. One shared
  * subscription quota => a single global semaphore, NOT one per operator (per HT-3). Bound from
- * T3MP3ST_LLM_CONCURRENCY (default 2). Wrap every local-agent dispatch in
+ * VULNORA_LLM_CONCURRENCY (default 2). Wrap every local-agent dispatch in
  * `localAgentSemaphore.run(() => localAgentChat(...))`.
  */
 function resolveConcurrency(): number {
-  const raw = parseInt((process.env.T3MP3ST_LLM_CONCURRENCY || '').trim(), 10);
+  const raw = parseInt((process.env.VULNORA_LLM_CONCURRENCY || '').trim(), 10);
   return Number.isFinite(raw) && raw >= 1 ? raw : 2;
 }
 

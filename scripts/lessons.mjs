@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ─────────────────────────────────────────────────────────────────────────────
-// lessons.mjs — t3mp3st's immune memory ("never the same mistake three times").
+// lessons.mjs — vulnora's immune memory ("never the same mistake three times").
 //
 // An organism that learns. Every failure/contamination/overclaim becomes an
 // ANTIBODY: a general methodological lesson stored in docs/lessons.jsonl. On a
@@ -178,7 +178,7 @@ if (isMain) {
   } else {
     const store = loadLessons();
     const enforced = store.filter((l) => l.tier === 'enforced').length;
-    console.log(`\nt3mp3st immune memory — ${store.length} antibodies (${enforced} enforced, ${store.length - enforced} advisory)\n`);
+    console.log(`\nvulnora immune memory — ${store.length} antibodies (${enforced} enforced, ${store.length - enforced} advisory)\n`);
     for (const l of store) {
       console.log(`  [${(l.tier || '?').padEnd(8)}] ${l.id}  (${l.class}, x${l.count})  ${String(l.lesson).slice(0, 88)}`);
     }

@@ -184,12 +184,12 @@ async function fetchRetry(url, opts, tries = 8) {
 async function getRepoTree() {
   if (_treeCache) return _treeCache;
   const r = await fetchRetry(`${GH_API}/git/trees/main?recursive=1`, {
-    headers: { 'user-agent': 't3mp3st-xbow', ...AUTH },
+    headers: { 'user-agent': 'vulnora-xbow', ...AUTH },
   });
   if (!r.ok) throw new Error(`/git/trees → ${r.status}`);
   const j = await r.json();
   if (j.truncated) {
-    console.warn('  ⚠️  /git/trees response truncated — some deep files may be missing');
+    console.warn('    /git/trees response truncated — some deep files may be missing');
   }
   _treeCache = j.tree;
   return j.tree;
@@ -203,7 +203,7 @@ async function fetchOneFile(repoPath, destPath) {
   if (process.env.BB_RESUME_STAGE) {
     try { const st = fs.statSync(destPath); if (st.size > 0) return st.size; } catch {}
   }
-  const r = await fetchRetry(`${GH_RAW}/${enc(repoPath)}`, { headers: { 'user-agent': 't3mp3st-xbow', ...AUTH } });
+  const r = await fetchRetry(`${GH_RAW}/${enc(repoPath)}`, { headers: { 'user-agent': 'vulnora-xbow', ...AUTH } });
   if (!r.ok) throw new Error(`raw ${repoPath} → ${r.status}`);
   const buf = Buffer.from(await r.arrayBuffer());
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
@@ -228,7 +228,7 @@ async function fetchTreeRecursive(upstreamPath, outDir) {
       // etc.) must NOT torch the whole challenge — the FLAG is baked at build
       // time and the solvable source is virtually always intact. Skip + warn.
       skipped++;
-      console.warn(`  ⚠️  skip ${rel} (${e.message})`);
+      console.warn(`    skip ${rel} (${e.message})`);
     }
   }
   // Preserve executable bits on shell scripts
@@ -476,7 +476,7 @@ function publishTargetPort(composePath, hostPort) {
 
 function projectName(slug) {
   // Keep the literal "xben" token so cleanup can filter `--filter name=xben`.
-  return 't3mp3st-' + slug.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 50);
+  return 'vulnora-' + slug.replace(/[^a-z0-9-]/gi, '').toLowerCase().slice(0, 50);
 }
 
 async function ensureSharedNetwork() {
@@ -865,7 +865,7 @@ async function runOne(name, args) {
       // Non-authoritative cross-check: surface any divergence between the strict grader and
       // the naive value-compare so a future regression is visible rather than silent.
       if (flagsMatch(reported, flag) !== !!cyb.detected) {
-        console.log(`  ⚠ scorer divergence on ${slug}: strict.detected=${!!cyb.detected} naive=${flagsMatch(reported, flag)} — trusting strict grader`);
+        console.log(`   scorer divergence on ${slug}: strict.detected=${!!cyb.detected} naive=${flagsMatch(reported, flag)} — trusting strict grader`);
       }
       const detected = !!cyb.detected && !canary_hit;
       if (r0) {
@@ -937,12 +937,12 @@ async function main() {
   const ok = results.filter(r => r.detected).length;
   const canaries = results.filter(r => r.canary_hit).length;
   console.log('\n' + '─'.repeat(60));
-  console.log(`SUITE: ${ok}/${results.length} solved` + (canaries ? `  (⚠ ${canaries} canary hit — possible memorization)` : ''));
+  console.log(`SUITE: ${ok}/${results.length} solved` + (canaries ? `  ( ${canaries} canary hit — possible memorization)` : ''));
   console.log('─'.repeat(60));
 
   const aggregatePath = path.join(RESULTS, `xbow-aggregate-${Date.now()}.json`);
   fs.writeFileSync(aggregatePath, JSON.stringify({
-    schema: 't3mp3st.bench.xbow/v1',
+    schema: 'vulnora.bench.xbow/v1',
     timestamp: new Date().toISOString(),
     hunter: args.hunter, model: args.model,
     solved: ok, total: results.length, canary_hits: canaries,

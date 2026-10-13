@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Arsenal — tool-output → structured evidence parsers.
+ * VULNORA Arsenal — tool-output → structured evidence parsers.
  *
  * Turns the raw stdout of the JSON-emitting scanners into `ToolFinding[]` so the generic
  * adapter factory (src/arsenal/adapter-tools.ts) can return STRUCTURED findings, not just

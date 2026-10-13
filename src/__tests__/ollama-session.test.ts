@@ -12,7 +12,7 @@ const settings: LLMConfig = {
 
 describe('Ollama CLI session lifecycle', () => {
   it('preloads with the chat context, holds the model across chat, and unloads once on exit', async () => {
-    vi.stubEnv('TEMPEST_LOCAL_KEEP_ALIVE', '5m');
+    vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', '5m');
     const bodies: Array<Record<string, unknown>> = [];
     vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
       bodies.push(JSON.parse(init.body));
@@ -27,11 +27,11 @@ describe('Ollama CLI session lifecycle', () => {
     await Promise.all([session.stop(), session.stop()]);
     expect(bodies).toHaveLength(3);
     expect(bodies[2]).toEqual({ model: 'test-model', stream: false, keep_alive: 0 });
-    expect(process.env.TEMPEST_LOCAL_KEEP_ALIVE).toBe('5m');
+    expect(process.env.VULNORA_LOCAL_KEEP_ALIVE).toBe('5m');
   });
 
   it.each([['-1', -1], ['0', 0], ['30', 30], ['5m', '5m']])('sends keep-alive %s in Ollama wire format', async (setting, expected) => {
-    vi.stubEnv('TEMPEST_LOCAL_KEEP_ALIVE', String(setting));
+    vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', String(setting));
     const fetch = vi.fn(async (_url, init) => {
       expect(JSON.parse(init.body).keep_alive).toBe(expected);
       return new Response(JSON.stringify({ message: { content: 'ready' }, done: true }));
@@ -55,13 +55,13 @@ describe('Ollama CLI session lifecycle', () => {
   });
 
   it('fails clearly on startup and still releases the model and session setting', async () => {
-    vi.stubEnv('TEMPEST_LOCAL_KEEP_ALIVE', '10m');
+    vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', '10m');
     const fetch = vi.fn().mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(new Response('{}'));
     vi.stubGlobal('fetch', fetch);
     const session = createOllamaSession(settings);
     await expect(session.start()).rejects.toThrow('load failed: HTTP 404');
     await session.stop();
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(process.env.TEMPEST_LOCAL_KEEP_ALIVE).toBe('10m');
+    expect(process.env.VULNORA_LOCAL_KEEP_ALIVE).toBe('10m');
   });
 });

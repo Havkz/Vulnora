@@ -281,7 +281,7 @@ async function main() {
   let backendCalls = 0, backendFails = 0, rateLimited = false; // distinguish a real clean from a degraded/rate-limited non-run
 
   for (let round = 1; round <= maxRounds; round++) {
-    if (overBudget()) { console.log(`  ⏱  budget reached — stopping before round ${round}.`); break; }
+    if (overBudget()) { console.log(`    budget reached — stopping before round ${round}.`); break; }
     console.log(`\n──────── ROUND ${round}/${maxRounds}  (${now()}) ────────`);
     const board = renderBoard(state);
     const roundRec = { round, started: new Date().toISOString(), specialists: [], newConfirmed: [], newLeads: [], refuted: [], outOfScope: 0 };
@@ -294,9 +294,9 @@ async function main() {
       const secs = ((Date.now() - t0) / 1000).toFixed(0);
       backendCalls++;
       if (r.rateLimited) rateLimited = true;
-      if (!r.ok) { backendFails++; console.log(`  ⚠ ${lens.name.padEnd(22)} ${r.error} (${secs}s)`); return { lens, items: [] }; }
+      if (!r.ok) { backendFails++; console.log(`   ${lens.name.padEnd(22)} ${r.error} (${secs}s)`); return { lens, items: [] }; }
       const items = extractFindings(r.text);
-      if (items === null) { backendFails++; console.log(`  ⚠ ${lens.name.padEnd(22)} unparseable output (${secs}s)`); return { lens, items: [] }; }
+      if (items === null) { backendFails++; console.log(`   ${lens.name.padEnd(22)} unparseable output (${secs}s)`); return { lens, items: [] }; }
       const conf = items.filter((x) => x.status === 'confirmed' || x.confidence === 'high').length;
       console.log(`  • ${lens.name.padEnd(22)} ${items.length} item(s) (${conf} confirmed/high) (${secs}s)`);
       roundRec.specialists.push({ lens: lens.key, n: items.length, secs: +secs });
@@ -324,7 +324,7 @@ async function main() {
     const toVet = fresh.filter((f) => f.status === 'confirmed' || f.confidence === 'high');
     const leadsOnly = fresh.filter((f) => !(f.status === 'confirmed' || f.confidence === 'high'));
     if (useSkeptic) {
-      if (toVet.length) console.log(`  ⚔ skeptic refuting ${toVet.length} candidate finding(s)…`);
+      if (toVet.length) console.log(`   skeptic refuting ${toVet.length} candidate finding(s)…`);
       const vetted = await pool(toVet, concurrency, async (f) => {
         const r = await runCodexAsync(repo, skepticPrompt(f, commit), { label: `skeptic:${f.lens}`, model });
         let verdict = { verdict: 'SURVIVES', reason: 'skeptic produced no parseable verdict (kept for human review)', guard_found: null };
@@ -368,7 +368,7 @@ async function main() {
       for (const c of (triage.clusters || [])) console.log(`  [${c.classification}/${c.severity}] ${c.root_cause} (${(c.members || []).length} site(s)) — ${c.why}`);
       console.log(`  → ${triage.novel_real ?? 0} NOVEL_REAL of ${(triage.clusters || []).length} root-cause cluster(s) from ${state.confirmed.length} raw survivors`);
     } else {
-      console.log(`  ⚠ triage produced no parseable verdict (keeping raw survivors)`);
+      console.log(`   triage produced no parseable verdict (keeping raw survivors)`);
     }
   }
 
@@ -391,7 +391,7 @@ async function main() {
   fs.writeFileSync(outPath, JSON.stringify(transcript, null, 2));
 
   console.log(`\n${'═'.repeat(72)}`);
-  console.log(`  ${arm === 'swarm' ? '🐝 SWARM' : `🔬 ${arm.toUpperCase()}`} COMPLETE — ${transcript.elapsed_min}min · ${transcript.rounds.length} round(s)`);
+  console.log(`  ${arm === 'swarm' ? ' SWARM' : ` ${arm.toUpperCase()}`} COMPLETE — ${transcript.elapsed_min}min · ${transcript.rounds.length} round(s)`);
   console.log(`${'═'.repeat(72)}`);
   if (degraded) {
     console.log(`  ⛔ INVALID RUN — backend ${rateLimited ? 'RATE-LIMITED (usage limit)' : 'errored'} on ${backendFails}/${backendCalls} call(s).`);
@@ -406,18 +406,18 @@ async function main() {
       console.log(`  ✅ ZERO NOVEL findings — ${state.confirmed.length} raw survivors triaged down to ${triage.clusters.length} root cause(s), ALL by-design / known / low-value / duplicate.`);
       console.log(`     The swarm has high recall; the triage gate refused the overclaim. That honesty IS the result.`);
     } else {
-      console.log(`  🎯 ${novel.length} NOVEL_REAL finding(s) (from ${state.confirmed.length} raw survivors → ${triage.clusters.length} clusters). NEXT: executed PoC — the gate that makes them real:`);
+      console.log(`   ${novel.length} NOVEL_REAL finding(s) (from ${state.confirmed.length} raw survivors → ${triage.clusters.length} clusters). NEXT: executed PoC — the gate that makes them real:`);
       for (const c of novel) console.log(`     • [${c.severity}] ${c.root_cause} — sites: ${(c.members || []).slice(0, 4).join(', ')}`);
     }
     if (downgraded.length) console.log(`  ↓ ${downgraded.length} cluster(s) downgraded: ${downgraded.map((c) => `${c.classification}×${(c.members || []).length}`).join(', ')}`);
   } else {
-    console.log(`  🎯 ${state.confirmed.length} SURVIVING finding(s) — each cleared the adversarial skeptic. NEXT: executed PoC (the gate that makes them real):`);
+    console.log(`   ${state.confirmed.length} SURVIVING finding(s) — each cleared the adversarial skeptic. NEXT: executed PoC (the gate that makes them real):`);
     for (const f of state.confirmed) console.log(`     • [${f.severity}/${f.confidence}] ${f.cwe} ${f.file}:${f.line ?? '?'} — ${f.title}`);
   }
-  if (partial) console.log(`  ⚠ PARTIAL COVERAGE — ${backendFails}/${backendCalls} specialist call(s) lost to rate-limiting; findings stand but coverage is incomplete (re-run for full sweep).`);
+  if (partial) console.log(`   PARTIAL COVERAGE — ${backendFails}/${backendCalls} specialist call(s) lost to rate-limiting; findings stand but coverage is incomplete (re-run for full sweep).`);
   if (state.leads.length) console.log(`  ◷ ${state.leads.length} open lead(s) held for follow-up (unproven — NOT findings).`);
   if (state.refuted.length) console.log(`  ✗ ${state.refuted.length} candidate(s) adversarially refuted and dropped (anti-fabrication working).`);
-  console.log(`  📄 full audit transcript: ${path.relative(REPO_ROOT, outPath)}\n`);
+  console.log(`   full audit transcript: ${path.relative(REPO_ROOT, outPath)}\n`);
   process.exit(degraded ? 4 : 0);
 }
 

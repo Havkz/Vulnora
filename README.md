@@ -1,6 +1,6 @@
-# 🌩️ T3MP3ST 🌩️
+# VULNORA
 
-<!-- ⊰ sharp eye on the raw source. there's a flag for the curious: T3MP3ST{r3c31pt5_n0t_v1b3z} — the one that counts, you earn: run `npm run verify-claims`. LOVE PLINY ⊱ -->
+<!-- ⊰ sharp eye on the raw source. there's a flag for the curious: VULNORA{r3c31pt5_n0t_v1b3z} — the one that counts, you earn: run `npm run verify-claims`. LOVE PLINY ⊱ -->
 
 ```
  ▄▄▄█████▓▓█████  ███▄ ▄███▓ ██▓███  ▓█████   ██████ ▄▄▄█████▓
@@ -22,9 +22,9 @@
 
 </div>
 
-**Your AI coding agent is already a hacker — T3MP3ST hands it an arsenal.**
+**Your AI coding agent is already a hacker — VULNORA hands it an arsenal.**
 
-Point it at an authorized target and the kill chain runs itself: **recon → exploit → report**, from the interactive CLI, driven by the agent you're *already* signed into — Claude Code, Codex, Hermes — or a model you run **fully offline** (Ollama, LM Studio, vLLM). No new API keys, no cloud tenant, no second bill. Your agent is the brain; T3MP3ST is the war machine bolted around it. **Self-hosted storm. Keyless warfare.** ⚡
+Point it at an authorized target and the kill chain runs itself: **recon → exploit → report**, from the interactive CLI, driven by the agent you're *already* signed into — Claude Code, Codex, Hermes — or a model you run **fully offline** (Ollama, LM Studio, vLLM). No new API keys, no cloud tenant, no second bill. Your agent is the brain; VULNORA is the war machine bolted around it. **Self-hosted storm. Keyless warfare.** ⚡
 
 And it won't ask you to take its word for it. On **XBOW's own 104-challenge suite it scores 90.1% pass@1** — above XBOW's self-reported 85% — alongside hint-free CTF solves and a **cold hunt on real, post-cutoff CVEs the model had never seen**. Every number in this README recomputes from committed data with one command (`npm run verify-claims`). Loud about the mission, honest about the build — the [status table](#what-ships-today) says exactly what's live, what's scaffolding, and what's still roadmap; full receipts in [Benchmarks](#benchmarks).
 
@@ -36,28 +36,28 @@ Three things set it apart:
 
 **Jump to** → [Quick start](#quick-start) · [Updating](#updating-from-upstream) · [What it hunts](#what-it-hunts) · [What ships today](#what-ships-today) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [Docs](#documentation)
 
-## ⚠️ Authorized use only
+##  Authorized use only
 
-T3MP3ST is an **offensive** security tool, built for **authorized** testing, research, and education. Point it **only** at systems you own or have **explicit, written permission** to test. Unauthorized access to computers, networks, or data is illegal in most jurisdictions — **you alone are responsible** for how you use this software and for staying inside the law and your rules of engagement. Bring the storm to *your* targets, not someone else's.
+VULNORA is an **offensive** security tool, built for **authorized** testing, research, and education. Point it **only** at systems you own or have **explicit, written permission** to test. Unauthorized access to computers, networks, or data is illegal in most jurisdictions — **you alone are responsible** for how you use this software and for staying inside the law and your rules of engagement. Bring the storm to *your* targets, not someone else's.
 
-T3MP3ST is provided **as-is under the AGPL-3.0 license, with no warranty and no liability** for any damage, loss, or misuse. The authors do not endorse, support, or condone unauthorized activity. Get permission. Stay in scope. Don't be a menace. 🫡
+VULNORA is provided **as-is under the AGPL-3.0 license, with no warranty and no liability** for any damage, loss, or misuse. The authors do not endorse, support, or condone unauthorized activity. Get permission. Stay in scope. Don't be a menace.
 
 ## Why it exists
 
-Offensive security sits behind years of practice and expensive tooling. The bet behind T3MP3ST is that a coordinated agent swarm puts real bug-hunting in reach of people who never got the invite, across web apps, CTFs, smart contracts, source code, and embedded/robotics OSS. That is an ambitious bet, and the sections below are careful to separate what already works from what is still a bet.
+Offensive security sits behind years of practice and expensive tooling. The bet behind VULNORA is that a coordinated agent swarm puts real bug-hunting in reach of people who never got the invite, across web apps, CTFs, smart contracts, source code, and embedded/robotics OSS. That is an ambitious bet, and the sections below are careful to separate what already works from what is still a bet.
 
 ## What it hunts
 
 | Domain | What it does | Status |
 |---|---|---|
-| 🕸️ **Web apps** | Black-box, external-attacker recon → exploit (XBEN suite) | ✅ Stable |
-| 🚩 **CTF** | Hint-free, sandbox-jailed solves (Cybench) | ✅ Stable |
-| 🤖 **Robotics / OT / embedded** | Coordinated-disclosure pipeline for OSS vuln hunting (OSV + live-PoC + refuter) | ✅ Pipeline stable |
-| 📂 **Source code** | White-box repo analysis with blind master-builder decomposition | ⚠️ Python-only ingest |
-| 💰 **Smart contracts** | Damn Vulnerable DeFi | ⚠️ reproduction, not novel discovery |
-| ☁️ **Cloud (IaC)** | Misconfig-detection benchmark (`cloud:bench`) + opt-in cloud arsenal (aws/az/gcloud + scoutsuite/cloudfox/pmapper; pacu gated) | 🚧 IaC-misconfig scaffolding — live-cloud exploitation not yet benchmarked |
-| 📱 **Mobile** | Built-in static analyzer (manifest misconfig + secret/cleartext detection, `mobile:bench`) + opt-in arsenal (mobsfscan/objection/drozer; frida gated) | 🚧 static-detection scaffolding — dynamic exploitation not benchmarked |
-| 🔩 **Binary / RE** | Decompiled-output sink detector (unsafe-copy / format-string / cmd-injection / int-overflow, `binary:bench`) + opt-in arsenal (ghidra/radare2/objdump/checksec/strings; gdb gated) | 🚧 static sink-detection scaffolding — solving/pwn not benchmarked |
+|  **Web apps** | Black-box, external-attacker recon → exploit (XBEN suite) | ✅ Stable |
+|  **CTF** | Hint-free, sandbox-jailed solves (Cybench) | ✅ Stable |
+|  **Robotics / OT / embedded** | Coordinated-disclosure pipeline for OSS vuln hunting (OSV + live-PoC + refuter) | ✅ Pipeline stable |
+|  **Source code** | White-box repo analysis with blind master-builder decomposition |  Python-only ingest |
+|  **Smart contracts** | Damn Vulnerable DeFi |  reproduction, not novel discovery |
+| ☁ **Cloud (IaC)** | Misconfig-detection benchmark (`cloud:bench`) + opt-in cloud arsenal (aws/az/gcloud + scoutsuite/cloudfox/pmapper; pacu gated) |  IaC-misconfig scaffolding — live-cloud exploitation not yet benchmarked |
+|  **Mobile** | Built-in static analyzer (manifest misconfig + secret/cleartext detection, `mobile:bench`) + opt-in arsenal (mobsfscan/objection/drozer; frida gated) |  static-detection scaffolding — dynamic exploitation not benchmarked |
+|  **Binary / RE** | Decompiled-output sink detector (unsafe-copy / format-string / cmd-injection / int-overflow, `binary:bench`) + opt-in arsenal (ghidra/radare2/objdump/checksec/strings; gdb gated) |  static sink-detection scaffolding — solving/pwn not benchmarked |
 
 ## Quick start
 
@@ -73,14 +73,14 @@ npm start
 
 Use **Settings** to choose a provider, then **Start New Operation**. Codex uses your existing CLI login (`codex login`); no API key is required. The browser interface has been removed.
 
-For Codex with an Ollama fallback, put these settings in `~/.t3mp3st/.env`:
+For Codex with an Ollama fallback, put these settings in `~/.vulnora/.env`:
 
 ```dotenv
 LLM_PROVIDER=codex
-TEMPEST_DEFAULT_PROVIDER=codex
-TEMPEST_MODEL_FALLBACK=local
-TEMPEST_LOCAL_BASE_URL=http://127.0.0.1:11434/api
-TEMPEST_LOCAL_MODEL=your-installed-model
+VULNORA_DEFAULT_PROVIDER=codex
+VULNORA_MODEL_FALLBACK=local
+VULNORA_LOCAL_BASE_URL=http://127.0.0.1:11434/api
+VULNORA_LOCAL_MODEL=your-installed-model
 ```
 
 With Ollama running, the interactive CLI loads that model before showing the menu and keeps it resident throughout the session, including after fallback requests. **Exit** or **Ctrl+C** unloads it. `npm start -- test` checks the LLM connection. Force-killing the process bypasses cleanup; use `ollama stop your-installed-model` in that case.
@@ -92,18 +92,18 @@ export OPENROUTER_API_KEY=...     # or VENICE_API_KEY / ANTHROPIC_API_KEY / OPEN
 export XAI_API_KEY=...            # Grok Build (grok-build-0.1) — xAI's coding model, native tool-calling
 ```
 
-Slow local agents can be given more room with `T3MP3ST_LOCAL_AGENT_TIMEOUT_MS`
-for each CLI call, `T3MP3ST_TASK_TIMEOUT_MS` for mission tasks, and
-`T3MP3ST_GENERAL_TIMEOUT_MS` for planning requests. Values are milliseconds.
+Slow local agents can be given more room with `VULNORA_LOCAL_AGENT_TIMEOUT_MS`
+for each CLI call, `VULNORA_TASK_TIMEOUT_MS` for mission tasks, and
+`VULNORA_GENERAL_TIMEOUT_MS` for planning requests. Values are milliseconds.
 
 Or run it **fully offline** on your own model — no key, no cloud. Defaults to Ollama; point it at any OpenAI-compatible server (LM Studio, vLLM, llama.cpp):
 
 ```bash
 ollama serve && ollama pull llama3                          # or an OpenAI-compatible server
-export TEMPEST_LOCAL_BASE_URL=http://localhost:11434/api    # LM Studio: http://localhost:1234/v1
-export TEMPEST_LOCAL_MODEL=llama3
+export VULNORA_LOCAL_BASE_URL=http://localhost:11434/api    # LM Studio: http://localhost:1234/v1
+export VULNORA_LOCAL_MODEL=llama3
 npm run build                                               # only needed from a git clone
-npx tempest                                                 # → "Change default provider" → local
+npx vulnora                                                 # → "Change default provider" → local
 ```
 
 Tool-calling works on any local model (it's driven over text), so the Arsenal runs even on models without native function-calling.
@@ -118,7 +118,7 @@ Library/SDK usage, the full HTTP API, and MCP setup live in [docs/](docs/).
 
 ### Docker
 
-Run T3MP3ST API server in a container (localhost only, not exposed externally):
+Run VULNORA API server in a container (localhost only, not exposed externally):
 
 ```bash
 cp .env.example .env       # configure API keys
@@ -145,7 +145,7 @@ Full deployment guide: [docs/DOCKER.md](docs/DOCKER.md).
 
 ## Updating from upstream
 
-If you installed from a release tarball or copied the tree instead of tracking `git pull`, use the built-in updater to sync with [github.com/elder-plinius/T3MP3ST](https://github.com/elder-plinius/T3MP3ST) without losing local secrets or bench output. It shows a numbered plan, asks **y/N** before changing anything, then runs `npm install`.
+If you installed from a release tarball or copied the tree instead of tracking `git pull`, use the built-in updater to sync with [github.com/elder-plinius/VULNORA](https://github.com/elder-plinius/VULNORA) without losing local secrets or bench output. It shows a numbered plan, asks **y/N** before changing anything, then runs `npm install`.
 
 ```bash
 npm run update          # interactive sync from upstream main
@@ -193,7 +193,7 @@ Add your own patterns in `scripts/update-protected.local.txt` (optional local ov
 
 These live outside the project tree — an update never reads or writes them:
 
-- `%APPDATA%\t3mp3st-nodejs\Config\config.json` (or the macOS/Linux `conf` store path) — saved by `npm run setup`
+- `%APPDATA%\vulnora-nodejs\Config\config.json` (or the macOS/Linux `conf` store path) — saved by `npm run setup`
 - Local agent auth (`~/.codex`, `%LOCALAPPDATA%\hermes`, etc.)
 
 ## What ships today
@@ -205,14 +205,14 @@ The framework is an 8-operator kill chain, and this table won't blow smoke about
 | Re-derivable measurement (`verify-claims`) | ✅ Stable | every headline recomputes from committed artifacts |
 | Recon engine | ✅ Stable | drives nmap / DNS / HTTP / fingerprinting; every finding traces to real tool output |
 | Mission engine + CLI + Op Admiral | ✅ Stable | keyless through Codex or a configured local agent |
-| Arsenal, MCP server, HTTP API | ✅ Stable | 32 built-in tools by default; 55 with `T3MP3ST_FULL_ARSENAL` (+23 website/API adapters). Mobile, desktop, cloud-account, smart-contract, binary-analysis and post-exploitation tools are excluded. Both counts re-derive via `verify-claims`. `security_recon` over MCP |
+| Arsenal, MCP server, HTTP API | ✅ Stable | 32 built-in tools by default; 55 with `VULNORA_FULL_ARSENAL` (+23 website/API adapters). Mobile, desktop, cloud-account, smart-contract, binary-analysis and post-exploitation tools are excluded. Both counts re-derive via `verify-claims`. `security_recon` over MCP |
 | Egress-scope containment | ✅ Stable (on by default) | once a mission target is set, built-in networked tools refuse off-scope public hosts — not the target/subdomains, not loopback/private (`SCOPE DENIED`) — a tightened default, not a bare tool runner |
 | Coordinated-disclosure pipeline | ✅ Stable | OSV novelty + live PoC + refuter panel + CVSS; drafts only, a human sends |
-| White-box source analysis | ⚠️ Experimental | Python-only regex ingest; multi-model decomposition costs more tokens, not fewer |
-| DeFi (Damn Vulnerable DeFi) | ⚠️ Experimental | reproduces known exploit classes; not novel discovery |
-| Exploiter / Infiltrator / Exfiltrator / Ghost | ⚠️ Experimental | run the real tool-backed ReAct loop (same engine as recon); unproven as a coordinated swarm — single-agent is the benchmarked path, live swarm exploitation still unreliable |
-| Advanced modules (cloud, persistence, swarm, cognition) | 🚧 Planned | interface-only in `src/stubs/` |
-| Self-improvement loop | 🧪 Research | records lessons + proposals today; feeding them back into planning is roadmap |
+| White-box source analysis |  Experimental | Python-only regex ingest; multi-model decomposition costs more tokens, not fewer |
+| DeFi (Damn Vulnerable DeFi) |  Experimental | reproduces known exploit classes; not novel discovery |
+| Exploiter / Infiltrator / Exfiltrator / Ghost |  Experimental | run the real tool-backed ReAct loop (same engine as recon); unproven as a coordinated swarm — single-agent is the benchmarked path, live swarm exploitation still unreliable |
+| Advanced modules (cloud, persistence, swarm, cognition) |  Planned | interface-only in `src/stubs/` |
+| Self-improvement loop |  Research | records lessons + proposals today; feeding them back into planning is roadmap |
 
 Full feature-by-feature breakdown: [FEATURES.md](FEATURES.md).
 
@@ -222,19 +222,19 @@ Where the storm reaches today — and where it's headed. Same discipline as ever
 
 | Domain | What it covers | Status |
 |---|---|---|
-| 🕸️ **Web** | apps, APIs, auth flows, OWASP Top 10 | ✅ **Core** — XBEN 90.1% pass@1 |
-| 📂 **Code** | white-box source audits, SAST-style vuln hunting | ✅ **Proven (hunt result)** — held-out CVE-Zero: single-agent 8/10 exact file/line/CWE, 10/10 found (7 languages); the repo-ingest *engine* itself is still ⚠️ experimental |
-| 🚩 **CTF** | wargames, practice ranges, challenges | ✅ **Proven** — Cybench 23/40 hint-free |
-| 🔌 **Network / Infra** | recon, service/stack fingerprinting; lateral + privesc | ✅ recon (live nmap/DNS/HTTP engine) · ⚠️ lateral/privesc experimental |
-| 🤖 **Embedded / IoT / OT** | firmware, robotics, ICS/SCADA OSS | ✅ **CVE pipeline live** — coordinated-disclosure drafts held for vendors |
-| 📦 **Supply chain** | dependency audits, install-without-confirmation | ⚠️ **Real** — dedicated class; hit a CWE-829 on the held-out set |
-| 💰 **Blockchain** | smart contracts, DeFi, Solidity | ⚠️ **Reproduction only** — Damn Vulnerable DeFi, not novel discovery |
-| ☁️ **Cloud** | AWS/GCP/Azure misconfig, IAM, serverless | 🚧 **In development** |
-| 📱 **Mobile** | Android/iOS app security | 🚧 **In development** |
-| 🏢 **Identity / AD** | Kerberos, pass-the-hash, AD attacks | 🚧 **In development** |
-| 🔐 **Binary / RE** | overflows, ROP, exploit dev | 🚧 **In development** — needs specialized tooling |
+|  **Web** | apps, APIs, auth flows, OWASP Top 10 | ✅ **Core** — XBEN 90.1% pass@1 |
+|  **Code** | white-box source audits, SAST-style vuln hunting | ✅ **Proven (hunt result)** — held-out CVE-Zero: single-agent 8/10 exact file/line/CWE, 10/10 found (7 languages); the repo-ingest *engine* itself is still  experimental |
+|  **CTF** | wargames, practice ranges, challenges | ✅ **Proven** — Cybench 23/40 hint-free |
+|  **Network / Infra** | recon, service/stack fingerprinting; lateral + privesc | ✅ recon (live nmap/DNS/HTTP engine) ·  lateral/privesc experimental |
+|  **Embedded / IoT / OT** | firmware, robotics, ICS/SCADA OSS | ✅ **CVE pipeline live** — coordinated-disclosure drafts held for vendors |
+|  **Supply chain** | dependency audits, install-without-confirmation |  **Real** — dedicated class; hit a CWE-829 on the held-out set |
+|  **Blockchain** | smart contracts, DeFi, Solidity |  **Reproduction only** — Damn Vulnerable DeFi, not novel discovery |
+| ☁ **Cloud** | AWS/GCP/Azure misconfig, IAM, serverless |  **In development** |
+|  **Mobile** | Android/iOS app security |  **In development** |
+|  **Identity / AD** | Kerberos, pass-the-hash, AD attacks |  **In development** |
+|  **Binary / RE** | overflows, ROP, exploit dev |  **In development** — needs specialized tooling |
 
-The class/squad architecture means new domains *compose* rather than fork — each is a loadout (specialist classes + arsenal + target adapter + a benchmark). 🚧 domains ship dark until they have a number.
+The class/squad architecture means new domains *compose* rather than fork — each is a loadout (specialist classes + arsenal + target adapter + a benchmark).  domains ship dark until they have a number.
 
 ## Benchmarks
 
@@ -277,7 +277,7 @@ Deeper reading: [WALL_FORENSICS](docs/WALL_FORENSICS.md) (per-challenge misses),
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        T3MP3ST COMMAND                          │
+│                        VULNORA COMMAND                          │
 ├─────────────────────────────────────────────────────────────────┤
 │   MISSION CONTROL  ◄──  TARGET MODEL  ──►  ARSENAL (TOOLS)       │
 │                          ▲                                       │
@@ -328,6 +328,6 @@ AGPL-3.0. See [LICENSE](LICENSE).
 
 *Fortes fortuna iuvat* — fortune favors the bold.
 
-⊰•-•✧ LOVE PLINY ✧•-•⊱ 🌩️
+⊰•-•✧ LOVE PLINY ✧•-•⊱
 
 </div>

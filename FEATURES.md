@@ -1,4 +1,4 @@
-# T3MP3ST Feature Documentation
+# VULNORA Feature Documentation
 
 > Comprehensive feature list for the Tactical Execution Multi-agent Platform for Elite Security Testing
 
@@ -34,7 +34,7 @@
 
 ## 1. Core Architecture
 
-### TempestCommand Orchestrator
+### VulnoraCommand Orchestrator
 - [x] Central command class extending EventEmitter
 - [x] Lifecycle management (start, stop, pause, resume)
 - [x] Tick-based execution loop
@@ -45,13 +45,13 @@
 - [ ] State persistence and recovery after crash
 
 ### Factory Functions
-- [x] `createTempest()` - Standard operation
-- [x] `createTestTempest()` - Testing with mock LLM
-- [x] `createAutoTempest()` - Auto-configured with best available LLM
+- [x] `createVulnora()` - Standard operation
+- [x] `createTestVulnora()` - Testing with mock LLM
+- [x] `createAutoVulnora()` - Auto-configured with best available LLM
 - [x] `createStealthOperation()` - Silent OPSEC preset
 - [x] `createAggressiveOperation()` - Loud OPSEC preset
-- [ ] `createDistributedTempest()` - Multi-node operation
-- [ ] `createCloudTempest()` - Cloud-native deployment
+- [ ] `createDistributedVulnora()` - Multi-node operation
+- [ ] `createCloudVulnora()` - Cloud-native deployment
 
 ### Event System
 - [x] `command:started` / `command:stopped`
@@ -113,11 +113,11 @@
 |-----------|-------|---------------|--------|
 | **RECON** | Reconnaissance | TA0043 | [x] Implemented |
 | **SCANNER** | Discovery | TA0007 | [x] Implemented |
-| **EXPLOITER** | Initial Access | TA0001, TA0002 | ⚠️ Experimental¹ |
-| **INFILTRATOR** | Lateral Movement | TA0008, TA0004 | ⚠️ Experimental¹ |
-| **EXFILTRATOR** | Exfiltration | TA0009, TA0010 | ⚠️ Experimental¹ |
-| **GHOST** | Persistence | TA0003, TA0005 | ⚠️ Experimental¹ |
-| **COORDINATOR** | C2 | TA0011 | ⚠️ Experimental¹ |
+| **EXPLOITER** | Initial Access | TA0001, TA0002 |  Experimental¹ |
+| **INFILTRATOR** | Lateral Movement | TA0008, TA0004 |  Experimental¹ |
+| **EXFILTRATOR** | Exfiltration | TA0009, TA0010 |  Experimental¹ |
+| **GHOST** | Persistence | TA0003, TA0005 |  Experimental¹ |
+| **COORDINATOR** | C2 | TA0011 |  Experimental¹ |
 | **ANALYST** | Reporting | - | [x] Implemented |
 
 ¹ **Experimental** = runs the SAME real, tool-backed ReAct loop as RECON/SCANNER (real tools, not stubs), but end-to-end swarm exploitation is **unbenchmarked and unproven** — 0 executed exploits in full-chain runs, and the headline benchmark numbers came from a single agent, not the coordinated 8-operator cell. See the README status table + WHITEPAPER for the honest limits.
@@ -271,11 +271,11 @@
 
 ### Whitelisted CLI Tools (via API)
 > Availability tiers: **default** = wired without extra flags; **opt-in** = catalog-gated
-> behind `T3MP3ST_FULL_ARSENAL`; **approval-gated** = also requires per-call approval
+> behind `VULNORA_FULL_ARSENAL`; **approval-gated** = also requires per-call approval
 > (real auth/attack traffic). See the `35 default / 83 opt-in` split in the README.
 Real, re-derivable catalog (`verify-claims`): **35 built-in (default) + 48 opt-in adapters = 83**.
 - [x] **default built-ins** (callable with no flag) — `nmap_scan, nuclei_scan, ffuf_fuzz, curl_request, port_scan, subdomain_enum, http_request, xss_scan, sqli_scan, dns_lookup`, … (35)
-- [x] **opt-in adapters** (`T3MP3ST_FULL_ARSENAL`) — nuclei, subfinder, httpx, naabu, katana, ffuf, gobuster, feroxbuster, nikto, dalfox, sqlmap · semgrep, gitleaks, trufflehog, trivy, grype, osv-scanner, checkov · slither, mythril, echidna, foundry, solhint · openssl, john, hashcat, radare2, apktool, jadx, exiftool, binwalk, yara (48)
+- [x] **opt-in adapters** (`VULNORA_FULL_ARSENAL`) — nuclei, subfinder, httpx, naabu, katana, ffuf, gobuster, feroxbuster, nikto, dalfox, sqlmap · semgrep, gitleaks, trufflehog, trivy, grype, osv-scanner, checkov · slither, mythril, echidna, foundry, solhint · openssl, john, hashcat, radare2, apktool, jadx, exiftool, binwalk, yara (48)
 - [x] **approval-gated post-ex drivers** (opt-in **+** human approval **+** local CLI installed) — **metasploit** (`msfconsole`, riskTier `dangerous`), **hydra** (`credential`); bloodhound is import-only (graph pipeline)
 - [ ] burp suite integration _(genuinely not integrated)_
 
@@ -553,15 +553,15 @@ _The per-tool checklists below document the **retired** design (historical only)
 ## 12. CLI Interface
 
 ### Commands
-- [x] `t3mp3st` - Interactive mode (default)
-- [x] `t3mp3st setup` - Configuration wizard
-- [x] `t3mp3st status` - Show configuration
-- [x] `t3mp3st test` - Test LLM connection
-- [x] `t3mp3st models` - List available models
-- [ ] `t3mp3st run <mission>` - Run mission file
-- [ ] `t3mp3st report <output>` - Generate report
-- [ ] `t3mp3st import <file>` - Import targets
-- [ ] `t3mp3st export <file>` - Export findings
+- [x] `vulnora` - Interactive mode (default)
+- [x] `vulnora setup` - Configuration wizard
+- [x] `vulnora status` - Show configuration
+- [x] `vulnora test` - Test LLM connection
+- [x] `vulnora models` - List available models
+- [ ] `vulnora run <mission>` - Run mission file
+- [ ] `vulnora report <output>` - Generate report
+- [ ] `vulnora import <file>` - Import targets
+- [ ] `vulnora export <file>` - Export findings
 
 ### Interactive Mode Features
 - [x] Start new operation (4 presets)

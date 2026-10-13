@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Core Type Definitions
+ * VULNORA Core Type Definitions
  */
 
 // =============================================================================
@@ -491,7 +491,7 @@ export interface ToolResult {
 // CONFIG TYPES
 // =============================================================================
 
-export interface TempestConfig {
+export interface VulnoraConfig {
   name: string;
   llm: LLMConfig;
   opsec?: Partial<OpsecConfig>;

@@ -1,7 +1,7 @@
 /**
- * T3MP3ST API Server v2.0
+ * VULNORA API Server v2.0
  *
- * Production-grade API server powering t3mp3st offensive-security operations with:
+ * Production-grade API server powering vulnora offensive-security operations with:
  * - Comprehensive payload databases (200+ payloads)
  * - Real vulnerability validation
  * - Secret pattern detection
@@ -20,7 +20,7 @@ import { createHash, randomUUID } from 'crypto';
 import { config } from './config/index.js';
 import { redactString, redactLedgerText, redactSecrets } from './redact.js';
 import { LLMBackbone } from './llm/index.js';
-import { TempestCommand } from './index.js';
+import { VulnoraCommand } from './index.js';
 import { OpGeneral } from './general/index.js';
 import type { Directive } from './general/index.js';
 import { detectLocalAgents, pingLocalAgent, runLocalAgent, syncLocalAgentSelection } from './agent/local-agents.js';
@@ -134,18 +134,18 @@ const PAYLOAD_DB = {
 // SERVER CONFIGURATION
 // =============================================================================
 
-const PORT = process.env.T3MP3ST_PORT || 3333;
+const PORT = process.env.VULNORA_PORT || 3333;
 // SECURITY: Default bind is loopback-only. This is a single-operator localhost
 // tool, so the process listens on 127.0.0.1 and is unreachable from the network
-// unless the operator explicitly opts in with T3MP3ST_HOST=0.0.0.0. The threat
+// unless the operator explicitly opts in with VULNORA_HOST=0.0.0.0. The threat
 // model is therefore a malicious webpage in the operator's own browser driving
 // this local command-executing API (CSRF / DNS-rebinding), NOT remote attackers.
 // The CORS lock + origin guard below defend that vector; if this is ever exposed
 // beyond localhost, add real Bearer-token auth as the upgrade path.
 // DOCKER: Inside containers, bind to 0.0.0.0 (env var can still override).
-const HOST = process.env.T3MP3ST_HOST || (process.env.DOCKER === 'true' ? '0.0.0.0' : '127.0.0.1');
+const HOST = process.env.VULNORA_HOST || (process.env.DOCKER === 'true' ? '0.0.0.0' : '127.0.0.1');
 // B-02: only enforce the Host-header allow-list when bound to loopback (the
-// default). If the operator EXPLICITLY exposes the server (T3MP3ST_HOST set to a
+// default). If the operator EXPLICITLY exposes the server (VULNORA_HOST set to a
 // non-loopback address) they've opted into network access behind their own front,
 // so we don't second-guess the Host there.
 const HOST_IS_LOOPBACK = /^(127\.|localhost$|::1$|\[::1\]$)/i.test(HOST.trim());
@@ -290,40 +290,40 @@ async function initLLM(): Promise<LLMBackbone | null> {
   try {
     const llmConfig = config.getLLMConfig();
     if (providerNeedsApiKey(llmConfig.provider) && !llmConfig.apiKey) {
-      console.warn('[T3MP3ST] No API key configured - LLM features disabled');
+      console.warn('[VULNORA] No API key configured - LLM features disabled');
       return null;
     }
     const backbone = new LLMBackbone(llmConfig);
-    console.log(`[T3MP3ST] LLM initialized: ${llmConfig.provider}/${llmConfig.model}`);
+    console.log(`[VULNORA] LLM initialized: ${llmConfig.provider}/${llmConfig.model}`);
     return backbone;
   } catch (error) {
-    console.error('[T3MP3ST] Failed to initialize LLM:', error);
+    console.error('[VULNORA] Failed to initialize LLM:', error);
     return null;
   }
 }
 
 // =============================================================================
-// TEMPEST COMMAND SINGLETON
+// VULNORA COMMAND SINGLETON
 // =============================================================================
 
-/** Active TempestCommand instance (created on first mission start) */
-let tempestCommand: TempestCommand | null = null;
+/** Active VulnoraCommand instance (created on first mission start) */
+let vulnoraCommand: VulnoraCommand | null = null;
 
-function getTempestCommand(): TempestCommand | null {
-  return tempestCommand;
+function getVulnoraCommand(): VulnoraCommand | null {
+  return vulnoraCommand;
 }
 
-function createTempestCommandInstance(missionName: string, llm: LLMConfig): TempestCommand {
+function createVulnoraCommandInstance(missionName: string, llm: LLMConfig): VulnoraCommand {
   // Tear down previous instance
-  if (tempestCommand) {
-    tempestCommand.stop();
+  if (vulnoraCommand) {
+    vulnoraCommand.stop();
   }
 
-  const command = new TempestCommand({
+  const command = new VulnoraCommand({
     name: missionName,
     llm,
   });
-  tempestCommand = command;
+  vulnoraCommand = command;
 
   // Wire all events to SSE broadcast
   command.connectBroadcast(broadcastEvent);
@@ -334,7 +334,7 @@ function createTempestCommandInstance(missionName: string, llm: LLMConfig): Temp
     try {
       upsertMissionFindingToLedger(finding as any, command.mission.getActiveMission()?.id);
     } catch (err) {
-      console.error('[T3MP3ST] failed to persist mission finding to ledger:', err instanceof Error ? err.message : err);
+      console.error('[VULNORA] failed to persist mission finding to ledger:', err instanceof Error ? err.message : err);
     }
   });
 
@@ -517,7 +517,7 @@ function rejectDuplicateLedgerId<T>(res: Response, ledger: Map<string, T>, id: u
   res.status(409).json({
     error: `${label} already exists`,
     id: id.trim(),
-    next: `Use PATCH ${collectionPath}/${id.trim()} to update an existing record, or omit id to let T3MP3ST mint one.`,
+    next: `Use PATCH ${collectionPath}/${id.trim()} to update an existing record, or omit id to let VULNORA mint one.`,
   });
   return true;
 }
@@ -527,12 +527,12 @@ function clientLedgerId(value: unknown, prefix: string): string {
 }
 
 // =============================================================================
-// DUAL-MODE CONTRACTS - STANDALONE + T3MP3ST ORGAN
+// DUAL-MODE CONTRACTS - STANDALONE + VULNORA ORGAN
 // =============================================================================
 
-type TempestMode = 'standalone' | 't3mp3st';
+type VulnoraMode = 'standalone' | 'vulnora';
 type DraftStatus = 'draft' | 'queued' | 'launched' | 'archived';
-type DraftSource = 'human' | 'agent' | 't3mp3st';
+type DraftSource = 'human' | 'agent' | 'vulnora';
 type MissionFamily = 'web_api' | 'ai_red_team' | 'cloud_infra' | 'smart_contract' | 'code_supply_chain' | 'crypto_secrets' | 'reverse_binary' | 'agent_warfare' | 'social_osint' | 'reporting_remediation';
 type OperationMode = 'wizard' | 'agent_harness' | 'expert_console' | 'range' | 'review_only';
 type GuardAction = 'command_execution' | 'network_request' | 'mission_execution' | 'autonomous_execution' | 'model_call';
@@ -563,7 +563,7 @@ interface MissionDraft {
   constraints: string;
   urgency: 'low' | 'normal' | 'high' | 'critical';
   opsecPreference: 'overt' | 'normal' | 'covert' | 'ghost';
-  mode: TempestMode;
+  mode: VulnoraMode;
   source: DraftSource;
   status: DraftStatus;
   createdAt: string;
@@ -886,13 +886,13 @@ const ROUTE_SCORECARDS: Record<string, Record<string, number | string>> = {
   },
 };
 
-function currentMode(): TempestMode {
-  return process.env.T3MP3ST_STATE_DIR || process.env.T3MP3ST_MODE === 't3mp3st' ? 't3mp3st' : 'standalone';
+function currentMode(): VulnoraMode {
+  return process.env.VULNORA_STATE_DIR || process.env.VULNORA_MODE === 'vulnora' ? 'vulnora' : 'standalone';
 }
 
 function stateRoot(): string {
-  return process.env.T3MP3ST_STATE_DIR ||
-    (process.env.T3MP3ST_STATE_DIR ? `${process.env.T3MP3ST_STATE_DIR}/organs/t3mp3st` : 'memory');
+  return process.env.VULNORA_STATE_DIR ||
+    (process.env.VULNORA_STATE_DIR ? `${process.env.VULNORA_STATE_DIR}/organs/vulnora` : 'memory');
 }
 
 function stateFilePath(): string | null {
@@ -1061,7 +1061,7 @@ function replaceMapContents<T extends { id: string }>(map: Map<string, T>, value
 
 function buildStateSnapshot(): Record<string, unknown> {
   return {
-    schema_version: 't3mp3st_state/v1',
+    schema_version: 'vulnora_state/v1',
     savedAt: nowIso(),
     mode: currentMode(),
     missionDrafts: [...missionDrafts.values()],
@@ -1104,7 +1104,7 @@ function schedulePersist(reason: string): void {
     if (!persistPending) return;
     persistPending = false;
     void persistState(persistReason).catch(error => {
-      console.warn(`[T3MP3ST] State persistence failed: ${error.message || error}`);
+      console.warn(`[VULNORA] State persistence failed: ${error.message || error}`);
     });
   }, PERSIST_DEBOUNCE_MS);
 }
@@ -1145,10 +1145,10 @@ async function loadPersistedState(): Promise<void> {
     replaceMapContents(watchCycleLedger, state.watchCycleLedger);
     replaceMapContents(memoryCapsule, state.memoryCapsule);
     replaceMapContents(memoryProposals, state.memoryProposals);
-    console.log(`[T3MP3ST] State restored from ${file}`);
+    console.log(`[VULNORA] State restored from ${file}`);
   } catch (error: any) {
     if (error?.code !== 'ENOENT') {
-      console.warn(`[T3MP3ST] State restore skipped: ${error.message || error}`);
+      console.warn(`[VULNORA] State restore skipped: ${error.message || error}`);
     }
   }
 }
@@ -1261,7 +1261,7 @@ function createApprovalRequest(action: GuardAction, target: string, reason: stri
     status: 'pending',
     wildcardOptIn: body.allowWildcard === true && targetUsesWildcard(target),
     operationId: typeof operationDraft?.operation_id === 'string' ? operationDraft.operation_id : undefined,
-    requestedBy: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'system',
+    requestedBy: ['human', 'agent', 'vulnora'].includes(String(body.source)) ? body.source as DraftSource : 'system',
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -1365,7 +1365,7 @@ function buildRoutePreview(draft: MissionDraft): RoutePreview {
     : ['s3r4ph1m_scope_review'];
   const warnings = draft.scope.length ? [] : ['No explicit target scope supplied; defaulting to local-lab draft mode.'];
   const opsecLevel = draft.opsecPreference === 'overt' ? 'loud' : draft.opsecPreference === 'normal' ? 'covert' : 'silent';
-  const missionName = draft.title || `T3MP3ST ${family.replace(/_/g, ' ')}`;
+  const missionName = draft.title || `VULNORA ${family.replace(/_/g, ' ')}`;
 
   return {
     draftId: draft.id,
@@ -1381,7 +1381,7 @@ function buildRoutePreview(draft: MissionDraft): RoutePreview {
       warnings,
     },
     operationDraft: {
-      schema_version: 't3mp3st_operation/v1',
+      schema_version: 'vulnora_operation/v1',
       operation_id: `op-${draft.id.replace(/^draft_/, '')}`,
       mission_id: draft.id,
       family,
@@ -1400,7 +1400,7 @@ function buildRoutePreview(draft: MissionDraft): RoutePreview {
       lanes: familyOperators(family).map((operator, index) => ({
         id: `lane-${index + 1}`,
         operator,
-        engine: operator === 'analyst' ? 'codex' : operator === 'ghost' ? 'hermes' : 't3mp3st',
+        engine: operator === 'analyst' ? 'codex' : operator === 'ghost' ? 'hermes' : 'vulnora',
         purpose: `${operator} lane for ${family.replace(/_/g, ' ')}`,
         allowed_tools: laneToolGrants(family, operator),
       })),
@@ -1492,7 +1492,7 @@ function buildMissionBundle(params: { draft?: MissionDraft; operationDraft?: Rec
   const pressurePaths = buildPressurePaths({ missionId, operationId, family, operationDraft, reproPacks });
 
   return redactSecrets({
-    schema_version: 't3mp3st_mission_bundle/v1',
+    schema_version: 'vulnora_mission_bundle/v1',
     generatedAt: nowIso(),
     family,
     missionId: missionId || null,
@@ -1658,7 +1658,7 @@ function buildMissionGate(operationDraft: Record<string, unknown>): Record<strin
   const readinessHold = Boolean(!hypotheses.length || !findings.length || openWorkOrders.length || findingsWithoutRetest.length || findingsWithoutStrongEvidence.length || unresolvedRetests.length);
   const status = blockCount ? 'blocked' : score >= 80 && freshMissionApprovals.length && !readinessHold ? 'ready' : 'hold';
   return {
-    schema_version: 't3mp3st_mission_gate/v1',
+    schema_version: 'vulnora_mission_gate/v1',
     generatedAt: nowIso(),
     family,
     missionId: missionId || null,
@@ -1773,7 +1773,7 @@ function latestMissionContext(): Record<string, unknown> {
   const latest = records[0];
   if (!latest) {
     return {
-      schema_version: 't3mp3st_mission_context/v1',
+      schema_version: 'vulnora_mission_context/v1',
       missionId: null,
       operationId: null,
       family: null,
@@ -1803,7 +1803,7 @@ function latestMissionContext(): Record<string, unknown> {
   const laneSummary = missionLaneSummary({ hypotheses, workOrders, findings, retests });
 
   return redactSecrets({
-    schema_version: 't3mp3st_mission_context/v1',
+    schema_version: 'vulnora_mission_context/v1',
     missionId: missionId || null,
     operationId: operationId || null,
     family: latest.family || laneSummary[0]?.family || null,
@@ -2459,7 +2459,7 @@ async function buildSelfHealReport(params: Record<string, unknown>): Promise<Rec
   const health = blocks ? 'blocked' : actionCount ? 'repair' : watchCount ? 'watch' : 'ok';
 
   return redactSecrets({
-    schema_version: 't3mp3st_self_heal/v1',
+    schema_version: 'vulnora_self_heal/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: scope.missionId || null,
@@ -2585,7 +2585,7 @@ function buildEvidenceGraph(params: Record<string, unknown>): Record<string, unk
   const laneSummary = missionLaneSummary({ hypotheses, workOrders, findings, retests });
   const evidenceProvenance = summarizeEvidenceProvenance(evidence);
   return redactSecrets({
-    schema_version: 't3mp3st_evidence_graph/v1',
+    schema_version: 'vulnora_evidence_graph/v1',
     generatedAt: nowIso(),
     scope: { missionId: missionId || null, operationId: operationId || null, family: family || null },
     summary: {
@@ -2766,7 +2766,7 @@ function buildReproPacks(params: Record<string, unknown>): Record<string, any> {
     }, {}),
   };
   return redactSecrets({
-    schema_version: 't3mp3st_repro_packs/v1',
+    schema_version: 'vulnora_repro_packs/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: missionId || null,
@@ -3150,7 +3150,7 @@ function buildPressurePaths(params: Record<string, unknown>): Record<string, any
     }, {}),
   };
   return redactSecrets({
-    schema_version: 't3mp3st_pressure_paths/v1',
+    schema_version: 'vulnora_pressure_paths/v1',
     generatedAt: nowIso(),
     scope: {
       missionId: missionId || null,
@@ -3190,7 +3190,7 @@ function buildPressureCanary(params: Record<string, unknown>): Record<string, an
 
   if (!path) {
     return redactSecrets({
-      schema_version: 't3mp3st_pressure_canary/v1',
+      schema_version: 'vulnora_pressure_canary/v1',
       generatedAt: now,
       status: 'no_path',
       canary: null,
@@ -3268,7 +3268,7 @@ function buildPressureCanary(params: Record<string, unknown>): Record<string, an
       title: `Pressure canary (SIMULATION): ${finding.title}`,
       summary: `Local synthetic canary rehearsal — NO live target action. ${artifact.observedSignal} Score ${artifact.offensiveScore}/100; posture ${artifact.posture}.`,
       source: 'system',
-      uri: `tempest://pressure-canary/${artifact.id}`,
+      uri: `vulnora://pressure-canary/${artifact.id}`,
       // A local synthetic rehearsal is CONTEXT, never 'replayable' proof against the real target.
       // Stamping it 'replayable' let a finding self-promote on fabricated evidence (honesty violation).
       provenanceStrength: 'context',
@@ -3314,7 +3314,7 @@ function buildPressureCanary(params: Record<string, unknown>): Record<string, an
   });
 
   return redactSecrets({
-    schema_version: 't3mp3st_pressure_canary/v1',
+    schema_version: 'vulnora_pressure_canary/v1',
     generatedAt: now,
     status,
     path: {
@@ -3355,7 +3355,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
 
   if (!path) {
     return redactSecrets({
-      schema_version: 't3mp3st_pressure_duel/v1',
+      schema_version: 'vulnora_pressure_duel/v1',
       generatedAt: now,
       status: 'no_path',
       survivabilityScore: 0,
@@ -3378,7 +3378,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
     : null;
   const canaryEvidence = canaryParam?.evidence?.id
     ? evidenceLedger.get(String(canaryParam.evidence.id))
-    : findingEvidence.find(entry => entry.uri?.startsWith('tempest://pressure-canary/') || entry.title.startsWith('Pressure canary:'));
+    : findingEvidence.find(entry => entry.uri?.startsWith('vulnora://pressure-canary/') || entry.title.startsWith('Pressure canary:'));
   const canaryRetest = canaryParam?.retest?.id
     ? retestLedger.get(String(canaryParam.retest.id))
     : findingRetests.find(retest => /Pressure-path local canary/i.test(retest.method || ''));
@@ -3502,7 +3502,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
       title: `Pressure duel: ${finding.title}`,
       summary: `Skeptic duel ${status}; survivability ${survivabilityScore}/100. Strongest falsifier: ${strongestFalsifier}`,
       source: 'system',
-      uri: `tempest://pressure-duel/${duel.id}`,
+      uri: `vulnora://pressure-duel/${duel.id}`,
       provenanceStrength: canaryEvidence ? 'replayable' : 'context',
       resourceIds: finding.resourceIds,
       createdAt: now,
@@ -3596,7 +3596,7 @@ function buildPressureDuel(params: Record<string, unknown>): Record<string, any>
   });
 
   return redactSecrets({
-    schema_version: 't3mp3st_pressure_duel/v1',
+    schema_version: 'vulnora_pressure_duel/v1',
     generatedAt: now,
     status,
     survivabilityScore,
@@ -3638,7 +3638,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
 
   if (!path) {
     return redactSecrets({
-      schema_version: 't3mp3st_pressure_mutations/v1',
+      schema_version: 'vulnora_pressure_mutations/v1',
       generatedAt: now,
       status: 'no_path',
       summary: { total: 0, queued: 0, maxFangScore: 0 },
@@ -3658,7 +3658,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
     : finding?.evidenceIds
       .map(id => evidenceLedger.get(id))
       .filter(Boolean)
-      .find(entry => entry?.uri?.startsWith('tempest://pressure-duel/'));
+      .find(entry => entry?.uri?.startsWith('vulnora://pressure-duel/'));
   const survivedDuel = duelParam?.status === 'survived' || Boolean(duelEvidence);
   const family = normalizeMissionFamily(path.family, finding?.family || 'web_api');
   const target = normalizeTargetValue(path.target || finding?.target || operationDraft.target);
@@ -3765,7 +3765,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
       title: `Mutation gauntlet: ${finding.title}`,
       summary: `Generated ${mutations.length} local-only pressure mutations for ${path.id || finding.id}; top fang ${mutations[0]?.fangScore || 0}/100.`,
       source: 'system',
-      uri: `tempest://pressure-mutations/${String(path.id || finding.id).replace(/[^a-zA-Z0-9_-]/g, '_')}/${Date.now()}`,
+      uri: `vulnora://pressure-mutations/${String(path.id || finding.id).replace(/[^a-zA-Z0-9_-]/g, '_')}/${Date.now()}`,
       provenanceStrength: survivedDuel ? 'replayable' : 'context',
       resourceIds: finding.resourceIds,
       createdAt: now,
@@ -3858,7 +3858,7 @@ function buildPressureMutations(params: Record<string, unknown>): Record<string,
   });
 
   return redactSecrets({
-    schema_version: 't3mp3st_pressure_mutations/v1',
+    schema_version: 'vulnora_pressure_mutations/v1',
     generatedAt: now,
     status: survivedDuel ? 'queued' : 'needs_duel',
     path: {
@@ -3902,7 +3902,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
 
   if (!path) {
     return redactSecrets({
-      schema_version: 't3mp3st_pressure_chains/v1',
+      schema_version: 'vulnora_pressure_chains/v1',
       generatedAt: now,
       status: 'no_path',
       summary: { total: 0, queued: 0, maxChainScore: 0, workOrders: 0 },
@@ -3923,7 +3923,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
 
   if (!mutations.length) {
     return redactSecrets({
-      schema_version: 't3mp3st_pressure_chains/v1',
+      schema_version: 'vulnora_pressure_chains/v1',
       generatedAt: now,
       status: 'no_mutations',
       path: {
@@ -4080,7 +4080,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
       title: `Fang chain composer: ${finding.title}`,
       summary: `Composed ${chains.length} local-only fang chains from pressure mutations; top chain ${chains[0]?.chainScore || 0}/100.`,
       source: 'system',
-      uri: `tempest://pressure-chains/${String(path.id || finding.id).replace(/[^a-zA-Z0-9_-]/g, '_')}/${Date.now()}`,
+      uri: `vulnora://pressure-chains/${String(path.id || finding.id).replace(/[^a-zA-Z0-9_-]/g, '_')}/${Date.now()}`,
       provenanceStrength: mutationStatus === 'queued' ? 'replayable' : 'context',
       resourceIds: finding.resourceIds,
       createdAt: now,
@@ -4172,7 +4172,7 @@ function buildPressureChains(params: Record<string, unknown>): Record<string, an
   });
 
   return redactSecrets({
-    schema_version: 't3mp3st_pressure_chains/v1',
+    schema_version: 'vulnora_pressure_chains/v1',
     generatedAt: now,
     status: summary.queued ? 'queued' : 'hold',
     path: {
@@ -4364,14 +4364,14 @@ function buildLearningReview(input: Record<string, unknown>): { proposals: Memor
 }
 
 function healthPayload(): Record<string, unknown> {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   const llmConfig = config.getLLMConfig();
   const activeMission = cmd?.mission.getActiveMission();
   return {
     ok: true,
     status: 'operational',
     mode: currentMode(),
-    organ: 't3mp3st',
+    organ: 'vulnora',
     version: '0.2.1',
     apiVersion: 'v1',
     llm: {
@@ -4583,7 +4583,7 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
   const installedCommandReady = commandReadyTools.filter(tool => tool.available).length;
   const missingCommandReady = commandReadyTools.filter(tool => !tool.available).map(tool => tool.id);
   return {
-    schema_version: 't3mp3st_arsenal_status/v1',
+    schema_version: 'vulnora_arsenal_status/v1',
     family: normalizedFamily || 'all',
     summary: {
       ...summarizeToolCatalog(catalog),
@@ -4603,7 +4603,7 @@ async function buildArsenalStatus(family?: string): Promise<Record<string, unkno
       catalogOnly: 'Credential, post-exploitation, C2, and broad exploitation platforms stay catalog-only until narrow adapters and gates exist.',
       evidenceFlow: 'Tool output should become evidence, then findings, then retests, then explicit memory proposals.',
     },
-    orchestration: getTempestCommand()?.getStatus().orchestration || {
+    orchestration: getVulnoraCommand()?.getStatus().orchestration || {
       metrics: null,
       budgets: {},
       conflicts: [],
@@ -4666,7 +4666,7 @@ function buildArsenalPlan(params: Record<string, unknown>): Record<string, unkno
       };
     });
   return {
-    schema_version: 't3mp3st_arsenal_plan/v1',
+    schema_version: 'vulnora_arsenal_plan/v1',
     family,
     target,
     objective: typeof params.objective === 'string' ? params.objective : 'Build a scoped, evidence-first tool plan.',
@@ -4715,7 +4715,7 @@ function buildArsenalActivationPlan(): Record<string, unknown> {
     }
   }
   return {
-    schema_version: 't3mp3st_arsenal_activation/v1',
+    schema_version: 'vulnora_arsenal_activation/v1',
     summary: {
       ...summarizeToolCatalog(),
       frontierMilestone: FRONTIER_ARSENAL_MILESTONE,
@@ -4738,7 +4738,7 @@ function emitContractEvent(type: string, payload: Record<string, unknown>): void
     ...payload,
   });
   void appendStateEvent(type, payload).catch(error => {
-    console.warn(`[T3MP3ST] Event persistence failed: ${error.message || error}`);
+    console.warn(`[VULNORA] Event persistence failed: ${error.message || error}`);
   });
   schedulePersist(type);
 }
@@ -4843,7 +4843,7 @@ app.get('/api/arsenal/catalog', (req: Request, res: Response) => {
     .filter(adapter => !category || adapter.category === category)
     .filter(adapter => !execution || adapter.execution === execution);
   res.json({
-    schema_version: 't3mp3st_arsenal_catalog/v1',
+    schema_version: 'vulnora_arsenal_catalog/v1',
     family: family || 'all',
     summary: summarizeToolCatalog(adapters),
     adapters,
@@ -4855,7 +4855,7 @@ app.get('/api/arsenal/catalog', (req: Request, res: Response) => {
 // defanged, transferable taxonomy the ai_red_team specialist (garak/promptfoo) reasons from.
 app.get('/api/ai-redteam/playbook', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 't3mp3st_ai_redteam_playbook/v1',
+    schema_version: 'vulnora_ai_redteam_playbook/v1',
     source: 'L1B3RT4S + P4RS3LT0NGV3 (public corpus) — defanged methodology, not payloads',
     doc: 'docs/AI_REDTEAM_TECHNIQUES.md',
     count: AI_REDTEAM_PLAYBOOK.length,
@@ -4881,17 +4881,17 @@ app.get('/api/arsenal/activation', (_req: Request, res: Response) => {
 // Capability-approval gate state (TOOL-level, distinct from the action-level /api/approvals
 // receipts): the tools approved this session + the full audit trail of gated decisions. Reads the
 // live mission's ApprovalController when one is running, else the headless pre-authorization
-// allowlist (T3MP3ST_APPROVED_TOOLS). Live decisions also stream over SSE as `arsenal.approval`.
+// allowlist (VULNORA_APPROVED_TOOLS). Live decisions also stream over SSE as `arsenal.approval`.
 app.get('/api/arsenal/approvals', (_req: Request, res: Response) => {
-  const ctrl = tempestCommand?.approval ?? null;
-  const preAuthorized = (process.env.T3MP3ST_APPROVED_TOOLS ?? '')
+  const ctrl = vulnoraCommand?.approval ?? null;
+  const preAuthorized = (process.env.VULNORA_APPROVED_TOOLS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   // redactSecrets: the audit's action strings can carry a credential a tool was invoked with — scrub
   // it before serving (this REST path bypasses the SSE emitContractEvent redaction otherwise).
   res.json(redactSecrets({
-    schema_version: 't3mp3st.arsenal_approvals/v1',
+    schema_version: 'vulnora.arsenal_approvals/v1',
     active: Boolean(ctrl),
     gatedTiers: ['intrusive', 'credential', 'dangerous'],
     spicyTiers: ['credential', 'dangerous'],
@@ -4900,7 +4900,7 @@ app.get('/api/arsenal/approvals', (_req: Request, res: Response) => {
     audit: ctrl ? ctrl.getAudit() : [],
     note: ctrl
       ? 'live approval state for the active mission'
-      : 'no active mission — showing the pre-authorization allowlist (T3MP3ST_APPROVED_TOOLS)',
+      : 'no active mission — showing the pre-authorization allowlist (VULNORA_APPROVED_TOOLS)',
   }));
 });
 
@@ -5090,7 +5090,7 @@ app.get('/api/operator-runbooks/:family', (req: Request, res: Response) => {
 app.get('/api/forefront-radar', (req: Request, res: Response) => {
   const family = typeof req.query.family === 'string' ? req.query.family : '';
   res.json({
-    schema_version: 't3mp3st_forefront_radar/v1',
+    schema_version: 'vulnora_forefront_radar/v1',
     lanes: forefrontPressureForFamily(family),
     mandate: {
       purpose: 'show what is possible early in controlled arenas, then convert offensive insight into defensive artifacts',
@@ -5414,7 +5414,7 @@ function handleHypothesisDecompose(req: Request, res: Response): void {
   const existing = [...workOrderLedger.values()].filter(order => order.hypothesisId === hypothesis.id);
   emitContractEvent('hypothesis.decomposed', { hypothesisId: hypothesis.id, created: orders.length, total: existing.length });
   res.status(201).json({
-    schema_version: 't3mp3st_work_order_decomposition/v1',
+    schema_version: 'vulnora_work_order_decomposition/v1',
     hypothesis,
     created: orders,
     workOrders: existing.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -5527,7 +5527,7 @@ app.get('/api/watch-loop/status', (req: Request, res: Response) => {
   const cycles = latestWatchCycles(scope.missionId, scope.operationId, scope.family).slice(0, 10);
   const signals = cycles[0]?.signals || buildWatchSignals(scope);
   res.json({
-    schema_version: 't3mp3st_watch_loop_status/v1',
+    schema_version: 'vulnora_watch_loop_status/v1',
     scope: {
       missionId: scope.missionId || null,
       operationId: scope.operationId || null,
@@ -5550,7 +5550,7 @@ app.get('/api/watch-loop/status', (req: Request, res: Response) => {
 app.post('/api/watch-loop/run', (req: Request, res: Response) => {
   const cycle = runWatchLoop(req.body as Record<string, unknown>);
   res.status(201).json({
-    schema_version: 't3mp3st_watch_loop_cycle/v1',
+    schema_version: 'vulnora_watch_loop_cycle/v1',
     ...cycle,
   });
 });
@@ -5750,14 +5750,14 @@ app.post('/api/mission-drafts', (req: Request, res: Response) => {
   const body = req.body as Partial<MissionDraft> & Record<string, unknown>;
   const draft: MissionDraft = {
     id: typeof body.id === 'string' ? body.id : newId('draft'),
-    title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled T3MP3ST Mission',
+    title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'Untitled VULNORA Mission',
     objective: typeof body.objective === 'string' && body.objective.trim() ? body.objective.trim() : 'Draft an authorized security mission.',
     scope: normalizeStringList(body.scope),
     constraints: typeof body.constraints === 'string' ? body.constraints : '',
     urgency: ['low', 'normal', 'high', 'critical'].includes(String(body.urgency)) ? body.urgency as MissionDraft['urgency'] : 'normal',
     opsecPreference: ['overt', 'normal', 'covert', 'ghost'].includes(String(body.opsecPreference)) ? body.opsecPreference as MissionDraft['opsecPreference'] : 'normal',
     mode: currentMode(),
-    source: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'human',
+    source: ['human', 'agent', 'vulnora'].includes(String(body.source)) ? body.source as DraftSource : 'human',
     status: 'draft',
     createdAt: now,
     updatedAt: now,
@@ -5813,14 +5813,14 @@ app.post('/api/route-preview', (req: Request, res: Response) => {
   const draft = body.draftId ? missionDrafts.get(body.draftId) : undefined;
   const fallbackDraft: MissionDraft = draft || {
     id: newId('draft'),
-    title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'T3MP3ST Route Preview',
+    title: typeof body.title === 'string' && body.title.trim() ? body.title.trim() : 'VULNORA Route Preview',
     objective: typeof body.objective === 'string' && body.objective.trim() ? body.objective.trim() : 'Preview an authorized mission route.',
     scope: normalizeStringList(body.scope),
     constraints: typeof body.constraints === 'string' ? body.constraints : '',
     urgency: ['low', 'normal', 'high', 'critical'].includes(String(body.urgency)) ? body.urgency as MissionDraft['urgency'] : 'normal',
     opsecPreference: ['overt', 'normal', 'covert', 'ghost'].includes(String(body.opsecPreference)) ? body.opsecPreference as MissionDraft['opsecPreference'] : 'normal',
     mode: currentMode(),
-    source: ['human', 'agent', 't3mp3st'].includes(String(body.source)) ? body.source as DraftSource : 'human',
+    source: ['human', 'agent', 'vulnora'].includes(String(body.source)) ? body.source as DraftSource : 'human',
     status: 'draft',
     createdAt: nowIso(),
     updatedAt: nowIso(),
@@ -5892,7 +5892,7 @@ app.post('/api/promotion/evaluate', (req: Request, res: Response) => {
 
 app.get('/api/learning/status', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 't3mp3st_learning_status/v1',
+    schema_version: 'vulnora_learning_status/v1',
     policy: {
       silentLearning: false,
       proposalRequired: true,
@@ -5935,14 +5935,14 @@ app.get('/api/learning/status', (_req: Request, res: Response) => {
 app.post('/api/learning/run-review', (req: Request, res: Response) => {
   const review = buildLearningReview(req.body as Record<string, unknown>);
   res.status(201).json({
-    schema_version: 't3mp3st_learning_review/v1',
+    schema_version: 'vulnora_learning_review/v1',
     ...review,
   });
 });
 
 app.get('/api/memory/capsule', (_req: Request, res: Response) => {
   res.json({
-    schema_version: 't3mp3st_memory_capsule/v1',
+    schema_version: 'vulnora_memory_capsule/v1',
     entries: [...memoryCapsule.values()],
     policy: 'accepted memory only; proposals are separate and inspectable',
   });
@@ -5951,7 +5951,7 @@ app.get('/api/memory/capsule', (_req: Request, res: Response) => {
 app.get('/api/memory/proposals', (req: Request, res: Response) => {
   const status = typeof req.query.status === 'string' ? req.query.status : '';
   res.json({
-    schema_version: 't3mp3st_memory_proposals/v1',
+    schema_version: 'vulnora_memory_proposals/v1',
     proposals: [...memoryProposals.values()]
       .filter(proposal => !status || proposal.status === status)
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
@@ -6213,14 +6213,14 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
     } catch (e) {
       if (e instanceof RepoPathError) { res.status(400).json({ error: `repoPath rejected: ${e.message}` }); return; }
       if (e instanceof RepoCloneError) { res.status(400).json({ error: e.message }); return; }
-      console.error('[T3MP3ST] repo source validation error:', e);
+      console.error('[VULNORA] repo source validation error:', e);
       res.status(500).json({ error: 'repo source validation failed' });
       return;
     }
   }
 
   try {
-    const cmd = createTempestCommandInstance(name, { ...missionLLMConfig, apiKey: effectiveKey });
+    const cmd = createVulnoraCommandInstance(name, { ...missionLLMConfig, apiKey: effectiveKey });
 
     // Add targets
     for (const t of targets) {
@@ -6247,7 +6247,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
           spawnedOps.push({ id: op.id, callsign: op.callsign, archetype });
         } catch (e: any) {
           // Duplicate callsign — skip
-          console.warn(`[T3MP3ST] Skipping duplicate operator: ${callsign}`);
+          console.warn(`[VULNORA] Skipping duplicate operator: ${callsign}`);
         }
       }
     }
@@ -6284,7 +6284,7 @@ app.post('/api/mission/start', async (req: Request, res: Response): Promise<void
       ...(whitebox ? { whitebox } : {}),
     });
   } catch (error: any) {
-    console.error('[T3MP3ST] Mission start failed:', error);
+    console.error('[VULNORA] Mission start failed:', error);
     res.status(500).json({ error: error.message || 'Failed to start mission' });
   } finally {
     repoSource?.cleanup();
@@ -6319,7 +6319,7 @@ app.post('/api/whitebox/analyze', async (req: Request, res: Response): Promise<v
     });
     res.json(result);
   } catch (error: any) {
-    console.error('[T3MP3ST] White-box analysis failed:', error);
+    console.error('[VULNORA] White-box analysis failed:', error);
     if (error instanceof RepoPathError || error instanceof RepoCloneError) {
       res.status(400).json({ error: error.message });
       return;
@@ -6334,7 +6334,7 @@ app.post('/api/whitebox/analyze', async (req: Request, res: Response): Promise<v
  * given. 404 when there is no mission / nothing to report.
  */
 function handleMissionReport(req: Request, res: Response): void {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(404).json({ error: 'No active mission' });
     return;
@@ -6355,7 +6355,7 @@ app.get('/api/mission/:id/report', (req: Request, res: Response) => handleMissio
  * POST /api/mission/stop — Stop the active mission
  */
 app.post('/api/mission/stop', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(404).json({ error: 'No active mission' });
     return;
@@ -6373,7 +6373,7 @@ app.post('/api/mission/stop', (_req: Request, res: Response) => {
  * POST /api/mission/pause — Pause the active mission
  */
 app.post('/api/mission/pause', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(404).json({ error: 'No active mission' });
     return;
@@ -6388,7 +6388,7 @@ app.post('/api/mission/pause', (_req: Request, res: Response) => {
  * POST /api/mission/resume — Resume a paused mission
  */
 app.post('/api/mission/resume', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(404).json({ error: 'No active mission' });
     return;
@@ -6403,7 +6403,7 @@ app.post('/api/mission/resume', (_req: Request, res: Response) => {
  * GET /api/mission/status — Get full mission status
  */
 app.get('/api/mission/status', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.json({ active: false, progress: [], tasks: [] });
     return;
@@ -6492,7 +6492,7 @@ app.post('/api/operators/prompt/reset', (req: Request, res: Response): void => {
 });
 
 app.post('/api/operators/spawn', (req: Request, res: Response): void => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(400).json({ error: 'No active mission — start a mission first' });
     return;
@@ -6521,7 +6521,7 @@ app.post('/api/operators/spawn', (req: Request, res: Response): void => {
  * Body: { operatorId: string }
  */
 app.post('/api/operators/terminate', (req: Request, res: Response): void => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(400).json({ error: 'No active mission' });
     return;
@@ -6546,7 +6546,7 @@ app.post('/api/operators/terminate', (req: Request, res: Response): void => {
  * GET /api/operators/list — List all operators and their status
  */
 app.get('/api/operators/list', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.json({ operators: [], cell: null });
     return;
@@ -6564,7 +6564,7 @@ app.get('/api/operators/list', (_req: Request, res: Response) => {
  * Body: { taskName, taskDescription, phase?, priority? }
  */
 app.post('/api/operators/:id/task', async (req: Request, res: Response): Promise<void> => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(400).json({ error: 'No active mission' });
     return;
@@ -6647,7 +6647,7 @@ app.post('/api/operators/:id/task', async (req: Request, res: Response): Promise
  * GET /api/mission/findings — Get all findings from the current mission
  */
 app.get('/api/mission/findings', (_req: Request, res: Response) => {
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.json({ findings: [] });
     return;
@@ -6685,8 +6685,8 @@ function readPositiveTimeoutEnv(name: string): number | undefined {
 }
 
 function readGeneralTimeoutEnv(): number | undefined {
-  return readPositiveTimeoutEnv('TEMPEST_GENERAL_TIMEOUT_MS')
-    ?? readPositiveTimeoutEnv('T3MP3ST_GENERAL_TIMEOUT_MS');
+  return readPositiveTimeoutEnv('VULNORA_GENERAL_TIMEOUT_MS')
+    ?? readPositiveTimeoutEnv('VULNORA_GENERAL_TIMEOUT_MS');
 }
 
 // SECURITY NOTE: `apiKey` is accepted from the request BODY here (and in the
@@ -6716,7 +6716,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
       maxTokens: 8192,
       temperature: 0.4,
       timeout: readGeneralTimeoutEnv()
-        ?? readPositiveTimeoutEnv('T3MP3ST_LOCAL_AGENT_TIMEOUT_MS')
+        ?? readPositiveTimeoutEnv('VULNORA_LOCAL_AGENT_TIMEOUT_MS')
         ?? 600000,
     };
   }
@@ -6738,7 +6738,7 @@ function resolveGeneralLLMConfig(provider: string | undefined, model: string | u
 }
 
 /**
- * Bring a planned mission UP for real: create the TempestCommand, add targets,
+ * Bring a planned mission UP for real: create the VulnoraCommand, add targets,
  * spawn the planned operators, start the mission, and attach General monitoring.
  * Shared by /api/general/execute and the Admiral LIVE launch so the conversational
  * front door performs the SAME real bring-up — not a "mission launching" stub.
@@ -6747,7 +6747,7 @@ function bringUpMissionFromPlan(
   execConfig: { missionName: string; targets: string[]; operators: string[] },
   generalConfig: LLMConfig,
 ): { spawnedOps: Array<{ id: string; callsign: string; archetype: string }>; status: any } {
-  const cmd = createTempestCommandInstance(execConfig.missionName, generalConfig);
+  const cmd = createVulnoraCommandInstance(execConfig.missionName, generalConfig);
   for (const target of execConfig.targets) {
     if (target.startsWith('http://') || target.startsWith('https://')) cmd.targetEnv.addTarget(createTargetFromUrl(target));
     else if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(target)) cmd.targetEnv.addTarget(createTargetFromIP(target));
@@ -6767,7 +6767,7 @@ function bringUpMissionFromPlan(
 }
 
 async function runCodexExecReadinessProbe(command: string): Promise<{ stdout: string; stderr: string }> {
-  const marker = 'T3MP3ST_CODEX_READY';
+  const marker = 'VULNORA_CODEX_READY';
   const args = [
     'exec',
     '-c',
@@ -6828,7 +6828,7 @@ function codexUnavailable(res: Response, error: any): void {
     available: false,
     provider: 'codex',
     error: error?.message || 'Codex CLI unavailable',
-    hint: 'Install/login to Codex CLI, then retry. T3MP3ST does not need your account token.',
+    hint: 'Install/login to Codex CLI, then retry. VULNORA does not need your account token.',
   });
 }
 
@@ -6843,7 +6843,7 @@ app.get('/api/codex/status', async (_req: Request, res: Response): Promise<void>
       available: true,
       provider: 'codex',
       authMode: 'local-codex-account',
-      tokenHandling: 'no token is accepted by or returned from T3MP3ST',
+      tokenHandling: 'no token is accepted by or returned from VULNORA',
       command,
       version: stdout.trim(),
       executionMode: 'codex exec --ephemeral --sandbox read-only',
@@ -6871,7 +6871,7 @@ app.post('/api/codex/probe', async (_req: Request, res: Response): Promise<void>
     try {
       const probe = await runCodexExecReadinessProbe(command);
       const combined = `${probe.stdout || ''}\n${probe.stderr || ''}`;
-      payload.execReady = combined.includes('T3MP3ST_CODEX_READY');
+      payload.execReady = combined.includes('VULNORA_CODEX_READY');
       payload.selfTest = payload.execReady ? 'passed' : 'completed_without_ready_marker';
     } catch (probeError: any) {
       payload.execReady = false;
@@ -6947,7 +6947,7 @@ app.post('/api/general/plan', async (req: Request, res: Response): Promise<void>
       missionGate: plan.missionGate,
     });
   } catch (error: any) {
-    console.error('[T3MP3ST] General planning failed:', error);
+    console.error('[VULNORA] General planning failed:', error);
     const message = error.message || 'Planning failed';
     res.status(/API key required|Unknown provider/.test(message) ? 400 : 500).json({ error: message });
   }
@@ -7002,8 +7002,8 @@ app.post('/api/general/execute', async (req: Request, res: Response): Promise<vo
       if (!guard.allowed) { blockForApproval(res, guard); return; }
     }
 
-    // Create TempestCommand instance from the plan
-    const cmd = createTempestCommandInstance(
+    // Create VulnoraCommand instance from the plan
+    const cmd = createVulnoraCommandInstance(
       execConfig.missionName,
       generalConfig
     );
@@ -7065,7 +7065,7 @@ app.post('/api/general/execute', async (req: Request, res: Response): Promise<vo
       status: cmd.getStatus(),
     });
   } catch (error: any) {
-    console.error('[T3MP3ST] General execution failed:', error);
+    console.error('[VULNORA] General execution failed:', error);
     res.status(500).json({ error: error.message || 'Execution failed' });
   }
 });
@@ -7146,7 +7146,7 @@ app.post('/api/general/auto', async (req: Request, res: Response): Promise<void>
       if (!guard.allowed) { blockForApproval(res, guard); return; }
     }
 
-    const cmd = createTempestCommandInstance(
+    const cmd = createVulnoraCommandInstance(
       execConfig.missionName,
       generalConfig
     );
@@ -7204,7 +7204,7 @@ app.post('/api/general/auto', async (req: Request, res: Response): Promise<void>
       status: cmd.getStatus(),
     });
   } catch (error: any) {
-    console.error('[T3MP3ST] General auto mode failed:', error);
+    console.error('[VULNORA] General auto mode failed:', error);
     res.status(500).json({ error: error.message || 'Auto mode failed' });
   }
 });
@@ -7240,7 +7240,7 @@ app.post('/api/general/sitrep', async (_req: Request, res: Response): Promise<vo
     return;
   }
 
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(400).json({ error: 'No active mission' });
     return;
@@ -7263,7 +7263,7 @@ app.post('/api/general/assess', async (_req: Request, res: Response): Promise<vo
     return;
   }
 
-  const cmd = getTempestCommand();
+  const cmd = getVulnoraCommand();
   if (!cmd) {
     res.status(400).json({ error: 'No active mission' });
     return;
@@ -7708,7 +7708,7 @@ app.get('/api/agents/local/status', async (req: Request, res: Response): Promise
 // =============================================================================
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('[T3MP3ST] Error:', err);
+  console.error('[VULNORA] Error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
 
@@ -7719,16 +7719,16 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 // Crash net: a stray rejected promise or thrown error must never take the whole
 // server down mid-mission. Log it and keep the process alive.
 process.on('unhandledRejection', (reason) => {
-  console.error('[T3MP3ST] unhandledRejection (process kept alive):', reason instanceof Error ? reason.stack || reason.message : reason);
+  console.error('[VULNORA] unhandledRejection (process kept alive):', reason instanceof Error ? reason.stack || reason.message : reason);
 });
 process.on('uncaughtException', (err) => {
-  console.error('[T3MP3ST] uncaughtException (process kept alive):', err instanceof Error ? err.stack || err.message : err);
+  console.error('[VULNORA] uncaughtException (process kept alive):', err instanceof Error ? err.stack || err.message : err);
 });
 
 async function startServer() {
   console.log('');
   console.log('╔════════════════════════════════════════════════════════════════╗');
-  console.log('║                     T3MP3ST API Server v2.0                    ║');
+  console.log('║                     VULNORA API Server v2.0                    ║');
   console.log('║                 Offensive-Security Operations                 ║');
   console.log('╚════════════════════════════════════════════════════════════════╝');
   console.log('');
@@ -7744,25 +7744,25 @@ async function startServer() {
   const flushAndExit = (signal: NodeJS.Signals): void => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`[T3MP3ST] ${signal} received — flushing state, shutting down…`);
+    console.log(`[VULNORA] ${signal} received — flushing state, shutting down…`);
     void flushPersist().catch(() => { /* best-effort */ }).finally(() => process.exit(0));
   };
   process.once('SIGTERM', flushAndExit);
   process.once('SIGINT', flushAndExit);
 
   app.listen(Number(PORT), HOST, () => {
-    console.log(`[T3MP3ST] Server running at http://${HOST}:${PORT}`);
-    console.log(`[T3MP3ST] Web UI available at http://${HOST}:${PORT}/ui`);
+    console.log(`[VULNORA] Server running at http://${HOST}:${PORT}`);
+    console.log(`[VULNORA] Web UI available at http://${HOST}:${PORT}/ui`);
     if (!HOST_IS_LOOPBACK) {
       console.warn('');
-      console.warn(`  ⚠️  EXPOSURE WARNING: bound to NON-LOOPBACK host "${HOST}". This API executes`);
+      console.warn(`    EXPOSURE WARNING: bound to NON-LOOPBACK host "${HOST}". This API executes`);
       console.warn('     commands and has NO built-in authentication — the Origin/Host guards only');
       console.warn('     cover the localhost threat model. Do NOT put this on a LAN or the internet');
       console.warn('     without real auth (a Bearer-token reverse proxy) in front of it.');
       console.warn('');
     }
     console.log('');
-    console.log('[T3MP3ST] Mission Dispatch (NEW):');
+    console.log('[VULNORA] Mission Dispatch (NEW):');
     console.log('  POST /api/mission/start              - Start mission with real operators');
     console.log('  POST /api/mission/stop               - Stop active mission');
     console.log('  POST /api/mission/pause              - Pause mission');
@@ -7780,7 +7780,7 @@ async function startServer() {
     console.log('  POST /api/operators/:id/task         - Dispatch task to operator');
     console.log('  GET  /api/events                     - SSE real-time event stream');
     console.log('');
-    console.log('[T3MP3ST] Op General (Autonomous Orchestrator):');
+    console.log('[VULNORA] Op General (Autonomous Orchestrator):');
     console.log('  POST /api/general/plan              - Plan operation from directive');
     console.log('  POST /api/general/execute            - Execute planned operation');
     console.log('  POST /api/general/auto               - Full auto: plan + execute');
@@ -7789,22 +7789,22 @@ async function startServer() {
     console.log('  POST /api/general/sitrep             - Force situation report');
     console.log('  POST /api/general/assess             - Final strategic assessment');
     console.log('');
-    console.log('[T3MP3ST] Attack Graph (recon-generated, one renderer):');
+    console.log('[VULNORA] Attack Graph (recon-generated, one renderer):');
     console.log('  POST /api/attack-graph               - Scaffold a graph for a target (varies by family)');
     console.log('  POST /api/attack-graph/ingest        - Validate a recon-supplied graph');
     console.log('');
-    console.log('[T3MP3ST] The Admiral (conversational intake):');
+    console.log('[VULNORA] The Admiral (conversational intake):');
     console.log('  POST /api/admiral/converse           - Talk to the Admiral; it drafts the mission brief');
     console.log('  POST /api/admiral/launch             - Hand the brief to Op General (dry-run plans; live executes)');
     console.log('');
-    console.log('[T3MP3ST] Bounty Platforms:');
+    console.log('[VULNORA] Bounty Platforms:');
     console.log('  GET  /api/bounty/platforms           - List supported platforms');
     console.log('  POST /api/bounty/format              - Format finding for a platform');
     console.log('  POST /api/bounty/submit              - Submit report (dry-run default)');
     console.log('  GET  /api/bounty/programs/:platform  - Search programs');
     console.log('  GET  /api/bounty/credentials         - Check configured credentials');
     console.log('');
-    console.log('[T3MP3ST] Payload DB: 200+ payloads | Secret Patterns: 15+ | Privesc: 50+ techniques');
+    console.log('[VULNORA] Payload DB: 200+ payloads | Secret Patterns: 15+ | Privesc: 50+ techniques');
     console.log('');
   });
 }

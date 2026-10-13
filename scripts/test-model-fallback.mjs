@@ -26,9 +26,9 @@ import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-const auditDir = await mkdtemp(join(tmpdir(), 't3mp3st-fallback-audit-'));
+const auditDir = await mkdtemp(join(tmpdir(), 'vulnora-fallback-audit-'));
 const auditPath = join(auditDir, 'fallback.jsonl');
-process.env.TEMPEST_FALLBACK_AUDIT_LOG = auditPath;
+process.env.VULNORA_FALLBACK_AUDIT_LOG = auditPath;
 
 let pass = 0, fail = 0;
 const ok = (label, cond) =>

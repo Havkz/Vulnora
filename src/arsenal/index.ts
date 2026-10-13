@@ -1,5 +1,5 @@
 /**
- * T3MP3ST Arsenal
+ * VULNORA Arsenal
  *
  * Tool registry and execution management.
  */
@@ -42,7 +42,7 @@ const dnsReverse = promisify(dns.reverse);
  * targets, especially while Nuclei and discovery tools were running. Keep the
  * value configurable, but allow two minutes by default for one request. */
 export function webRequestTimeoutMs(): number {
-  const configured = Number(process.env.T3MP3ST_WEB_REQUEST_TIMEOUT_MS || 120000);
+  const configured = Number(process.env.VULNORA_WEB_REQUEST_TIMEOUT_MS || 120000);
   return Number.isFinite(configured)
     ? Math.max(5000, Math.min(600000, Math.round(configured)))
     : 120000;
@@ -217,7 +217,7 @@ function discoveryFingerprint(response: Response, body: string): string {
 
 async function discoveryBaseline(baseUrl: string, timeout: number): Promise<string | undefined> {
   try {
-    const response = await targetFetch(`${baseUrl}/tempest-not-found-${randomUUID()}`, {
+    const response = await targetFetch(`${baseUrl}/vulnora-not-found-${randomUUID()}`, {
       signal: AbortSignal.timeout(timeout), redirect: 'manual',
     });
     return discoveryFingerprint(response, await response.text());
@@ -720,7 +720,7 @@ export function createToolContext(
  * The built-in probes that are genuinely "spicy" — live credential attacks and active injection
  * testing. They ship UNGATED (no riskTier below) so every prior run and the headline benchmark keep
  * firing them freely — their safety boundary is the always-on egress scope gate. An operator who wants
- * the approval fail-safe to blanket these too opts in with T3MP3ST_GATE_BUILTINS=1, which applies these
+ * the approval fail-safe to blanket these too opts in with VULNORA_GATE_BUILTINS=1, which applies these
  * tiers via stampSpicyBuiltin() at registration. Kept here, next to BUILTIN_TOOLS, as the single source
  * of truth for which built-ins are spicy.
  */
@@ -1428,7 +1428,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }
 
       const output = results.map(r => {
-        const status = r.reflected ? '⚠️ REFLECTED (potentially vulnerable)' :
+        const status = r.reflected ? ' REFLECTED (potentially vulnerable)' :
                        r.encoded ? '✓ Encoded/Filtered' : '✓ Not reflected';
         return `[${r.name}] ${status}`;
       }).join('\n');
@@ -1539,7 +1539,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }
 
       const output = results.map(r => {
-        const status = r.vulnerable ? `⚠️ VULNERABLE - ${r.indicator}` : `✓ ${r.indicator}`;
+        const status = r.vulnerable ? ` VULNERABLE - ${r.indicator}` : `✓ ${r.indicator}`;
         return `[${r.name}] ${status}`;
       }).join('\n');
 
@@ -1599,26 +1599,26 @@ export const BUILTIN_TOOLS: CustomTool[] = [
                 const daysUntilExpiry = Math.floor((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
                 if (daysUntilExpiry < 0) {
-                  issues.push('⚠ CRITICAL: Certificate has expired!');
+                  issues.push(' CRITICAL: Certificate has expired!');
                 } else if (daysUntilExpiry < 30) {
-                  issues.push(`⚠ Certificate expires in ${daysUntilExpiry} days`);
+                  issues.push(` Certificate expires in ${daysUntilExpiry} days`);
                 }
               }
 
               // Check for weak key
               if (cert.bits && cert.bits < 2048) {
-                issues.push(`⚠ Weak key size: ${cert.bits} bits (recommend 2048+)`);
+                issues.push(` Weak key size: ${cert.bits} bits (recommend 2048+)`);
               }
 
               // Check for self-signed
               if (cert.subject?.CN === cert.issuer?.CN) {
-                issues.push('⚠ Self-signed certificate detected');
+                issues.push(' Self-signed certificate detected');
               }
             }
 
             // Check protocol version
             if (protocol === 'TLSv1' || protocol === 'TLSv1.1') {
-              issues.push(`⚠ Outdated protocol: ${protocol} (should use TLSv1.2+)`);
+              issues.push(` Outdated protocol: ${protocol} (should use TLSv1.2+)`);
             }
 
             // Check cipher strength
@@ -1626,7 +1626,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
               const weakCiphers = ['RC4', 'DES', '3DES', 'MD5', 'NULL', 'EXPORT', 'anon'];
               for (const weak of weakCiphers) {
                 if (cipher.name.toUpperCase().includes(weak)) {
-                  issues.push(`⚠ Weak cipher detected: ${cipher.name}`);
+                  issues.push(` Weak cipher detected: ${cipher.name}`);
                   break;
                 }
               }
@@ -1855,9 +1855,9 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         const header = JSON.parse(b64urlDecode(parts[0]));
         const payload = JSON.parse(b64urlDecode(parts[1]));
         const issues: string[] = [];
-        if (header.alg === 'none') issues.push('⚠ Algorithm is "none" - VULNERABLE');
-        if (header.alg === 'HS256') issues.push('⚠ HS256 may be vulnerable to key confusion');
-        if (payload.exp && payload.exp < Date.now() / 1000) issues.push('⚠ Token is expired');
+        if (header.alg === 'none') issues.push(' Algorithm is "none" - VULNERABLE');
+        if (header.alg === 'HS256') issues.push(' HS256 may be vulnerable to key confusion');
+        if (payload.exp && payload.exp < Date.now() / 1000) issues.push(' Token is expired');
         return {
           success: true,
           output: `JWT Analysis:
@@ -3326,7 +3326,7 @@ export function normalizeNmapRuntimeFlags(flags: string[], ports?: string): stri
 
 /** Give broad/version-heavy scans enough wall time while retaining a finite cap. */
 export function resolveNmapTimeoutMs(flags: string[], ports?: string): number {
-  const override = Number(process.env.T3MP3ST_NMAP_TIMEOUT_MS);
+  const override = Number(process.env.VULNORA_NMAP_TIMEOUT_MS);
   if (Number.isFinite(override) && override > 0) {
     return Math.max(30_000, Math.min(3_600_000, Math.round(override)));
   }
@@ -3538,7 +3538,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       enforceCurlMinimumTimeout(args, 120);
       try {
         if (configuredHeaders) {
-          configDir = await mkdtemp(join(tmpdir(), 't3mp3st-curl-'));
+          configDir = await mkdtemp(join(tmpdir(), 'vulnora-curl-'));
           const configPath = join(configDir, 'headers.conf');
           const escapeConfig = (value: string): string => value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
           const config = [...configuredHeaders.entries()]

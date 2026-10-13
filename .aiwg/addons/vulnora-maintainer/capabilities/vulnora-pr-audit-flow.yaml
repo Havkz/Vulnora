@@ -1,14 +1,14 @@
 apiVersion: ops.aiwg.io/v1
 kind: OpsCapability
 metadata:
-  name: t3mp3st-pr-audit-flow
+  name: vulnora-pr-audit-flow
   labels:
     category: maintainer
-    repository: T3MP3ST
+    repository: VULNORA
   annotations:
     blast-radius: "read-only review unless explicitly asked to post a review"
 spec:
-  description: Audit one T3MP3ST pull request for correctness, security, tests, and merge readiness.
+  description: Audit one VULNORA pull request for correctness, security, tests, and merge readiness.
   version: "0.1.0"
   inputs:
     - name: pr
@@ -36,7 +36,7 @@ spec:
   target_requirements:
     os: [linux, macos]
     capabilities: [git, gh, npm]
-  agent: t3mp3st-pr-auditor
+  agent: vulnora-pr-auditor
   idempotent: true
   steps:
     - name: read-pr-state
@@ -50,5 +50,5 @@ spec:
     - name: decide
       description: Produce findings-first maintainer decision with exact evidence.
   verification:
-    command: "gh pr view \"$PR\" --repo elder-plinius/T3MP3ST --json headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup >/dev/null"
+    command: "gh pr view \"$PR\" --repo elder-plinius/VULNORA --json headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup >/dev/null"
     expect: "command exits 0"
