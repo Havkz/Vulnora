@@ -53,6 +53,15 @@ describe('terminal surface', () => {
     expect(transcript()).toContain('•');
   });
 
+  it('preserves received edit text on Ctrl+C without submitting a queued Enter or accepting later input', async () => {
+    const { input, surface } = terminal(); const changed = vi.fn();
+    const editing = surface.prompt('Target URL or IP:', '', false, changed);
+    const rejected = expect(editing).rejects.toBeInstanceOf(TerminalInterrupted);
+    input.write('https://unfinished\rnot-another-target\x03ignored-after-interrupt');
+    await rejected;
+    expect(changed.mock.calls.at(-1)?.[0]).toBe('https://unfinished');
+  });
+
   it('updates exactly four real initialization rows and reports a failing job honestly', async () => {
     const { surface, transcript } = terminal(80, 12);
     const statuses: InitializationRows[] = [];

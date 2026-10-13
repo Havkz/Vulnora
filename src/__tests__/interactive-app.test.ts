@@ -91,6 +91,22 @@ describe('durable interactive project flow', () => {
     await reopened.close();
   });
 
+  it('persists an unfinished READY edit when interrupted and restores an explicitly empty edit', async () => {
+    const f = await fixture(); const project = await f.store.create('Edited project', 'https://fixture.test');
+    project.inputDraft = ''; await f.store.save(project);
+    const prompts = vi.spyOn(f.surface, 'prompt'); const result = f.start();
+    f.input.write('\x1b[B\r'); await f.wait('Resume Project'); f.input.write('\r');
+    await f.wait('Press Enter to start'); f.input.write('\x1b');
+    await expect.poll(() => prompts.mock.calls.length).toBe(1);
+    expect(prompts.mock.calls[0][1]).toBe('');
+    f.input.write('https://unfinished'); f.input.write('\x03');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    const saved = await f.store.load(project.id);
+    expect(saved.inputDraft).toBe('https://unfinished');
+    expect(saved.target.input).toBe('https://fixture.test'); expect(saved.status).toBe('ready');
+    expect(f.open).not.toHaveBeenCalled();
+  });
+
   it('reopens the full saved report and exports it without another scan or provider request', async () => {
     const f = await fixture();
     const project = await f.store.create('Completed fixture', 'https://fixture.test');

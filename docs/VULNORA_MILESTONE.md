@@ -226,3 +226,18 @@ offering a resumable menu. A completed project opens its results without startin
   clears those flags. Clean Linux validation is repeated for this corrected milestone.
   Startup provider validation, effective presets, decomposed recovery and deployment
   remain outstanding; Claude live inference cannot be checked without an installation.
+
+- Corrected transport milestone 051db05 passes clean-install Linux build/lint
+  (0 errors), all 61 suites with 667 passed/4 Windows skips, and 11 preflight checks.
+  Validation directory: /home/tempest/.vulnora/validation/051db05.MzFTnP.
+- READY target edits now persist in a finally block even when Ctrl+C interrupts
+  the prompt. An explicitly empty draft remains empty when reopened. Buffered edit
+  characters received before interruption are saved, while queued Enter/actions
+  and input received after interruption are never executed.
+- READY edit validation: 61 Windows suites, 656 passed/17 POSIX skips, 11 preflight
+  checks, build and focused lint pass. Real Linux PTY (80x30 and 24x12) confirms
+  the interrupted edit is persisted, READY performs no scan, terminal state restores,
+  and the installed 30B model remains held then unloads on Ctrl+C. Transcript:
+  /home/tempest/.vulnora/validation/ui-preview-wddj135e/terminal-transcript.ansi.
+  GitHub run 38459924921 still has runner_id=0/no job steps; hosted billing remains
+  an external validation limitation. The final installed Vulnora alias is pending.

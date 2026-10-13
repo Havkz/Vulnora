@@ -81,6 +81,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   get rows(): number { return Math.max(1, this.output.rows || 24); }
 
   private onKey = (text: string, key: Key): void => {
+    if (this.stopped) return;
     if (key.ctrl && key.name === 'c') {
       this.emit('interrupt');
       this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
@@ -174,6 +175,19 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   async prompt(label: string, initial = '', secret = false, onChange?: (value: string) => void): Promise<string | undefined> {
     let value = [...initial]; let position = value.length;
+    const edit = ({ text, key }: { text: string; key: Key }) => {
+      if (key.name === 'left') position = Math.max(0, position - 1);
+      else if (key.name === 'right') position = Math.min(value.length, position + 1);
+      else if (key.name === 'home') position = 0;
+      else if (key.name === 'end') position = value.length;
+      else if (key.name === 'backspace' && position > 0) value.splice(--position, 1);
+      else if (key.name === 'delete') value.splice(position, 1);
+      else if (key.ctrl && key.name === 'u') { value = []; position = 0; }
+      else if (!key.ctrl && !key.meta && text && terminalText(text) === text && !text.includes('\n') && value.length + [...text].length <= 8192) {
+        const characters = [...text]; value.splice(position, 0, ...characters); position += characters.length;
+      }
+      onChange?.(value.join(''));
+    };
     this.show(() => {
       const shown = secret ? '•'.repeat(value.length) : value.join('');
       const text = wrapTerminalText(`${label} ${shown}`, this.columns - 4);
@@ -186,20 +200,22 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
         cursor: { row: logo.length + cursorLines.length - first, column: 2 + visibleWidth(cursorLines.at(-1) || '') } };
     });
     for (;;) {
-      const { text, key } = await this.nextKey();
+      let input;
+      try { input = await this.nextKey(); }
+      catch (error) {
+        // Save text already received before Ctrl+C without submitting queued Enter/actions.
+        if (error instanceof TerminalInterrupted) {
+          for (const queued of this.keys.splice(0)) {
+            if (queued.key.name === 'return' || queued.key.name === 'escape') break;
+            edit(queued);
+          }
+        }
+        throw error;
+      }
+      const { key } = input;
       if (key.name === 'escape') return undefined;
       if (key.name === 'return') return value.join('');
-      if (key.name === 'left') position = Math.max(0, position - 1);
-      else if (key.name === 'right') position = Math.min(value.length, position + 1);
-      else if (key.name === 'home') position = 0;
-      else if (key.name === 'end') position = value.length;
-      else if (key.name === 'backspace' && position > 0) value.splice(--position, 1);
-      else if (key.name === 'delete') value.splice(position, 1);
-      else if (key.ctrl && key.name === 'u') { value = []; position = 0; }
-      else if (!key.ctrl && !key.meta && text && terminalText(text) === text && !text.includes('\n') && value.length + [...text].length <= 8192) {
-        const characters = [...text]; value.splice(position, 0, ...characters); position += characters.length;
-      }
-      onChange?.(value.join(''));
+      edit(input);
       this.paint();
     }
   }

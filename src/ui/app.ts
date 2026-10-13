@@ -109,9 +109,11 @@ export class InteractiveApp {
       footer: 'Enter Start    Esc Edit target    Ctrl+C Save & Quit' }));
       const { key } = await this.surface.nextKey();
       if (key.name === 'escape') {
-        const answer = await this.surface.prompt('Target URL or IP:', project.inputDraft || project.target.input, false,
-          value => { project.inputDraft = value; });
-        await this.services.store.save(project);
+        let answer: string | undefined;
+        try {
+          answer = await this.surface.prompt('Target URL or IP:', project.inputDraft ?? project.target.input, false,
+            value => { project.inputDraft = value; });
+        } finally { await this.services.store.save(project); }
         if (answer === undefined) return;
         try {
           project.target = validateProjectTarget(answer); project.inputDraft = undefined; project.checkpoint = undefined;
