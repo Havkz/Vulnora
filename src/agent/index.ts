@@ -9,7 +9,7 @@
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
 import { isContextCompactionNotice, type LLMBackbone } from '../llm/index.js';
-import type { Arsenal } from '../arsenal/index.js';
+import { hostFromTargetValue, type Arsenal } from '../arsenal/index.js';
 import { normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
 import {
@@ -647,21 +647,28 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     const hasTool = (name: string) => tools.some((tool) => tool.name === name);
     const taskName = task.name.toLowerCase();
     const id = `local-agent-bootstrap-${Date.now()}`;
+    const host = hostFromTargetValue(target.address);
+    if (!host) return undefined;
+    const originalUrl = /^https?:\/\//i.test(target.address) ? target.address.trim()
+      : typeof target.metadata?.url === 'string' && /^https?:\/\//i.test(target.metadata.url)
+        && hostFromTargetValue(target.metadata.url) === host ? target.metadata.url : undefined;
+    const authority = host.includes(':') ? `[${host}]` : host;
+    const url = originalUrl || `${target.protocol === 'http' ? 'http' : 'https'}://${authority}${target.port ? `:${target.port}` : ''}`;
 
     if (taskName.includes('dns') && hasTool('dns_lookup')) {
-      return { id, name: 'dns_lookup', arguments: { domain: target.address, type: 'A' } };
+      return { id, name: 'dns_lookup', arguments: { domain: host, type: 'A' } };
     }
 
     if (taskName.includes('port') && hasTool('port_scan')) {
-      return { id, name: 'port_scan', arguments: { target: target.address, ports: '80,443', timeout: 2000 } };
+      return { id, name: 'port_scan', arguments: { target: host, ports: '80,443', timeout: 2000 } };
     }
 
     if ((taskName.includes('web') || taskName.includes('fingerprint')) && hasTool('header_analysis')) {
-      return { id, name: 'header_analysis', arguments: { url: `https://${target.address}` } };
+      return { id, name: 'header_analysis', arguments: { url } };
     }
 
     if ((taskName.includes('content') || taskName.includes('discover')) && hasTool('robots_txt_fetch')) {
-      return { id, name: 'robots_txt_fetch', arguments: { url: `https://${target.address}` } };
+      return { id, name: 'robots_txt_fetch', arguments: { url } };
     }
 
     return undefined;

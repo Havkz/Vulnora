@@ -18,7 +18,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
   private constructor(readonly store: ProjectStore, readonly project: ProjectRecord,
     configuration: Omit<VulnoraConfig, 'name' | 'hooks'>, private release: () => Promise<void>) {
     super();
-    this.command = new VulnoraCommand({ ...configuration, name: project.name,
+    this.command = new VulnoraCommand({ ...configuration, name: project.name, strictScope: true,
       hooks: { onStateCheckpoint: () => this.persist() } });
     try {
       if (project.checkpoint !== undefined) this.command.restoreCheckpoint(project.checkpoint);

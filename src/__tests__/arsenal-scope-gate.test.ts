@@ -17,6 +17,9 @@ describe('egress scope gate', () => {
     expect(hostFromTargetValue('https://EVIL.com/admin?x=1')).toBe('evil.com');
     expect(hostFromTargetValue('root@10.0.0.5:22')).toBe('10.0.0.5');
     expect(hostFromTargetValue('scanme.example.com:443')).toBe('scanme.example.com');
+    expect(hostFromTargetValue('2001:db8::10')).toBe('2001:db8::10');
+    expect(hostFromTargetValue('[2001:db8::10]:443')).toBe('2001:db8::10');
+    expect(hostFromTargetValue('https://[::1]:8443/path')).toBe('::1');
     expect(hostFromTargetValue('not a host, just text')).toBe('not a host, just text'); // still lowered; scope decides
     expect(hostFromTargetValue(42)).toBeNull();
   });
@@ -34,6 +37,17 @@ describe('egress scope gate', () => {
     expect(scopeViolation(scope, ctx({ target: '8.8.8.8' }))).toBe('8.8.8.8');
     // checks context.target.address too
     expect(scopeViolation(scope, ctx({}, 'http://attacker.net'))).toBe('attacker.net');
+  });
+
+  it('limits strict projects to the selected host without implicit local or subdomain access', () => {
+    const strict = { allowedHosts: ['fixture.test', '::1'], allowLoopback: false, allowPrivate: false, exactHosts: true };
+    expect(scopeViolation(strict, ctx({ url: 'http://fixture.test:8080/api' }))).toBeNull();
+    expect(scopeViolation(strict, ctx({ url: 'http://api.fixture.test' }))).toBe('api.fixture.test');
+    expect(scopeViolation(strict, ctx({ url: 'http://127.0.0.1' }))).toBe('127.0.0.1');
+    expect(scopeViolation(strict, ctx({ host: '10.0.0.9' }))).toBe('10.0.0.9');
+    expect(scopeViolation(strict, ctx({ url: 'http://[::1]:8080/api' }))).toBeNull();
+    expect(scopeViolation(strict, ctx({ target: '::1/64' }))).toBe('::1/64');
+    expect(scopeViolation(strict, ctx({ target: '::1/128' }))).toBeNull();
   });
 
   it('FAILS CLOSED on a network-shaped but unparseable target (//host, file://, scheme) — no fail-open', () => {

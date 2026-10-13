@@ -506,6 +506,8 @@ export interface VulnoraConfig {
     maxConcurrent?: number;
   };
   tools?: CustomTool[];
+  /** Restrict project scans to explicitly selected hosts, including local targets. */
+  strictScope?: boolean;
   hooks?: RuntimeHooks;
 }
 

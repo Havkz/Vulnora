@@ -30,6 +30,21 @@ async function open(store: ProjectStore, id: string) {
 }
 
 describe('persistent project sessions', () => {
+  it('blocks model-supplied local and subdomain targets before the tool handler runs, including after resume', async () => {
+    const { store, project } = await fixture();
+    const first = await open(store, project.id);
+    await first.close();
+    const session = await open(store, project.id);
+    const handler = vi.fn().mockResolvedValue({ success: true, output: 'Selected target' });
+    session.command.arsenal.register({ name: 'scope_fixture', category: 'web', description: 'Fixture', parameters: [], handler });
+    for (const url of ['http://127.0.0.1:8080', 'http://10.0.0.9', 'https://api.fixture.test']) {
+      const result = await session.command.arsenal.execute('scope_fixture', { parameters: { url } });
+      expect(result.error).toMatch(/SCOPE DENIED/);
+    }
+    expect(handler).not.toHaveBeenCalled();
+    expect((await session.command.arsenal.execute('scope_fixture', { parameters: { url: project.target.input } })).success).toBe(true);
+    expect(handler).toHaveBeenCalledOnce();
+  });
   it('opens a READY project with its original target and makes no model or scan request', async () => {
     const target = '  https://fixture.test/path?mode=read  ';
     const { store, project } = await fixture(target);

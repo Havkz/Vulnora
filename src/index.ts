@@ -373,6 +373,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   private tickCount: number = 0;
   private hooks: RuntimeHooks;
   private defaultOperatorConfig?: VulnoraConfig['operators'];
+  private readonly strictScope: boolean;
   private tickPromise?: Promise<void>;
   private quiescing?: Promise<void>;
   private restoredCompleted = false;
@@ -424,6 +425,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.name = config.name;
     this.hooks = config.hooks || {};
     this.defaultOperatorConfig = config.operators;
+    this.strictScope = config.strictScope === true;
     this.taskTimeoutMs = VulnoraCommand.resolveTaskTimeoutMs(config.llm.provider);
 
     // Initialize LLM backbone
@@ -603,7 +605,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     const allowedHosts = this.targetEnv.getAllTargets()
       .map((t) => hostFromTargetValue(t.address))
       .filter((h): h is string => !!h);
-    this.arsenal.setScope({ allowedHosts, allowLoopback: true, allowPrivate: true });
+    this.arsenal.setScope({ allowedHosts, allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
+      exactHosts: this.strictScope });
   }
 
   /**

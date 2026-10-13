@@ -157,3 +157,10 @@ offering a resumable menu. A completed project opens its results without startin
   11 preflight checks passed, 12 keyboard/rendering cases and two terminal snapshots.
   Build/typecheck pass; lint has 0 errors and 194 existing warnings. No new default
   menu or installed alias is claimed until application/runtime integration passes.
+
+- Project sessions now enforce the exact selected host rather than admitting unrelated
+  loopback/private ranges or subdomains. The scope is restored on every project open.
+  Legacy library scope defaults remain compatible. Recon bootstrap preserves original
+  URL schemes, ports, paths and IPv6 addresses; DNS/port tools receive only the host.
+  Validation: 56 Windows suites, 626 passed, 16 skips, 11 preflight checks; build,
+  typecheck and lint (0 errors, 194 warnings) pass.

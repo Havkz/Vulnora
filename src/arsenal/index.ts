@@ -289,6 +289,8 @@ export interface ToolExecution {
 export interface ArsenalScope {
   /** exact hosts / registrable domains explicitly authorized (subdomains allowed) */
   allowedHosts: string[];
+  /** Do not implicitly authorize subdomains for a single-target project. */
+  exactHosts?: boolean;
   /** allow 127.0.0.0/8, localhost, ::1 */
   allowLoopback: boolean;
   /** allow RFC-1918 / link-local / ULA lab ranges */
@@ -303,7 +305,9 @@ export function hostFromTargetValue(v: unknown): string | null {
   if (typeof v !== 'string' || !v.trim()) return null;
   let s = v.trim();
   try { if (/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = new URL(s).hostname; } catch { /* treat as bare host */ }
-  s = s.replace(/^[^@/]*@/, '').replace(/\/.*$/, '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '');
+  s = s.replace(/^[^@/]*@/, '').replace(/\/.*$/, '');
+  if (net.isIP(s) !== 6) s = s.replace(/:\d+$/, '');
+  s = s.replace(/^\[|\]$/g, '');
   return s.toLowerCase() || null;
 }
 
@@ -356,7 +360,7 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
     let minMask: number;
     if (scope.allowLoopback && isLoopbackTargetHost(h)) minMask = 8;              // 127/8, ::1
     else if (scope.allowPrivate && isPrivateTargetHost(h)) minMask = privateBlockMinMask(h);
-    else if (allow.some(a => a === h || h.endsWith('.' + a))) minMask = 32;        // exact-allowed host → only /32
+    else if (allow.some(a => a === h || (!scope.exactHosts && h.endsWith('.' + a)))) minMask = net.isIP(h) === 6 ? 128 : 32;
     else return h; // base host out of scope
     // treat a trailing "/N" as a CIDR mask ONLY on a bare host/ip (no scheme) — not a URL path segment.
     const cidr = !v.includes('://') && v.match(/^[^/]+\/(\d{1,3})$/);
@@ -530,7 +534,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     if (blockedHost) {
       const denied: ToolResult = {
         success: false,
-        error: `SCOPE DENIED: target '${blockedHost}' is not in the authorized scope — ${toolName} refused before execution. Only authorized / loopback / lab targets are permitted.`,
+        error: `SCOPE DENIED: target '${blockedHost}' is not in the authorized scope — ${toolName} refused before execution.`,
         metadata: { orchestrationStatus: 'scope_denied', executionStatus: 'blocked' },
       };
       this.orchestrator.recordBlocked(tool, context, denied, 'scope_denied');
