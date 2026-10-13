@@ -15,7 +15,7 @@
  * instead of returning a bare name that would bypass the safe .cmd/.bat launch path.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync, readFileSync, realpathSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { resolveBin, detectLocalAgents, runLocalAgent, localAgentChat } from '../agent/local-agents.js';
@@ -217,7 +217,8 @@ describe('resolveBin Windows boundary', () => {
 
 describe.skipIf(process.platform !== 'win32')('Windows local agent command shims', () => {
   function fixture(name = 'claude'): { home: string; cli: string } {
-    const home = scratch();
+    // Windows CI uses an 8.3 TEMP alias; where.exe reports its canonical long path.
+    const home = realpathSync.native(scratch());
     const directory = join(home, 'bin');
     const script = join(directory, 'node_modules', 'fixture', 'cli.mjs');
     mkdirSync(join(directory, 'node_modules', 'fixture'), { recursive: true });
