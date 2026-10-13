@@ -5,7 +5,7 @@ import type { PackBoard } from '../pack/board.js';
 import type { OperatorAgent } from '../operators/index.js';
 import type { CoverageCapability, CoverageSnapshot } from '../orchestrator/coverage.js';
 import { KillChainPhase, type Credential, type Finding, type ScanProgressEvent, type Target } from '../types/index.js';
-import { restoreAgentCheckpoint } from '../agent/checkpoint.js';
+import { restoreAgentCheckpoint, validateTaskDecomposition } from '../agent/checkpoint.js';
 import { validateProjectTarget } from './targets.js';
 
 export interface EngineCheckpoint {
@@ -77,8 +77,9 @@ export function validateEngineCheckpoint(value: unknown): asserts value is Engin
       || !strings(task.dependencies) || !Number.isFinite(task.priority) || !Number.isFinite(task.createdAt)
       || (task.executionPlan !== undefined && (!record(task.executionPlan) || typeof task.executionPlan.toolName !== 'string' || !record(task.executionPlan.parameters)))) return fail();
     if (task.result !== undefined && (!record(task.result) || typeof task.result.success !== 'boolean')) return fail();
+    const target = saved.targets.find(item => task.description.includes(item.address)) || saved.targets[0];
+    validateTaskDecomposition(task, target);
     if (task.checkpoint !== undefined) {
-      const target = saved.targets.find(item => task.description.includes(item.address)) || saved.targets[0];
       restoreAgentCheckpoint(task.checkpoint, task, target);
     }
   }

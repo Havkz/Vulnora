@@ -23,7 +23,7 @@ import {
 import type { LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
 import type { AgentLoop, AgentResult } from '../agent/index.js';
-import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from '../agent/checkpoint.js';
+import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError, validateTaskDecomposition } from '../agent/checkpoint.js';
 import type { ToolResult } from '../types/index.js';
 
 export function evaluateExploitExecution(result: Pick<AgentResult, 'steps'>): {
@@ -316,6 +316,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   /** Shared pack board (Phase-2). Attached only when swarm coordination is on; absent = solo baseline. */
   private board?: PackBoard;
   private activeTask?: { task: Task; controller: AbortController };
+  private checkpointWriter?: (task: Task) => Promise<void>;
   private findings: Finding[] = [];
   private credentials: Credential[] = [];
   /** White-box source excerpt (security-prioritized), set by VulnoraCommand.setWhiteboxSource */
@@ -395,6 +396,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       throw new Error(`Operator ${this.callsign} is not available (status: ${this._state.status})`);
     }
 
+    validateTaskDecomposition(task, target);
     const controller = new AbortController();
     const signal = controller.signal;
     this.activeTask = { task, controller };
@@ -409,7 +411,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
 
     try {
       this.setStatus('executing');
-      const result = await this.executeTask(task, target, signal);
+      const result = await this.executeRecoverable(task, target, signal);
       if (!isCurrent()) return cancelled();
       task.result = result;
 
@@ -419,6 +421,12 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       this.emit('task:completed', { task, result });
 
       // Apply cooldown after task
+      if (task.decomposition) {
+        if (!isCurrent()) return cancelled();
+        this.activeTask = undefined;
+        this.setStatus('idle');
+        return result;
+      }
       await this.applyCooldown(signal);
       if (!isCurrent()) return cancelled();
       this.activeTask = undefined;
@@ -432,38 +440,10 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
         this.setStatus('idle');
         throw error;
       }
-      this._state.failedTasks++;
+      if (!task.decomposition) this._state.failedTasks++;
       this._state.currentTask = null;
 
       const errorMessage = error instanceof Error ? error.message : String(error);
-
-      // Decompose fallback: if we have an LLM and retries left, break the
-      // failed task into smaller subtasks instead of giving up.
-      const attempt = (task as any)._decomposeAttempt || 0;
-      if (this.llm && attempt < this.config.maxRetries) {
-        const subtasks = await this.decomposeTask(task, errorMessage, signal);
-        if (!isCurrent()) return cancelled();
-        if (subtasks.length > 0) {
-          this.emit('task:decomposed', { parent: task, subtasks, reason: errorMessage });
-          this.activeTask = undefined;
-          this.setStatus('idle');
-
-          const subResults: TaskResult[] = [];
-          for (const sub of subtasks) {
-            (sub as any)._decomposeAttempt = attempt + 1;
-            const r = await this.assignTask(sub, target);
-            if (r.error?.startsWith('aborted:')) return r;
-            subResults.push(r);
-          }
-
-          const anySuccess = subResults.some(r => r.success);
-          return {
-            success: anySuccess,
-            output: subResults.map(r => r.output || r.error || '').join('\n---\n'),
-            findings: subResults.flatMap(r => r.findings || []),
-          };
-        }
-      }
 
       this.emit('task:failed', { task, error: errorMessage });
       this.increaseDetectionRisk(0.1);
@@ -477,6 +457,82 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
         error: errorMessage,
       };
     }
+  }
+
+  setCheckpointWriter(writer: (task: Task) => Promise<void>): void { this.checkpointWriter = writer; }
+
+  private async saveTask(task: Task): Promise<void> {
+    try { await this.checkpointWriter?.(task); }
+    catch (error) { throw new CheckpointWriteError(error); }
+  }
+
+  private async executeRecoverable(task: Task, target: Target | undefined, signal: AbortSignal, depth = 0): Promise<TaskResult> {
+    signal.throwIfAborted();
+    if (['completed', 'failed', 'skipped'].includes(task.status) && task.result) return task.result;
+    if (!task.decomposition) {
+      try {
+        const result = await this.executeTask(task, target, signal);
+        signal.throwIfAborted();
+        return result;
+      }
+      catch (error) {
+        signal.throwIfAborted();
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
+        // Four children per level grow exponentially; recovery is capped at three levels.
+        if (!this.llm || depth >= Math.min(this.config.maxRetries, 3)) throw error;
+        task.decomposition = { version: 1, phase: 'planning', reason: error instanceof Error ? error.message : String(error), tasks: [] };
+        this._state.failedTasks++;
+        await this.saveTask(task);
+      }
+    }
+    const tree = task.decomposition;
+    if (tree.phase === 'planning') {
+      const children = await this.decomposeTask(task, tree.reason, signal);
+      signal.throwIfAborted();
+      tree.tasks = children; tree.phase = children.length ? 'executing' : 'failed';
+      validateTaskDecomposition(task, target);
+      await this.saveTask(task);
+      if (children.length) this.emit('task:decomposed', { parent: task, subtasks: children, reason: tree.reason });
+    }
+    if (tree.phase === 'failed') throw new Error(tree.reason);
+    for (const child of tree.tasks) {
+      signal.throwIfAborted();
+      if (['completed', 'failed', 'skipped'].includes(child.status) && child.result) continue;
+      await this.finishChildCooldown(task, signal);
+      child.status = 'in_progress'; child.startedAt ??= Date.now();
+      await this.saveTask(task); signal.throwIfAborted();
+      this.emit('task:started', { task: child });
+      try { child.result = await this.executeRecoverable(child, target, signal, depth + 1); }
+      catch (error) {
+        signal.throwIfAborted();
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
+        child.result = { success: false, error: error instanceof Error ? error.message : String(error) };
+        if (!child.decomposition) this._state.failedTasks++;
+        this.emit('task:failed', { task: child, error: child.result.error || 'Child task failed' });
+      }
+      signal.throwIfAborted();
+      child.status = child.result.success ? 'completed' : 'failed'; child.completedAt = Date.now();
+      this._state.completedTasks++;
+      if (!child.decomposition && this.config.cooldownMs > 0) tree.cooldownUntil = Date.now() + this.config.cooldownMs;
+      await this.saveTask(task); signal.throwIfAborted();
+      this.emit('task:completed', { task: child, result: child.result });
+    }
+    await this.finishChildCooldown(task, signal);
+    const results = tree.tasks.map(child => {
+      if (!child.result) throw new CheckpointRestoreError();
+      return child.result;
+    });
+    return { success: results.some(result => result.success), output: results.map(result => result.output || result.error || '').join('\n---\n'),
+      findings: results.flatMap(result => result.findings || []), credentials: results.flatMap(result => result.credentials || []) };
+  }
+
+  private async finishChildCooldown(task: Task, signal: AbortSignal): Promise<void> {
+    const tree = task.decomposition;
+    if (!tree?.cooldownUntil) return;
+    await this.applyCooldown(signal, 'executing', Math.max(0, Math.min(this.config.cooldownMs, tree.cooldownUntil - Date.now())));
+    delete tree.cooldownUntil;
+    await this.saveTask(task);
+    signal.throwIfAborted();
   }
 
   /**
@@ -637,7 +693,9 @@ Respond with ONLY a JSON array of subtask objects, each with "name" and "descrip
       const match = response.match(/\[[\s\S]*\]/);
       if (!match) return [];
       const parsed: Array<{ name: string; description: string }> = JSON.parse(match[0]);
-      if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 4) return [];
+      if (!Array.isArray(parsed) || parsed.length < 2 || parsed.length > 4
+        || !parsed.every(sub => sub && typeof sub.name === 'string' && !!sub.name.trim()
+          && typeof sub.description === 'string' && !!sub.description.trim())) return [];
 
       return parsed.map((sub, i) => ({
         id: `${task.id}-decomp-${i}`,
@@ -761,13 +819,13 @@ Respond in a structured format.`;
   /**
    * Apply cooldown after task
    */
-  private async applyCooldown(signal: AbortSignal): Promise<void> {
+  private async applyCooldown(signal: AbortSignal, nextStatus: OperatorStatus = 'idle', durationMs = this.config.cooldownMs): Promise<void> {
     signal.throwIfAborted();
     this.setStatus('cooldown');
-    this.emit('cooldown:started', { durationMs: this.config.cooldownMs });
-    await delay(this.config.cooldownMs, undefined, { signal });
+    this.emit('cooldown:started', { durationMs });
+    await delay(durationMs, undefined, { signal });
     signal.throwIfAborted();
-    this.setStatus('idle');
+    this.setStatus(nextStatus);
     this.emit('cooldown:ended');
   }
 

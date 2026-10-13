@@ -114,3 +114,36 @@ export function restoreAgentCheckpoint(value: unknown, task: Task, target?: Targ
   } else if (value.result !== undefined) return fail();
   return structuredClone(value) as unknown as AgentCheckpoint;
 }
+
+/** Validate the entire persisted child queue before resuming any of its operations. */
+export function validateTaskDecomposition(task: Task, target?: Target): void {
+  const ids = new Set([task.id]);
+  let nodes = 0;
+  const fail = (): never => { throw new CheckpointRestoreError(); };
+  const visit = (parent: Task, depth: number): void => {
+    const tree = parent.decomposition;
+    if (tree === undefined) return;
+    if (depth >= 3 || !isRecord(tree) || tree.version !== 1 || typeof tree.reason !== 'string'
+      || !['planning', 'executing', 'failed'].includes(tree.phase) || !Array.isArray(tree.tasks)
+      || (tree.cooldownUntil !== undefined && (!Number.isSafeInteger(tree.cooldownUntil) || tree.cooldownUntil < 0))
+      || (tree.phase === 'executing' ? tree.tasks.length < 2 || tree.tasks.length > 4 : tree.tasks.length !== 0)) return fail();
+    for (const [index, child] of tree.tasks.entries()) {
+      if (++nodes > 84 || !isRecord(child) || child.id !== `${parent.id}-decomp-${index}` || ids.has(child.id)
+        || child.missionId !== parent.missionId || child.phase !== parent.phase || child.operatorType !== parent.operatorType
+        || typeof child.name !== 'string' || !child.name.trim() || typeof child.description !== 'string' || !child.description.trim()
+        || !['pending', 'assigned', 'in_progress', 'completed', 'failed', 'skipped'].includes(child.status)
+        || !Number.isFinite(child.priority) || !Number.isFinite(child.createdAt) || !Array.isArray(child.dependencies)
+        || !child.dependencies.every(id => typeof id === 'string')
+        || (child.executionPlan !== undefined && (!isRecord(child.executionPlan) || typeof child.executionPlan.toolName !== 'string' || !isRecord(child.executionPlan.parameters)))
+        || (child.result !== undefined && (!isRecord(child.result) || typeof child.result.success !== 'boolean'
+          || (['output', 'error'] as const).some(key => child.result?.[key] !== undefined && typeof child.result[key] !== 'string')
+          || (['findings', 'credentials', 'nextTasks'] as const).some(key => child.result?.[key] !== undefined
+            && (!Array.isArray(child.result[key]) || !child.result[key].every(value => typeof value === 'string')))))
+        || (['completed', 'failed', 'skipped'].includes(child.status) && !child.result)) return fail();
+      ids.add(child.id);
+      if (child.checkpoint !== undefined) restoreAgentCheckpoint(child.checkpoint, child, target);
+      visit(child, depth + 1);
+    }
+  };
+  visit(task, 0);
+}

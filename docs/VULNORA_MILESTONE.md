@@ -279,3 +279,28 @@ offering a resumable menu. A completed project opens its results without startin
   11 preflight checks passed; build and lint pass (0 errors, 192 existing warnings).
   Clean-install Linux validation runs against the committed snapshot before this
   intermediate milestone is considered portable. No final-installation claim is made.
+- Committed provider milestone 87dbb61 also passes clean-install Linux build/lint
+  (0 errors), all 63 suites with 686 passed/4 Windows skips and 11 preflight checks.
+  Validation directory: /home/tempest/.vulnora/validation/87dbb61.w1vqfm.
+
+- Decomposed work now persists inside its parent task: planning failure/reason,
+  ordered children, completed results, nested agent/tool-batch checkpoints and the
+  remaining cooldown. Children retain their parent's mission, phase, role and target.
+  The complete stored tree is validated before any restored child executes.
+- One root cancellation controller owns the full tree; the operator remains busy
+  while children execute or wait. Completed children are skipped on resume, planning
+  interruption resumes planning rather than repeating parent execution, and unsafe
+  replay/checkpoint failures still bypass decomposition. Recovery is bounded to three
+  levels (at most 84 children); configured smaller retry ceilings are respected.
+- A real scanner subprocess kill/restart test now covers a decomposed pair of HTTP
+  requests: first completed response is preserved without another request, interrupted
+  second GET is safely retried, its prior budget charge remains, and the original
+  saved queue finishes. Unit checks cover writer failure, malformed child contracts,
+  shared cancellation, recursion limits and cooldown restoration.
+- Child progress refreshes its root dispatch's activity timestamp so a working
+  decomposition is not mistaken for a silent/wedged root operation. Existing task,
+  tool, finding and cooldown events remain available.
+- Decomposition milestone Windows validation: 64 suites, 681 passed/17 POSIX
+  skips, 11 preflight checks, build/typecheck and focused lint pass. The CLI
+  cancellation fixture now waits for complete invocation metadata before asserting
+  termination; its PID file can become visible before the next file is fully written.

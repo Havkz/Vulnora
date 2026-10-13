@@ -337,6 +337,7 @@ export interface Task {
   completedAt?: number;
   capability?: string;
   checkpoint?: AgentCheckpoint;
+  decomposition?: { version: 1; phase: 'planning' | 'executing' | 'failed'; reason: string; tasks: Task[]; cooldownUntil?: number };
   executionPlan?: {
     toolName: string;
     parameters: Record<string, unknown>;

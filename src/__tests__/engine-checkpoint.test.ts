@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VulnoraCommand } from '../index.js';
 import { KillChainPhase } from '../types/index.js';
-import { validateEngineCheckpoint } from '../projects/engine-checkpoint.js';
+import { validateEngineCheckpoint, type EngineCheckpoint } from '../projects/engine-checkpoint.js';
 import { ProjectStore } from '../projects/store.js';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { acquireProjectLease } from '../projects/lease.js';
@@ -142,7 +142,7 @@ describe('whole scanner checkpoints', () => {
     expect(() => validateEngineCheckpoint(saved)).not.toThrow();
   });
 
-  it('recovers after killing a real scanner process without repeating the completed request', async () => {
+  it.each(['queue', 'decomposed'])('recovers a %s task after killing a real scanner process without repeating the completed request', async mode => {
     const requests = { first: 0, second: 0 };
     let resume = false;
     const origin = await listen(createServer((request, response) => {
@@ -153,7 +153,7 @@ describe('whole scanner checkpoints', () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-crash-'));
     directories.push(directory);
     const worker = fileURLToPath(new URL('./fixtures/project-crash-worker.mjs', import.meta.url));
-    const child = spawn(process.execPath, ['--import', 'tsx', worker, origin, directory], {
+    const child = spawn(process.execPath, ['--import', 'tsx', worker, origin, directory, mode], {
       cwd: process.cwd(), env: { ...process.env, VULNORA_CONFIG_DIR: join(directory, 'config'), VULNORA_FULL_ARSENAL: 'off' }, stdio: ['ignore', 'pipe', 'pipe'],
     });
     children.push(child);
@@ -172,6 +172,11 @@ describe('whole scanner checkpoints', () => {
     const release = await acquireProjectLease(directory, id);
     await release();
     const project = await new ProjectStore(directory).load(id);
+    if (mode === 'decomposed') {
+      const tree = (project.checkpoint as EngineCheckpoint).mission.tasks[0].decomposition;
+      expect(tree?.tasks[0]).toMatchObject({ status: 'completed', result: { success: true } });
+      expect(tree?.tasks[1].checkpoint?.activeCall?.name).toBe('http_request');
+    }
     const restored = scanner();
     restored.restoreCheckpoint(project.checkpoint);
     resume = true;

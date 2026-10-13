@@ -94,7 +94,10 @@ describe('authenticated local CLI transport', () => {
     const pending = localAgentChat('codex', 'hello', { command: f.command, timeoutMs: 4000, signal: controller.signal });
     const rejected = expect(pending).rejects.toThrow('operator stopped');
     try {
-      await vi.waitFor(() => expect(existsSync(f.pidFile)).toBe(true));
+      await vi.waitFor(() => {
+        expect(existsSync(f.pidFile)).toBe(true);
+        expect(JSON.parse(readFileSync(f.invocation, 'utf8')).cwd).toBeTypeOf('string');
+      });
       const pid = Number(readFileSync(f.pidFile, 'utf8'));
       const { cwd } = JSON.parse(readFileSync(f.invocation, 'utf8'));
       controller.abort(new Error('operator stopped')); await rejected;

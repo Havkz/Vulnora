@@ -95,8 +95,12 @@ chain is the selected provider, validated Ollama, then deterministic evidence-on
 checks. Provider changes and limitations are logged explicitly; no model is downloaded.
 The local model is released on graceful exit. A hard process kill cannot guarantee unload.
 
+Decomposed tasks retain their ordered child queues, intermediate results, individual
+tool checkpoints and remaining cooldown. Resume skips completed children and uses
+the same conservative replay rules for interrupted requests.
+
 The new CLI is under active migration. Retuned adaptive scanning behavior,
-decomposed-subtask recovery and final installation still have acceptance work.
+remaining presentation/documentation acceptance and final installation still need work.
 Changing the saved behavior setting alone does not yet apply the new presets.
 See the [milestone ledger](docs/VULNORA_MILESTONE.md) for verified state and remaining
 requirements. Existing local aliases remain on the preserved installed runtime

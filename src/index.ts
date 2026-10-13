@@ -757,8 +757,9 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     if (this.progressEvents.length > MAX_PROGRESS_EVENTS) {
       this.progressEvents.splice(0, this.progressEvents.length - MAX_PROGRESS_EVENTS);
     }
-    if (task?.id && this.activeDispatches.has(task.id)) {
-      this.dispatchLastProgress.set(task.id, Date.now());
+    const dispatchTask = operator.state.currentTask || task?.id;
+    if (dispatchTask && this.activeDispatches.has(dispatchTask)) {
+      this.dispatchLastProgress.set(dispatchTask, Date.now());
     }
     this.emit('scan:progress', event);
   }
@@ -1566,6 +1567,10 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     const operator = this.cell.spawnOperator(callsign, archetype, saved?.config || this.defaultOperatorConfig?.defaultConfig, saved?.id);
     if (saved) operator.restoreCheckpoint(saved);
     this.setupOperatorEvents(operator);
+    operator.setCheckpointWriter(async task => {
+      try { await this.hooks.onCheckpoint?.(task); await this.persistState(); }
+      catch (error) { this.pause(); throw error; }
+    });
 
     // Attach the agent loop scoped to this archetype's SPECIALIZED role toolkit (defaultTools =
     // the curated per-operator tool allowlist). toolCategories stays as a coarse fallback.
