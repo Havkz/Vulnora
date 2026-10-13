@@ -210,3 +210,19 @@ offering a resumable menu. A completed project opens its results without startin
   streaming transport and fallback ownership still need integration/acceptance work.
   References: https://developers.openai.com/codex/cli/reference and
   https://code.claude.com/docs/en/cli-reference (official sources checked 2026-10-13).
+
+- The Codex backbone now reuses the authenticated local-agent transport instead of
+  maintaining another subprocess implementation. Both connectors remove injected
+  application API keys; Codex runs in an ephemeral empty directory with read-only
+  sandbox/approval-never, and Claude has native/MCP tools disabled and no CLI history.
+- Official JSON progress is decoded incrementally (including split UTF-8), redacted
+  by the backbone and retained in the project journal. Cancellation/deadlines stop
+  the child and await its close before deleting temporary files; output is bounded
+  and semantic CLI errors reject even when the process exits zero. The real native
+  WSL Codex tool-contract check still passes: CODEX_NATIVE_TOOL_CALL_OK.
+- Transport regression: 61 Windows suites, 653 tests passed, 17 POSIX skipped,
+  11 preflight checks passed; build passes. A WSL-specific test inherited WSL flags
+  while asserting ordinary POSIX PATH precedence; that fixture now explicitly
+  clears those flags. Clean Linux validation is repeated for this corrected milestone.
+  Startup provider validation, effective presets, decomposed recovery and deployment
+  remain outstanding; Claude live inference cannot be checked without an installation.

@@ -99,6 +99,7 @@ describe.skipIf(process.platform === 'win32')('resolveBin — macOS/POSIX well-k
   });
 
   it('prefers a PATH match over a well-known-dir match when both exist (shell precedence)', () => {
+    vi.stubEnv('WSL_DISTRO_NAME', ''); vi.stubEnv('WSL_INTEROP', '');
     const home = scratch();
     const wellKnown = putExe(join(home, '.local', 'bin'), 'faketool');
     const pathDir = scratch();

@@ -5,30 +5,15 @@
  * the parser-hardening from the PR #16 audit (over-match, ReDoS, drift-abstains, string args, Codex coverage).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { EventEmitter } from 'events';
 
-// Mock the local-agent CLI bridge (LocalAgentAdapter) and the codex spawn/file read (CodexAdapter).
+// Both CLI adapters use the same authenticated, bounded subprocess bridge.
 vi.mock('../agent/local-agents.js', () => ({
   localAgentChat: vi.fn(),
-  resolveBin: vi.fn((binary: string) => binary),
-  spawnAgent: vi.fn(() => {
-    const child = new EventEmitter() as EventEmitter & { stdin: EventEmitter & { end: () => void }; stdout: EventEmitter; stderr: EventEmitter };
-    child.stdin = Object.assign(new EventEmitter(), { end: () => setTimeout(() => child.emit('close', 0), 0) });
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    return child;
-  }),
 }));
-vi.mock('fs/promises', async (orig) => {
-  const actual = await orig<typeof import('fs/promises')>();
-  return { ...actual, readFile: vi.fn() };
-});
 
 import { classifyErrorKind, parseTextToolCalls, shouldAdvanceFallback, LLMBackbone } from '../llm/index.js';
 import { localAgentChat } from '../agent/local-agents.js';
-import { readFile } from 'fs/promises';
 const cli = vi.mocked(localAgentChat);
-const fileRead = vi.mocked(readFile as unknown as (...a: unknown[]) => Promise<string>);
 
 const TOOLS = [{
   name: 'nmap_scan', description: 'port scan a host',
@@ -140,13 +125,34 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
 });
 
 describe('codex backbone surfaces toolCalls (guards the CodexAdapter half of the fix)', () => {
+  it('passes explicit model, cancellation and timeout through the shared CLI bridge', async () => {
+    cli.mockResolvedValueOnce('done');
+    const controller = new AbortController();
+    await new LLMBackbone({ provider: 'codex', model: 'configured-model', timeout: 90000 })
+      .prompt('hello', undefined, { signal: controller.signal });
+    expect(cli.mock.calls.at(-1)?.[0]).toBe('codex');
+    expect(cli.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'configured-model', timeoutMs: 90000, signal: controller.signal });
+  });
+
+  it('forwards truthful redacted provider progress through backbone events', async () => {
+    cli.mockImplementationOnce(async (_id, _prompt, options) => {
+      options?.onProgress?.({ agent: 'codex', type: 'item.completed', text: 'token=secret-fixture-value-1234567890' });
+      return 'done';
+    });
+    const backbone = codexBackbone(); const events: unknown[] = [];
+    backbone.on('request:progress', event => events.push(event));
+    await backbone.prompt('hello');
+    expect(events[0]).toMatchObject({ provider: 'codex', model: 'codex-default', agent: 'codex' });
+    expect(JSON.stringify(events)).not.toContain('secret-fixture-value');
+  });
+
   it('returns toolCalls when codex emits the contract', async () => {
-    fileRead.mockResolvedValueOnce('```json\n{"tool_calls":[{"name":"nmap_scan","arguments":{"target":"x"}}]}\n```');
+    cli.mockResolvedValueOnce('```json\n{"tool_calls":[{"name":"nmap_scan","arguments":{"target":"x"}}]}\n```');
     const res = await codexBackbone().chatWithTools([{ role: 'user', content: 'scan' }], TOOLS as never);
     expect(res.toolCalls?.[0]?.name).toBe('nmap_scan');
   });
   it('returns no toolCalls on a codex prose debrief', async () => {
-    fileRead.mockResolvedValueOnce('No exploitable surface. Final debrief.');
+    cli.mockResolvedValueOnce('No exploitable surface. Final debrief.');
     const res = await codexBackbone().chatWithTools([{ role: 'user', content: 'scan' }], TOOLS as never);
     expect(res.toolCalls).toBeUndefined();
   });

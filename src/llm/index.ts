@@ -13,14 +13,14 @@
 
 import { setTimeout as delay } from 'node:timers/promises';
 import { EventEmitter } from 'eventemitter3';
-import { appendFile, chmod, mkdir, mkdtemp, readFile, rm } from 'fs/promises';
+import { appendFile, chmod, mkdir } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { homedir, tmpdir } from 'os';
+import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
-import { localAgentChat, resolveBin, spawnAgent } from '../agent/local-agents.js';
+import { localAgentChat, type LocalAgentProgress } from '../agent/local-agents.js';
 import { redactLedgerText, redactSecrets } from '../redact.js';
 
 // =============================================================================
@@ -37,6 +37,7 @@ export interface LLMEvents {
   /** Fallback hop fired. reason = the failure that triggered it (refusal/empty/
    *  rate_limit/auth/timeout/server_error/context_length/…) or recovered_after:*. */
   'request:fallback': { fromModel: string; toModel: string | null; engaged: boolean; reason?: string };
+  'request:progress': LocalAgentProgress & { provider: LLMProvider; model: string };
   'token:stream': { token: string };
 }
 
@@ -53,6 +54,7 @@ export interface LLMProviderAdapter {
 
 export interface ChatOptions {
   signal?: AbortSignal;
+  onProgress?: (event: LocalAgentProgress) => void;
   maxTokens?: number;
   temperature?: number;
   topP?: number;
@@ -1194,91 +1196,17 @@ class CodexAdapter implements LLMProviderAdapter {
   }
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
-    const workDir = await mkdtemp(join(tmpdir(), 'vulnora-codex-'));
-    const outputPath = join(workDir, 'last-message.txt');
-    const prompt = this.formatPrompt(messages, options);
-    const command = config.get('codex').command || 'codex';
-    const args = [
-      '--ask-for-approval',
-      'never',
-      'exec',
-      '-c',
-      'model_reasoning_effort="low"',
-      '--ephemeral',
-      '--skip-git-repo-check',
-      '--sandbox',
-      'read-only',
-      '--color',
-      'never',
-      '-C',
-      process.cwd(),
-      '--output-last-message',
-      outputPath,
-    ];
-    if (this.config.model && this.config.model !== 'codex-default') {
-      args.push('-m', this.config.model);
-    }
-    args.push('-');
-
-    try {
-      const result = await new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-        const child = spawnAgent(resolveBin(command) || command, args, {
-          stdio: ['pipe', 'pipe', 'pipe'],
-          env: { ...process.env, NO_COLOR: '1' },
-          signal: options?.signal,
-        });
-
-        let stdout = '';
-        let stderr = '';
-        const envTimeout = Number(process.env.VULNORA_CODEX_TIMEOUT_MS || 600000);
-        const timeoutMs = Number.isFinite(envTimeout) && envTimeout > 0 ? envTimeout : 600000;
-        const timer = setTimeout(() => {
-          child.kill('SIGTERM');
-          reject(new Error(`Codex CLI timed out while planning after ${timeoutMs}ms`));
-        }, timeoutMs);
-
-        child.stdout?.on('data', chunk => { stdout += chunk.toString(); });
-        child.stderr?.on('data', chunk => { stderr += chunk.toString(); });
-        child.on('error', error => {
-          clearTimeout(timer);
-          reject(error);
-        });
-        child.on('close', code => {
-          clearTimeout(timer);
-          if (code === 0) {
-            resolve({ stdout, stderr });
-          } else {
-            const raw = (stderr || stdout).trim();
-            const limit = 4000;
-            const diagnostic = raw.length <= limit
-              ? raw
-              : `${raw.slice(0, limit / 2)}\n...[Codex diagnostic middle omitted]...\n${raw.slice(-limit / 2)}`;
-            reject(new Error(`Codex CLI exited ${code}: ${diagnostic}`));
-          }
-        });
-        child.stdin?.on('error', error => { clearTimeout(timer); reject(error); });
-        child.stdin?.end(prompt);
-      });
-
-      let content = '';
-      try {
-        content = await readFile(outputPath, 'utf-8');
-      } catch {
-        content = result.stdout;
-      }
-
-      const trimmed = content.trim();
-      // Tool-calling over text: parse the agent's tool requests so the ReAct loop EXECUTES them.
-      const toolCalls = options?.tools?.length ? parseTextToolCalls(trimmed) : undefined;
-      return {
-        content: trimmed,
-        model: this.config.model || 'codex-default',
-        finishReason: toolCalls?.length ? 'tool_calls' : 'stop',
-        toolCalls,
-      };
-    } finally {
-      await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    }
+    const timeoutMs = this.config.timeout ?? Number(process.env.VULNORA_CODEX_TIMEOUT_MS || 600000);
+    const content = (await localAgentChat('codex', this.formatPrompt(messages, options), {
+      command: config.get('codex').command || 'codex', model: this.config.model,
+      timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600000,
+      signal: options?.signal, onProgress: options?.onProgress,
+    })).trim();
+    const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
+    return {
+      content, model: this.config.model || 'codex-default',
+      finishReason: toolCalls?.length ? 'tool_calls' : 'stop', toolCalls,
+    };
   }
 }
 
@@ -1310,7 +1238,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const agentId = this.config.model || 'codex';
     const prompt = this.formatPrompt(messages, options);
     const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
-    const content = (await localAgentChat(agentId, prompt, { timeoutMs, signal: options?.signal })).trim();
+    const content = (await localAgentChat(agentId, prompt, { timeoutMs, signal: options?.signal, onProgress: options?.onProgress })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
@@ -1563,7 +1491,11 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
         try {
           options?.signal?.throwIfAborted();
-          response = await adapter.chat(msgs, options);
+          response = await adapter.chat(msgs, { ...options, onProgress: event => {
+            const safe = { ...event, ...(event.text ? { text: String(redactSecrets(event.text)) } : {}) };
+            this.emit('request:progress', { ...safe, provider: hop.provider, model: hop.model });
+            options?.onProgress?.(safe);
+          } });
           options?.signal?.throwIfAborted();
           break;
         } catch (error) {

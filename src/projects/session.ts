@@ -40,6 +40,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
       this.emit('error', error);
     });
     this.command.llm.on('request:fallback', event => this.record('provider:fallback', event));
+    this.command.llm.on('request:progress', event => this.record('provider:progress', event));
     this.command.llm.on('request:retry', ({ error, ...event }) => this.record('provider:retry', { ...event, error: error.message }));
     this.command.llm.on('request:error', ({ error }) => this.record('provider:error', { error: error.message }));
     this.command.on('command:stopped', () => {

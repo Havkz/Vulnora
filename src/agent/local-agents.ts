@@ -16,6 +16,7 @@ import { execFile, execFileSync, spawn } from 'child_process';
 import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'fs';
 import { homedir, tmpdir, userInfo } from 'os';
 import { join, dirname, resolve } from 'path';
+import { StringDecoder } from 'node:string_decoder';
 
 // vulnora injects its OWN provider keys (from .env) into the server process. If we let those leak into
 // a spawned CLI, the CLI uses vulnora's key instead of the user's native login → 401. The entire point
@@ -475,9 +476,15 @@ export function pingLocalAgent(id: string, prompt?: string, timeoutMs?: number):
  * clean reply, hermes takes the prompt as an arg. Provider keys are stripped so each CLI uses its own
  * login (no API key needed). Throws on non-zero exit / timeout so the LLMBackbone retry/fallback fires.
  */
-export function localAgentChat(id: string, prompt: string, opts: { model?: string; timeoutMs?: number; signal?: AbortSignal } = {}): Promise<string> {
+export interface LocalAgentProgress { agent: string; type: string; text?: string }
+
+export function localAgentChat(id: string, prompt: string, opts: {
+  model?: string; command?: string; timeoutMs?: number; signal?: AbortSignal;
+  onProgress?: (event: LocalAgentProgress) => void;
+} = {}): Promise<string> {
   const spec = getSpec(id);
   if (!spec) return Promise.reject(new Error(`unknown local agent: ${id}`));
+  if (opts.signal?.aborted) return Promise.reject(opts.signal.reason ?? new Error('Agent request cancelled'));
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
   const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model : undefined;
@@ -488,43 +495,106 @@ export function localAgentChat(id: string, prompt: string, opts: { model?: strin
   let outFile: string | null = null;
   let workDir: string | null = null;
   if (id === 'claude') {
-    args = ['-p', '--output-format', 'text', ...(model ? ['--model', model] : [])];
+    workDir = mkdtempSync(join(tmpdir(), 'vulnora-claudellm-'));
+    args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
+      '--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence', '--max-turns', '1',
+      ...(model ? ['--model', model] : [])];
   } else if (id === 'codex') {
     workDir = mkdtempSync(join(tmpdir(), 'vulnora-codexllm-'));
     outFile = join(workDir, 'reply.txt');
-    args = ['exec', '--ephemeral', '--skip-git-repo-check', '--color', 'never', '--sandbox', 'read-only', '--output-last-message', outFile, ...(model ? ['-m', model] : [])];
+    args = ['--ask-for-approval', 'never', 'exec', '-c', 'model_reasoning_effort="low"',
+      '--ephemeral', '--skip-git-repo-check', '--json', '--color', 'never', '--sandbox', 'read-only',
+      '-C', workDir, '--output-last-message', outFile, ...(model ? ['-m', model] : []), '-'];
   } else { // hermes — takes the prompt as an arg
     args = ['-z', prompt, ...(hermesYoloEnabled() ? ['--yolo'] : []), ...(model ? ['-m', model] : [])];
     viaStdin = false;
   }
 
   const cleanup = () => { if (workDir) { try { rmSync(workDir, { recursive: true, force: true }); } catch { /* noop */ } } };
-  const resolvedBin = resolveBin(spec.bin) || spec.bin;
+  const command = opts.command || spec.bin;
+  const resolvedBin = resolveBin(command) || command;
   return new Promise((resolve, reject) => {
     let child: import('child_process').ChildProcess;
-    try { child = spawnAgent(resolvedBin, args, { env, signal: opts.signal, stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }); }
+    try { child = spawnAgent(resolvedBin, args, { env: { ...env, NO_COLOR: '1' }, windowsHide: true,
+      ...(workDir ? { cwd: workDir } : {}),
+      stdio: [viaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] }); }
     catch (error) { cleanup(); reject(error); return; }
     let out = '';
     let errOut = '';
+    let pending = '';
+    let reply = '';
+    let streamError = '';
+    let protocol = false;
     let done = false;
-    const finish = (fn: () => void) => { if (!done) { done = true; clearTimeout(timer); cleanup(); fn(); } };
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* noop */ } finish(() => reject(new Error(`${id} timed out after ${timeoutMs}ms`))); }, timeoutMs);
-    child.stdout?.on('data', (d) => { if (out.length < 8_000_000) out += String(d); });
-    child.stderr?.on('data', (d) => { if (errOut.length < 200_000) errOut += String(d); });
-    child.on('error', (e) => finish(() => reject(e)));
+    let failure: Error | undefined;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const decoder = new StringDecoder('utf8');
+    const stop = (error: Error) => {
+      if (done || failure) return;
+      failure = error;
+      try { child.kill('SIGTERM'); } catch { /* close/error will settle the request */ }
+      killTimer = setTimeout(() => { try { child.kill('SIGKILL'); } catch { /* already closed */ } }, 2000);
+    };
+    const abort = () => stop(opts.signal?.reason instanceof Error ? opts.signal.reason : new Error('Agent request cancelled'));
+    const finish = (fn: () => void) => {
+      if (done) return;
+      done = true; clearTimeout(timer); clearTimeout(killTimer);
+      opts.signal?.removeEventListener('abort', abort); cleanup(); fn();
+    };
+    const timer = setTimeout(() => stop(new Error(`${id} timed out after ${timeoutMs}ms`)), timeoutMs);
+    const line = (text: string) => {
+      if (!text.trim()) return;
+      let event;
+      try { event = JSON.parse(text); } catch { return; } // Older CLI/test fixtures can emit plain text.
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string') return;
+      protocol = true;
+      if (id === 'codex' && event.type === 'item.completed' && event.item?.type === 'agent_message' && typeof event.item.text === 'string') reply = event.item.text;
+      if (id === 'claude' && event.type === 'result' && typeof event.result === 'string') reply = event.result;
+      if (id === 'claude' && event.type === 'assistant' && Array.isArray(event.message?.content)) {
+        reply = event.message.content.filter((block: { type?: string; text?: unknown }) => block.type === 'text' && typeof block.text === 'string').map((block: { text: string }) => block.text).join('');
+      }
+      if (event.type === 'error' || event.type === 'turn.failed' || event.is_error === true) {
+        streamError = String(event.error?.message || event.message || event.result || event.subtype || 'CLI stream failed');
+      }
+      const delta = event.event?.delta;
+      const content = delta?.type === 'text_delta' && typeof delta.text === 'string' ? delta.text
+        : event.type === 'item.completed' && event.item?.type === 'agent_message' ? reply : undefined;
+      opts.onProgress?.({ agent: id, type: event.type, ...(content ? { text: content } : {}) });
+    };
+    child.stdout?.on('data', (data: Buffer) => {
+      if (failure) return;
+      const text = decoder.write(data);
+      if (out.length + text.length > 8_000_000) { stop(new Error(`${id} output exceeds the 8000000 character limit`)); return; }
+      out += text;
+      pending += text;
+      const lines = pending.split('\n'); pending = lines.pop() || '';
+      try { for (const text of lines) line(text); } catch (error) { stop(error as Error); }
+    });
+    child.stderr?.on('data', (data) => { errOut = (errOut + String(data)).slice(-200_000); });
+    child.on('error', (error) => { failure ??= error; });
     child.on('close', (code) => {
-      let content = out.trim();
-      if (outFile) { try { content = (readFileSync(outFile, 'utf8').trim() || content); } catch { /* fall back to stdout */ } }
+      try { line(pending + decoder.end()); } catch (error) { failure ??= error as Error; }
+      let content = reply || (protocol ? '' : out.trim());
+      if (outFile && existsSync(outFile)) {
+        try {
+          if (statSync(outFile).size > 8_000_000) throw new Error(`${id} reply exceeds the 8000000 byte limit`);
+          content = readFileSync(outFile, 'utf8').trim() || content;
+        } catch (error) { failure ??= error as Error; }
+      }
       finish(() => {
         const semanticError = agentFailureOutput(content);
-        if (code === 0 && content && !semanticError) resolve(content);
+        if (failure) reject(failure);
+        else if (streamError) reject(new Error(streamError.slice(0, 800)));
+        else if (code === 0 && content && !semanticError) resolve(content);
         else if (semanticError) reject(new Error(semanticError));
         else reject(new Error((errOut.trim() || content || `exited with code ${code}`).slice(0, 800)));
       });
     });
     if (viaStdin && child.stdin) {
-      child.stdin.on('error', error => finish(() => reject(error)));
+      child.stdin.on('error', error => stop(error));
       child.stdin.end(prompt);
     }
+    opts.signal?.addEventListener('abort', abort, { once: true });
+    if (opts.signal?.aborted) abort();
   });
 }
