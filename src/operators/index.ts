@@ -23,6 +23,7 @@ import {
 import type { LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
 import type { AgentLoop, AgentResult } from '../agent/index.js';
+import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from '../agent/checkpoint.js';
 import type { ToolResult } from '../types/index.js';
 
 export function evaluateExploitExecution(result: Pick<AgentResult, 'steps'>): {
@@ -412,6 +413,12 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       return result;
     } catch (error) {
       if (!isCurrent()) return cancelled();
+      if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) {
+        this._state.currentTask = null;
+        this.activeTask = undefined;
+        this.setStatus('idle');
+        throw error;
+      }
       this._state.failedTasks++;
       this._state.currentTask = null;
 

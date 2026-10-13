@@ -2,6 +2,8 @@
  * VULNORA Core Type Definitions
  */
 
+import type { AgentCheckpoint } from '../agent/checkpoint.js';
+
 // =============================================================================
 // LLM CONFIGURATION
 // =============================================================================
@@ -334,6 +336,7 @@ export interface Task {
   startedAt?: number;
   completedAt?: number;
   capability?: string;
+  checkpoint?: AgentCheckpoint;
   executionPlan?: {
     toolName: string;
     parameters: Record<string, unknown>;
@@ -507,6 +510,7 @@ export interface VulnoraConfig {
 }
 
 export interface RuntimeHooks {
+  onCheckpoint?: (task: Task) => Promise<void>;
   onOperatorSpawned?: (operator: { id: string; archetype: OperatorArchetype }) => void;
   onOperatorStateChange?: (operator: { id: string }, newState: OperatorState) => void;
   onFindingDiscovered?: (finding: Finding, operator: { id: string }) => void;
@@ -589,6 +593,7 @@ export interface ScanProgressEvent {
 }
 
 export interface CommandEvents {
+  'recovery:blocked': { task: Task; error: Error };
   'command:started': void;
   'command:stopped': void;
   'command:paused': void;

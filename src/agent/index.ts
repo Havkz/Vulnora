@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { isContextCompactionNotice, type LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
 import { normalizeToolCall } from '../orchestrator/tool-orchestrator.js';
+import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
 import {
   buildMissionPrompt,
   resolveAgentPromptProfile,
@@ -49,6 +50,8 @@ export interface AgentLoopOptions {
   securityContext?: PromptSecurityContext;
   /** Stable source identity recorded in the central Evidence Store. */
   sourceAgent?: string;
+  /** Await durable persistence before starting work and after each completed tool. */
+  onCheckpoint?: (checkpoint: AgentCheckpoint, task: Task) => Promise<void>;
 }
 
 export interface AgentStep {
@@ -134,12 +137,14 @@ export interface AgentEvents {
 export class AgentLoop extends EventEmitter<AgentEvents> {
   private llm: LLMBackbone;
   private arsenal: Arsenal;
-  private options: Required<Omit<AgentLoopOptions, 'securityContext'>> & { securityContext: PromptSecurityContext };
+  private options: Required<Omit<AgentLoopOptions, 'securityContext' | 'onCheckpoint'>> & { securityContext: PromptSecurityContext };
+  private onCheckpoint?: AgentLoopOptions['onCheckpoint'];
 
   constructor(llm: LLMBackbone, arsenal: Arsenal, options?: AgentLoopOptions) {
     super();
     this.llm = llm;
     this.arsenal = arsenal;
+    this.onCheckpoint = options?.onCheckpoint;
     this.options = {
       maxIterations: options?.maxIterations ?? 15,
       maxTokens: options?.maxTokens ?? 50000,
@@ -164,24 +169,33 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     signal?: AbortSignal
   ): Promise<AgentResult> {
     signal?.throwIfAborted();
-    const startTime = Date.now();
-    const steps: AgentStep[] = [];
-    const allFindings: ToolFinding[] = [];
-    let tokensUsed = 0;
+    const saved = task.checkpoint === undefined ? undefined : restoreAgentCheckpoint(task.checkpoint, task, target);
+    if (saved?.phase === 'completed' && saved.result) return saved.result;
+    if (saved?.activeCall && !canReplayInterruptedCall(saved.activeCall)) throw new UnsafeResumeError(saved.activeCall);
+    const startTime = Date.now() - (saved?.elapsedMs || 0);
+    const steps: AgentStep[] = saved?.steps || [];
+    const allFindings: ToolFinding[] = saved?.findings || [];
+    let tokensUsed = saved?.tokensUsed || 0;
     let hitLimit = false;
     // anti-stall: dedup identical tool calls + detect runs of no-new-findings (ported from the hunter)
-    const seenCalls = new Map<string, string>();
-    const toolCallCounts = new Map<string, number>();
-    const exhaustedToolWarnings = new Set<string>();
-    let noProgress = 0;
-    let consecutiveLlmFailures = 0;
-    let modelUnavailable = false;
-    let lastLlmError: string | undefined;
+    const seenCalls = new Map<string, string>(saved?.seenCalls);
+    const toolCallCounts = new Map<string, number>(saved?.toolCallCounts);
+    const exhaustedToolWarnings = new Set<string>(saved?.exhaustedToolWarnings);
+    let noProgress = saved?.noProgress || 0;
+    let consecutiveLlmFailures = saved?.consecutiveLlmFailures || 0;
+    let modelUnavailable = saved?.modelUnavailable || false;
+    let lastLlmError = saved?.lastLlmError;
+    let iteration = saved?.iteration || 0;
+    let phase: AgentCheckpoint['phase'] = saved?.phase || 'bootstrap';
+    let bootstrapCompleted = saved?.bootstrapCompleted || false;
+    let pendingCalls = saved?.pendingCalls || [];
+    let activeCall = saved?.activeCall;
+    let findingsBeforeBatch = saved?.findingsBeforeBatch || 0;
 
     const profile = resolveAgentPromptProfile(this.llm.getPromptProfile());
     const maxIterations = Math.min(this.options.maxIterations, profile.maxIterations);
     const maxTotalTokens = Math.min(this.options.maxTokens, profile.maxTotalTokens);
-    let totalToolCalls = 0;
+    let totalToolCalls = saved?.totalToolCalls || 0;
 
     // Get tool definitions from Arsenal (the operator's role toolkit: name allowlist wins,
     // then category filter, then all).
@@ -219,7 +233,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       : '';
 
     // Build initial messages
-    const messages: LLMMessage[] = [
+    const messages: LLMMessage[] = saved?.messages || [
       {
         role: 'system',
         content: 'Follow the mission contract exactly. Function schemas are authoritative. Never invent observations, authorization, tool results, or impact.',
@@ -237,17 +251,38 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       },
     ];
 
-    const bootstrapCall = this.getLocalReconBootstrap(task, target, toolDefs);
-    if (task.executionPlan && !bootstrapCall) {
+    const publish = async (nextPhase: AgentCheckpoint['phase'], result?: AgentResult): Promise<void> => {
+      phase = nextPhase;
+      const checkpoint: AgentCheckpoint = structuredClone({
+        version: 1, contract: checkpointContract(task, target), phase, iteration,
+        elapsedMs: Date.now() - startTime, bootstrapCompleted, messages, steps,
+        findings: allFindings, tokensUsed, totalToolCalls, seenCalls: [...seenCalls],
+        toolCallCounts: [...toolCallCounts], exhaustedToolWarnings: [...exhaustedToolWarnings],
+        noProgress, consecutiveLlmFailures, modelUnavailable, lastLlmError,
+        pendingCalls, activeCall, findingsBeforeBatch, result,
+      });
+      task.checkpoint = checkpoint;
+      try { await this.onCheckpoint?.(checkpoint, task); }
+      catch (error) { throw new CheckpointWriteError(error); }
+    };
+
+    const bootstrapCall = activeCall && phase === 'bootstrap' ? activeCall : this.getLocalReconBootstrap(task, target, toolDefs);
+    if (!bootstrapCompleted && task.executionPlan && !bootstrapCall) {
       const result: AgentResult = {
         success: false, summary: `Recovery blocked: ${task.executionPlan.toolName} is unavailable or not permitted.`,
         steps, findings: [], iterations: 0, tokensUsed: 0, durationMs: Date.now() - startTime, hitLimit: false,
       };
+      await publish('completed', result);
       this.emit('agent:complete', result);
       return result;
     }
-    if (bootstrapCall) {
+    if (!bootstrapCompleted && bootstrapCall) {
+      if (!toolDefs.some(definition => definition.name === bootstrapCall.name)) throw new UnsafeResumeError(bootstrapCall);
+      activeCall = bootstrapCall;
+      await publish('bootstrap');
       const toolStep = await this.executeTool(bootstrapCall, target, task, -1, signal);
+      activeCall = undefined;
+      bootstrapCompleted = true;
       toolCallCounts.set(bootstrapCall.name, 1);
       totalToolCalls++;
       steps.push(toolStep);
@@ -270,6 +305,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           steps, findings: allFindings, iterations: 0, tokensUsed: 0,
           durationMs: Date.now() - startTime, hitLimit: false,
         };
+        await publish('completed', result);
         this.emit('agent:complete', result);
         return result;
       }
@@ -291,7 +327,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       });
     }
 
-    for (let i = 0; i < maxIterations; i++) {
+    if (!bootstrapCompleted) bootstrapCompleted = true;
+    if (phase === 'bootstrap') await publish('planning');
+
+    for (let i = iteration; phase !== 'summary' && (i < maxIterations || pendingCalls.length > 0); i++) {
+      iteration = i;
       try {
         // Ask the LLM what to do next
         const callableToolDefs = toolDefs.filter(definition => {
@@ -300,12 +340,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         });
         const estimatedInputTokens = this.estimateModelInputTokens(messages, callableToolDefs);
         const remainingTokens = maxTotalTokens - tokensUsed;
-        if (remainingTokens <= estimatedInputTokens + 128) {
+        if (pendingCalls.length === 0 && remainingTokens <= estimatedInputTokens + 128) {
           hitLimit = true;
           break;
         }
         signal?.throwIfAborted();
-        const response = await this.llm.chatWithTools(messages, callableToolDefs, {
+        if (pendingCalls.length === 0) await publish('planning');
+        signal?.throwIfAborted();
+        const replayingBatch = pendingCalls.length > 0;
+        const response = replayingBatch ? { content: '', toolCalls: pendingCalls } : await this.llm.chatWithTools(messages, callableToolDefs, {
           maxTokens: Math.min(profile.responseTokens, remainingTokens - estimatedInputTokens),
           signal,
           temperature: 0.3, // Lower temperature for tool-using tasks
@@ -313,13 +356,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         signal?.throwIfAborted();
         consecutiveLlmFailures = 0;
 
-        tokensUsed += response.usage?.totalTokens
-          ?? this.estimateModelTokens(messages, response.content || '', callableToolDefs);
+        if (!replayingBatch) {
+          tokensUsed += ('usage' in response ? response.usage?.totalTokens : undefined)
+            ?? this.estimateModelTokens(messages, response.content || '', callableToolDefs);
+        }
 
         // If the LLM wants to call tools
         if (response.toolCalls?.length) {
           // Record the assistant's reasoning
-          if (response.content) {
+          if (!replayingBatch && response.content) {
             const thinkStep: AgentStep = {
               iteration: i,
               type: 'reasoning',
@@ -332,21 +377,25 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
           // Add assistant message to context (with tool calls)
           const remainingCalls = Math.max(0, profile.maxToolCalls - totalToolCalls);
-          const requestedCalls = response.toolCalls.slice(0, remainingCalls);
+          const requestedCalls = replayingBatch ? [...pendingCalls] : response.toolCalls.slice(0, remainingCalls);
           if (requestedCalls.length === 0) {
             hitLimit = true;
             break;
           }
-          messages.push({
-            role: 'assistant',
-            content: response.content || '',
-            toolCalls: requestedCalls,
-          });
+          if (!replayingBatch) {
+            messages.push({
+              role: 'assistant',
+              content: response.content || '',
+              toolCalls: requestedCalls,
+            });
+          }
 
           // Execute each tool call
-          const findingsBefore = allFindings.length;
+          if (!replayingBatch) findingsBeforeBatch = allFindings.length;
+          pendingCalls = [...requestedCalls];
+          await publish('tool_batch');
           for (const toolCall of requestedCalls) {
-            totalToolCalls++;
+            signal?.throwIfAborted();
             // ANTI-STALL: a byte-identical repeat is almost always wasted — steer instead of re-running.
             const callHash = `${toolCall.name}:${JSON.stringify(toolCall.arguments || {})}`;
             let toolStep: AgentStep;
@@ -368,11 +417,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
                 };
                 toolStep = { iteration: i, type: 'tool_call', toolName: toolCall.name, toolArgs: toolCall.arguments, toolResult: exhausted, timestamp: Date.now() };
               } else {
+                if (!toolDefs.some(definition => definition.name === toolCall.name) && replayingBatch) throw new UnsafeResumeError(toolCall);
+                activeCall = toolCall;
+                await publish('tool_batch');
                 toolStep = await this.executeTool(toolCall, target, task, i, signal);
                 toolCallCounts.set(toolCall.name, count + 1);
                 seenCalls.set(callHash, String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160));
               }
             }
+            totalToolCalls++;
             steps.push(toolStep);
 
             // Collect findings — tag with REAL tool provenance (the output that backs them)
@@ -404,11 +457,15 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
                   + 'Do not launch more overlapping port ranges. Use the evidence already collected and finish the task, or use a genuinely different non-port-scan tool only if essential.]',
               });
             }
+            activeCall = undefined;
+            pendingCalls.shift();
+            // Save the next exact call without asking the model to re-plan completed work.
+            if (pendingCalls.length > 0) await publish('tool_batch');
           }
 
           // ANTI-STALL: after a run of iterations with no new findings, steer (once) toward a new
           // vector or a final debrief — don't let the agent grind the budget on a dead approach.
-          noProgress = allFindings.length > findingsBefore ? 0 : noProgress + 1;
+          noProgress = allFindings.length > findingsBeforeBatch ? 0 : noProgress + 1;
           const noProgressLimit = profile.name === 'small_model_30b' ? 2 : 4;
           if (noProgress >= noProgressLimit && i < maxIterations - 1) {
             messages.push({
@@ -427,6 +484,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
               role: 'user',
               content: 'Ignore transport/history notices. Re-read the preserved ROLE, SCOPE, MISSION, KNOWN EVIDENCE, WORKFLOW and OUTPUT sections, then perform the mission or return the required RESULT format.',
             });
+            iteration = i + 1;
+            await publish('planning');
             continue;
           }
           // LLM finished reasoning — this is the final answer.
@@ -455,16 +514,20 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
             hitLimit: false,
           };
 
+          await publish('completed', result);
           this.emit('agent:complete', result);
           return result;
         }
 
+        iteration = i + 1;
+        await publish('planning');
         // Check token budget
         if (tokensUsed >= maxTotalTokens || totalToolCalls >= profile.maxToolCalls) {
           hitLimit = true;
           break;
         }
       } catch (error) {
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
         signal?.throwIfAborted();
         this.emit('agent:error', { error: error as Error, step: i });
 
@@ -484,16 +547,22 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           role: 'user',
           content: `[System: Tool execution error: ${errMsg}. Please continue with available information or try a different approach.]`,
         });
+        iteration = i + 1;
+        await publish('planning');
       }
     }
 
     signal?.throwIfAborted();
     // Hit iteration or token limit — ask LLM for a final summary
     hitLimit = true;
-    messages.push({
-      role: 'user',
-      content: 'The step budget is exhausted. Return the required RESULT format now. Use only collected evidence; do not add claims or request tools.',
-    });
+    if (phase !== 'summary') {
+      messages.push({
+        role: 'user',
+        content: 'The step budget is exhausted. Return the required RESULT format now. Use only collected evidence; do not add claims or request tools.',
+      });
+    }
+    await publish('summary');
+    signal?.throwIfAborted();
 
     let summary = 'Agent reached iteration limit without producing a final summary.';
     let finalSummaryError: string | undefined;
@@ -544,6 +613,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       finalSummaryError,
     };
 
+    await publish('completed', result);
     this.emit('agent:complete', result);
     return result;
   }

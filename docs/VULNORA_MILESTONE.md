@@ -116,3 +116,11 @@ offering a resumable menu. A completed project opens its results without startin
   theme/migration cases pass. Scanner checkpoint integration remains pending.
 - The Windows legacy launcher is backed up and pinned to its installed baseline
   during development; a fresh `tempest --help` invocation still passes.
+- GitHub run `38417343283` passes on Windows and Ubuntu after canonicalizing the
+  Windows agent fixture's short temporary path; actual subprocess checks remain intact.
+- Agent checkpoints retain exact pending tool calls, full model context, completed
+  steps/findings, dedup state and cumulative budgets. Persistence is awaited before
+  execution; interrupted POST/unknown tools are held, and checkpoint failures bypass
+  task decomposition. Nine focused recovery cases pass, including disk round-trip of
+  a partial batch. Full regression: 52 suites, 585 passed, 16 POSIX skipped, 11
+  preflight checks passed. Whole scanner/project/UI recovery is still pending.

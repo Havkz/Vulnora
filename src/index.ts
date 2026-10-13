@@ -123,6 +123,8 @@ export type { CoverageCapability, CoverageEntry, CoverageSnapshot, CoverageStatu
 // Agent Loop
 export { AgentLoop, createAgentLoop, runAgentTask } from './agent/index.js';
 export type { AgentLoopOptions, AgentStep, AgentResult, AgentEvents } from './agent/index.js';
+export { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
+export type { AgentCheckpoint } from './agent/checkpoint.js';
 
 // OPSEC
 export {
@@ -273,6 +275,7 @@ import { AnalysisEngine } from './analysis/index.js';
 import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
+import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
 import { OpGeneral } from './general/index.js';
 import {
   evaluateCoverage,
@@ -1162,6 +1165,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     if (pendingTasks.length === 0) return;
 
     for (const task of pendingTasks) {
+      if (this.paused) break;
       // Skip if already being dispatched
       if (this.activeDispatches.has(task.id)) continue;
 
@@ -1288,6 +1292,12 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       }).catch((_error) => {
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
+        if (_error instanceof CheckpointWriteError || _error instanceof CheckpointRestoreError || _error instanceof UnsafeResumeError) {
+          this.pause();
+          taskQueue.updateStatus(task.id, 'pending');
+          this.emit('recovery:blocked', { task, error: _error });
+          return;
+        }
         try {
           taskQueue.fail(task.id, _error instanceof Error ? _error.message : String(_error));
         } catch (failErr) {
@@ -1476,6 +1486,10 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     const configuredReceipt = process.env.VULNORA_AUTHORIZATION_RECEIPT?.trim();
     const approvedTools = this.approval.approvedTools();
     const agentLoop = new AgentLoop(this.llm, this.arsenal, {
+      onCheckpoint: async (_checkpoint, task) => {
+        try { await this.hooks.onCheckpoint?.(task); }
+        catch (error) { this.pause(); throw error; }
+      },
       sourceAgent: callsign,
       maxIterations,
       maxTokens: 50000,
