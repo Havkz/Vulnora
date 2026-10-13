@@ -159,6 +159,16 @@ describe.skipIf(process.platform === 'win32')('resolveBin — macOS/POSIX well-k
 });
 
 describe.skipIf(process.platform === 'win32')('detectLocalAgents — wiring: a well-known-dir CLI is reported installed (issue #78)', () => {
+  it('prefers the installed Linux CLI over an inherited foreign npm PATH shim in WSL', () => {
+    const home = scratch();
+    const inherited = join(home, 'foreign-npm');
+    putExe(inherited, 'codex');
+    const native = putExe(join(home, '.local', 'bin'), 'codex');
+    vi.stubEnv('VULNORA_AGENT_HOME', home);
+    vi.stubEnv('PATH', inherited + ':/usr/bin:/bin');
+    vi.stubEnv('WSL_DISTRO_NAME', 'Vulnora-fixture');
+    expect(resolveBin('codex')).toBe(native);
+  });
   it('reports Claude Code installed + versioned when `claude` lives in ~/.local/bin and PATH omits it', async () => {
     const home = scratch();
     const claudePath = putExe(join(home, '.local', 'bin'), 'claude');

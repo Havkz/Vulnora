@@ -191,3 +191,22 @@ offering a resumable menu. A completed project opens its results without startin
   detection/dispatch case allows its two separately bounded subprocess deadlines.
   Full live terminal/model checks pass after unloading confirmation was added.
   Hosted GitHub runs for renderer/scope still fail before runner startup due to billing.
+
+- Clean-install Linux validation of committed CLI milestone 6dddbf4 also passes:
+  59 suites, 649 tests passed and 4 Windows skips; 11 preflight checks, build and lint
+  pass. Validation directory: /home/tempest/.vulnora/validation/6dddbf4.qEm0qu.
+
+- Codex/Claude availability now asks official CLI authentication status instead of
+  inferring a working login from credential-file presence. Status output is reduced to
+  booleans; no auth contents or account identifiers are read, copied or logged.
+  Version/auth subprocesses close stdin, hide Windows helper windows and have deadlines.
+- WSL connector resolution prefers installed Linux CLIs over inherited Windows npm
+  wrappers. A real check resolves /home/tempest/.local/bin/codex v0.162.1, confirms its
+  existing login through login status, requests an offline base64_decode tool through
+  LLMBackbone, and executes it successfully: CODEX_NATIVE_TOOL_CALL_OK. Claude is
+  currently absent on Windows; its supported status paths have controlled CLI tests.
+- Authentication milestone checks: 60 Windows suites, 642 passed and 17 POSIX skips;
+  11 preflight checks passed. Build/typecheck and focused lint pass. Startup readiness,
+  streaming transport and fallback ownership still need integration/acceptance work.
+  References: https://developers.openai.com/codex/cli/reference and
+  https://code.claude.com/docs/en/cli-reference (official sources checked 2026-10-13).

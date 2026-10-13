@@ -5,8 +5,8 @@
 // (Claude Code, Codex, Hermes) and drive them headlessly as vulnora operators.
 //
 // SECURITY POSTURE (important):
-//   - We NEVER read, print, log, or transmit credential contents. Auth is detected purely by the
-//     PRESENCE of the CLI's own auth artifact (a file path or a macOS keychain item) — never its bytes.
+//   - We NEVER read, print, log, or transmit credential contents. Codex/Claude report their own
+//     authentication through official CLI status commands; legacy Hermes uses artifact presence.
 //   - We do NOT enter or store any key. The CLIs are already logged in by the user; we only invoke them.
 //   - A "ping"/"dispatch" spawns the user's own CLI as a child process with a prompt and captures its
 //     stdout (the model's reply to OUR prompt — not secrets). Everything is local + user-initiated.
@@ -261,7 +261,11 @@ export function resolveBin(bin: string): string | undefined {
   }
   if (bin.includes('/')) return bin;
   const path = process.env.PATH || '';
-  for (const dir of [...path.split(':'), ...wellKnownBinDirs(agentHome())]) {
+  const native = wellKnownBinDirs(agentHome());
+  // WSL inherits Windows npm shims; prefer the installed Linux CLI just as the launcher does.
+  const directories = process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP
+    ? [...native, ...path.split(':')] : [...path.split(':'), ...native];
+  for (const dir of directories) {
     // Absolute dirs only: skips blank PATH segments (whose POSIX "= cwd" meaning is a known
     // CWD-execution vector) and relative segments (which would leak a non-absolute `path`).
     if (!dir.startsWith('/')) continue;
@@ -293,7 +297,24 @@ export function spawnAgent(resolvedBin: string, args: string[], options: import(
   return spawn(invocation.command, invocation.args, { ...options, shell: false });
 }
 
-function authState(spec: AgentSpec): { authed: boolean; method?: string } {
+async function authState(spec: AgentSpec, executable: string): Promise<{ authed: boolean; method?: string }> {
+  if (spec.id === 'codex' || spec.id === 'claude') {
+    const args = spec.id === 'codex' ? ['login', 'status'] : ['auth', 'status'];
+    return new Promise(resolve => {
+      try {
+        const invocation = agentCommand(executable, args);
+        const child = execFile(invocation.command, invocation.args, { env: childEnv(), timeout: 8000, maxBuffer: 65536, windowsHide: true, shell: false }, (error, stdout) => {
+          if (error) { resolve({ authed: false }); return; }
+          if (spec.id === 'codex') { resolve({ authed: true, method: 'cli_status' }); return; }
+          try {
+            const status = JSON.parse(String(stdout)) as { loggedIn?: boolean };
+            resolve({ authed: status.loggedIn === true, method: 'cli_status' });
+          } catch { resolve({ authed: false }); }
+        });
+        child.stdin?.end();
+      } catch { resolve({ authed: false }); }
+    });
+  }
   for (const a of spec.authArtifacts) {
     if (existsSync(expand(a))) return { authed: true, method: 'file' };
   }
@@ -323,22 +344,21 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
       return;
     }
     const installedNoVersion = () => {
-      const auth = authState(spec);
       resolve({
         ...base, installed: true, path: exe !== spec.bin ? exe : undefined, version: '?',
-        authed: auth.authed, authMethod: auth.method, ready: auth.authed,
+        authed: false, ready: false,
       });
     };
     try {
       const invocation = agentCommand(exe, spec.versionArgs);
-      execFile(invocation.command, invocation.args, { timeout: 8000, shell: false }, (err, stdout) => {
+      const child = execFile(invocation.command, invocation.args, { env: childEnv(), timeout: 8000, windowsHide: true, shell: false }, async (err, stdout) => {
         if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
           resolve({ ...base, installed: false, authed: false, ready: false });
           return;
         }
         // even a non-zero exit but no ENOENT means the binary exists
         const version = spec.parseVersion(String(stdout || ''));
-        const auth = authState(spec);
+        const auth = !err && version !== '?' ? await authState(spec, exe) : { authed: false };
         resolve({
           ...base,
           installed: true,
@@ -349,6 +369,7 @@ function detectOne(spec: AgentSpec): Promise<AgentDetection> {
           ready: auth.authed,
         });
       });
+      child.stdin?.end();
     } catch {
       // Synchronous spawn failures (for example restricted child-process creation) should not reject
       // the whole detection batch; the binary exists, but its version could not be probed.
