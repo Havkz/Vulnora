@@ -6,6 +6,9 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
+import { severityStyle, type TerminalTheme } from './theme.js';
+import { formatTerminalReport } from '../terminal-report.js';
+import wrapAnsi from 'wrap-ansi';
 
 type Configuration = typeof settings;
 export interface InteractiveServices {
@@ -56,10 +59,16 @@ export class InteractiveApp {
     await this.document(title, text, 'Enter Continue    Esc Back    Ctrl+C Save & Quit');
   }
 
-  private async document(title: string, text: string, footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+C Save & Quit'): Promise<void> {
+  private async document(title: string, text: string, footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+C Save & Quit', markdown = false): Promise<void> {
     let offset = 0;
+    const safeText = terminalText(text);
+    const content = markdown ? formatTerminalReport(safeText, this.surface.colors) : safeText;
+    let width = 0; let lines: string[] = [];
     this.surface.show(() => {
-      const lines = wrapTerminalText(text, this.surface.columns - 4);
+      if (width !== this.surface.columns - 4) {
+        width = this.surface.columns - 4;
+        lines = wrapAnsi(content, Math.max(1, width), { hard: true, wordWrap: false, trim: false }).split('\n');
+      }
       const room = Math.max(1, this.surface.rows - 5);
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - room)));
       return { lines: [this.surface.colors.accent(terminalText(title)), '', ...lines.slice(offset, offset + room).map(line => '  ' + this.surface.colors.foreground(line))], footer };
@@ -161,22 +170,41 @@ export class InteractiveApp {
     const session = this.session;
     if (!session) throw new Error('No project is open.');
     const history = await this.services.store.readLogs(session.project.id);
-    const logs = history.events.map(event => formatProjectLog(event as ProjectLogEvent));
+    const logs = history.events as ProjectLogEvent[];
     let tail = true; let offset = 0;
+    let width = 0; let processed = 0;
+    let wrapped: { text: string; event: number; character: number }[] = [];
     this.issue = '';
-    const onLog = (event: ProjectLogEvent) => { logs.push(formatProjectLog(event)); this.surface.refresh(); };
+    const onLog = (event: ProjectLogEvent) => { logs.push(event); this.surface.refresh(); };
     const onError = (error: Error) => { this.issue = error.message; this.surface.refresh(); };
     session.on('log', onLog); session.on('error', onError);
     const render = () => {
       const header = [`${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
         session.project.target.input, `Provider: ${session.command.llm.getActiveProvider().provider} · ${session.command.llm.getActiveProvider().model}`];
       const heading = header.flatMap(line => wrapTerminalText(line, this.surface.columns - 4));
-      const lines = logs.flatMap(line => wrapTerminalText(line, this.surface.columns - 4));
+      const resized = width !== this.surface.columns - 4;
+      const anchor = resized && !tail ? wrapped[offset] : undefined;
+      if (resized) { width = this.surface.columns - 4; processed = 0; wrapped = []; }
+      for (; processed < logs.length; processed++) {
+        const clean = terminalText(formatProjectLog(logs[processed]));
+        const style = projectLogStyle(logs[processed], this.surface.colors);
+        let character = 0;
+        for (const line of wrapTerminalText(clean, width)) {
+          wrapped.push({ text: style(line), event: processed, character });
+          character += line.length;
+          if (clean[character] === '\n') character++;
+        }
+      }
+      if (anchor) {
+        wrapped.forEach((line, index) => {
+          if (line.event === anchor.event && line.character <= anchor.character) offset = index;
+        });
+      }
       const completed = session.project.status === 'completed';
       const room = Math.max(1, this.surface.rows - heading.length - (completed || this.issue ? 7 : 5));
-      offset = tail ? Math.max(0, lines.length - room) : Math.max(0, Math.min(offset, Math.max(0, lines.length - room)));
+      offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
       return { lines: [...heading.map(line => '  ' + this.surface.colors.accent(line)), '',
-        ...lines.slice(offset, offset + room).map(line => '  ' + this.surface.colors.foreground(line)), '',
+        ...wrapped.slice(offset, offset + room).map(line => '  ' + line.text), '',
         ...(this.issue ? wrapTerminalText(this.issue, this.surface.columns - 4).map(line => this.surface.colors.error(line)) : []),
         ...(completed ? [this.surface.colors.muted('Press Enter to view results')] : [])],
       footer: 'Esc Pause    Ctrl+C Save & Quit    PgUp/PgDn Logs    End Live' };
@@ -212,7 +240,7 @@ export class InteractiveApp {
     if (!session) throw new Error('No project is open.');
     const report = await session.results();
     const exported = await this.services.store.exportReport(session.project);
-    await this.document(`${session.project.name} · Results`, `Saved report: ${exported}\n\n${report}`);
+    await this.document(`${session.project.name} · Results`, `Saved report: ${exported}\n\n${report}`, undefined, true);
   }
 
   private async settings(): Promise<void> {
@@ -274,6 +302,20 @@ export function formatProjectLog(event: ProjectLogEvent): string {
     return `${time} ${event.category}\n${detail}\n${JSON.stringify(metadata, null, 2)}`;
   }
   return `${time} ${event.category}\n${typeof event.data === 'string' ? event.data : JSON.stringify(event.data, null, 2)}`;
+}
+
+export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
+  const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+  const status = String(data.kind || data.action || event.category);
+  if (data.success === false || /error|failed|blocked/i.test(status)) return colors.error;
+  if (/fallback|deferred|skipped/i.test(status)) return colors.warning;
+  const finding = data.finding && typeof data.finding === 'object' ? data.finding as Record<string, unknown> : {};
+  const severity = data.severity || finding.severity;
+  if (typeof severity === 'string') return severityStyle(severity, colors);
+  if (/completed|executed/i.test(status) || data.success === true) return colors.success;
+  if (/thinking|started|progress/i.test(status)) return colors.active;
+  if (/paused|closed/i.test(status)) return colors.muted;
+  return colors.foreground;
 }
 
 /** Dynamic initialization keeps terminal ownership active while services load. */

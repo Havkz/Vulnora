@@ -18,7 +18,14 @@ import type { MissionControl } from '../mission/index.js';
 import type { OpsecController } from '../opsec/index.js';
 import { randomUUID } from 'crypto';
 import { SEVERITY_SCORES } from '../evidence/index.js';
-import { redactString } from '../redact.js';
+import { redactString, redactSecrets } from '../redact.js';
+
+function appendCodeBlock(lines: string[], content: string): void {
+  let length = 3;
+  for (const run of content.matchAll(/`+/g)) length = Math.max(length, run[0].length + 1);
+  const fence = '`'.repeat(length);
+  lines.push('', fence, content, fence, '');
+}
 
 // =============================================================================
 // ANALYSIS ENGINE
@@ -287,7 +294,8 @@ export class AnalysisEngine {
       lines.push('');
       lines.push(`**Severity:** ${finding.severity.toUpperCase()}`);
       if (finding.cvss) lines.push(`**CVSS:** ${finding.cvss}`);
-      if (finding.cve?.length) lines.push(`**CVE:** ${finding.cve.join(', ')}`);
+      if (finding.cve?.length) lines.push(`**CVE:** ${finding.cve.map(value => redactString(value)).join(', ')}`);
+      if (finding.cwe?.length) lines.push(`**CWE:** ${finding.cwe.map(value => redactString(value)).join(', ')}`);
       lines.push('');
       lines.push('**Description:**');
       lines.push(redactString(finding.description));
@@ -303,9 +311,17 @@ export class AnalysisEngine {
         lines.push('**Evidence:**');
         for (const evidence of finding.evidence) {
           const content = redactString(evidence.content);
-          lines.push(`- ${evidence.type}: \`${content.substring(0, 100)}${content.length > 100 ? '...' : ''}\``);
+          lines.push(`- ${evidence.type} (timestamp: ${evidence.timestamp}):`);
+          appendCodeBlock(lines, content);
+          if (evidence.metadata) {
+            lines.push('**Evidence Metadata:**');
+            appendCodeBlock(lines, JSON.stringify(redactSecrets(evidence.metadata), null, 2));
+          }
         }
         lines.push('');
+      }
+      if (finding.references?.length) {
+        lines.push('**References:**', ...finding.references.map(reference => `- ${redactString(reference)}`), '');
       }
     }
 

@@ -66,6 +66,21 @@ function makeReport(): Report {
 }
 
 describe('AnalysisEngine report redaction', () => {
+  it('exports complete long evidence, metadata and classifications without leaking new credential fields', () => {
+    const report = makeReport();
+    const literal = 'FULL EVIDENCE\n' + 'All technical details **stay literal**\n'.repeat(100) + '\n````\nLAST EVIDENCE BYTE';
+    report.findings[0].evidence[0].content = literal;
+    report.findings[0].evidence[0].metadata = { responseStatus: 200, authorization: 'Bearer metadataabcdefghijklmnop' };
+    report.findings[0].cwe = ['CWE-200', 'api_key=classificationsecretvalue'];
+    report.findings[0].references = ['https://fixture.test/details', 'https://admin:hunter2@fixture.test/secret'];
+    const markdown = (Object.create(AnalysisEngine.prototype) as AnalysisEngine).exportToMarkdown(report);
+    expect(markdown).toContain(literal);
+    expect(markdown).toContain('`````\n' + literal + '\n`````');
+    expect(markdown).toContain('CWE-200'); expect(markdown).toContain('https://fixture.test/details');
+    expect(markdown).toContain('"responseStatus": 200'); expect(markdown).toContain('timestamp: 123');
+    expect(markdown).not.toContain('metadataabcdefghijklmnop'); expect(markdown).not.toContain('hunter2');
+    expect(markdown).not.toContain('classificationsecretvalue');
+  });
   it('redacts secrets before exporting Markdown reports', () => {
     const engine = Object.create(AnalysisEngine.prototype) as AnalysisEngine;
     const markdown = engine.exportToMarkdown(makeReport());

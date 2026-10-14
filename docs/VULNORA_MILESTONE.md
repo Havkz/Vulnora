@@ -333,3 +333,19 @@ offering a resumable menu. A completed project opens its results without startin
   reports, adaptive modes and primary/local/deterministic providers. Old unrelated
   cloud/mobile/binary marketing, download examples and unsupported benchmark
   claims were removed. Final installed-command validation remains explicit.
+- Live logs now use the shared status/severity palette and cache their wrapped rows.
+  Unchanged refreshes reuse existing rows; appended events are wrapped once and
+  resizing preserves the current event/character reading anchor. Detailed event
+  text and the durable journal are unchanged.
+- Interactive reports now use the existing terminal Markdown formatter with the
+  actual surface theme and ANSI-preserving wrapping. Fenced technical evidence is
+  treated literally instead of interpreting payload Markdown. Document wrapping is
+  cached until terminal width changes. The already-installed wrap-ansi 8.1.0 is
+  declared directly; no new runtime package or formatter implementation is added.
+- The shared report export no longer truncates each evidence item to 100 characters.
+  It retains complete redacted evidence, timestamps/metadata, CWE classifications
+  and references, with fences chosen to contain embedded backticks safely.
+- Presentation/report intermediate Windows validation: 65 suites, 703 passed/
+  17 POSIX skips, 11 preflight checks; build/typecheck and lint pass (0 errors).
+  Focused interactive tests also verify stable wrapping, severity colors, resizing
+  without losing the reading anchor and complete journal content.

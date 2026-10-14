@@ -34,6 +34,16 @@ export function createTheme(level = chalk.level) {
 export const theme = createTheme();
 export type TerminalTheme = ReturnType<typeof createTheme>;
 
+export function severityStyle(severity: string, colors: TerminalTheme = theme) {
+  switch (severity.toLowerCase()) {
+    case 'critical': case 'high': case 'severe': return colors.error;
+    case 'medium': return colors.warning;
+    case 'low': return colors.success;
+    case 'info': return colors.muted;
+    default: return colors.foreground;
+  }
+}
+
 export function visibleWidth(text: string): number {
   return stringWidth(text);
 }

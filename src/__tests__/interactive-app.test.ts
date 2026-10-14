@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InteractiveApp, formatProjectLog, type InteractiveServices } from '../ui/app.js';
 import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
+import * as terminal from '../ui/terminal.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
 import type { LLMConfig } from '../types/index.js';
@@ -38,10 +39,38 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
   const app = new InteractiveApp(surface, services);
   const start = () => { const result = app.run().catch(error => error); running.push(result); return result; };
   const wait = async (text: string) => { await expect.poll(() => stripVTControlCharacters(transcript), { timeout: 5000 }).toContain(text); };
-  return { input, surface, store, open, start, wait, session: () => session, transcript: () => transcript };
+  return { input, output, surface, store, open, start, wait, session: () => session, transcript: () => transcript };
 }
 
 describe('durable interactive project flow', () => {
+  it('colors full live errors, caches stable logs, and retains the visible content anchor on resize', async () => {
+    const f = await fixture(); const result = f.start();
+    const screens = vi.spyOn(f.surface, 'show');
+    const wrapping = vi.spyOn(terminal, 'wrapTerminalText');
+    f.input.write('\rLog fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
+    await f.wait('Esc Pause');
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    const detail = 'EVIDENCE_BEGIN\n' + Array.from({ length: 200 }, (_, index) => `Evidence row ${String(index).padStart(3, '0')} · complete technical detail`).join('\n') + '\nEVIDENCE_END';
+    session.command.emit('scan:progress', { id: 'colored-fixture', timestamp: Date.now(), kind: 'tool_result',
+      operatorId: 'fixture', callsign: 'Fixture', archetype: 'recon', toolName: 'http_request', detail, success: false });
+    await f.wait('EVIDENCE_END');
+    expect(f.transcript()).toContain(f.surface.colors.error('EVIDENCE_END'));
+    const counted = () => wrapping.mock.calls.filter(([text]) => text.includes('EVIDENCE_BEGIN')).length;
+    const before = counted();
+    for (let index = 0; index < 20; index++) f.surface.refresh();
+    expect(counted()).toBe(before);
+    f.input.write('\x1b[H' + '\x1b[B'.repeat(30));
+    const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines[4] || '').trim();
+    await expect.poll(firstLog).toContain('Evidence row');
+    const anchor = firstLog().slice(0, 20);
+    f.output.columns = 40; f.output.emit('resize');
+    expect(firstLog()).toContain(anchor); expect(counted()).toBe(before + 1);
+    await f.store.flush(session.project.id);
+    const journal = await f.store.readLogs(session.project.id);
+    expect(journal.events.some(event => (event as { data?: { detail?: string } }).data?.detail === detail)).toBe(true);
+    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
   it('saves the name and incomplete target before READY, preserves edits on Esc, and never starts automatically', async () => {
     const f = await fixture(); const result = f.start();
     const prompts = vi.spyOn(f.surface, 'prompt');
