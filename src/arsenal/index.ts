@@ -3415,7 +3415,8 @@ function portCountFromSpec(ports?: string): number | undefined {
 }
 
 /** Keep broad single-host scans finite on filtered networks without changing targeted scans. */
-export function normalizeNmapRuntimeFlags(flags: string[], ports?: string): string[] {
+export function normalizeNmapRuntimeFlags(flags: string[], ports?: string, target?: string): string[] {
+  if (target && net.isIP(hostFromTargetValue(target) || '') === 6 && !flags.includes('-6')) flags = [...flags, '-6'];
   const portCount = portCountFromSpec(ports);
   if ((portCount || 0) <= 10_000) return [...flags];
   const normalized = [...flags];
@@ -3457,10 +3458,10 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       if (!(await isToolAvailable('nmap'))) {
         return { success: false, error: 'nmap is not installed. Install it with: apt install nmap' };
       }
-      const target = context.parameters.target as string;
+      const target = (context.parameters.target as string).replace(/^\[([a-f\d:]+)\]$/i, '$1');
       const requestedFlags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4'); // drop -oN/--script/-iL injection
       const ports = context.parameters.ports as string | undefined;
-      const flags = normalizeNmapRuntimeFlags(requestedFlags, ports);
+      const flags = normalizeNmapRuntimeFlags(requestedFlags, ports, target);
 
       const args = [...flags];
       if (ports) args.push('-p', ports);

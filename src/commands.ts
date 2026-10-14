@@ -35,7 +35,7 @@ program
   .description('Show current configuration status')
   .action(() => {
     showBanner();
-    const settings = config.getAll();
+    const settings = config.getLLMConfig();
 
     console.log(theme.emphasis('Configuration Status:\n'));
 
@@ -44,8 +44,8 @@ program
     });
 
     table.push(
-      [theme.active('Default Provider'), settings.defaultProvider],
-      [theme.active('Default Model'), settings.defaultModel],
+      [theme.active('Default Provider'), settings.provider],
+      [theme.active('Default Model'), settings.model],
       [theme.active('OpenRouter API Key'), hasApiKey('openrouter') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
       [theme.active('Venice API Key'), hasApiKey('venice') ? theme.success('✓ Configured') : theme.error('✗ Not set')],
       [theme.active('Anthropic API Key'), hasApiKey('anthropic') ? theme.success('✓ Configured') : theme.error('✗ Not set')],

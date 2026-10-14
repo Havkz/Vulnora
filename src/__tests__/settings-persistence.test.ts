@@ -3,6 +3,8 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -36,6 +38,10 @@ describe('interactive setting persistence', () => {
     expect(config.getLLMConfig().provider).toBe('codex');
     expect(config.getLLMConfig('local').model).toBe('old-installed:30b');
     expect(config.getApiKey('openai')).toBe('synthetic-old-environment-key');
+    const status = () => stripVTControlCharacters(execFileSync(process.execPath,
+      ['--import', 'tsx', fileURLToPath(new URL('../cli.ts', import.meta.url)), 'status'],
+      { encoding: 'utf8', windowsHide: true, env: process.env }));
+    expect(status()).toMatch(/Default Provider\s*│ codex/);
     config.setDefaultModel('local', 'chosen-installed:7b');
     config.setDefaultModel('openai', 'chosen-fixture-model');
     config.setDefaultProvider('openai');
@@ -48,6 +54,10 @@ describe('interactive setting persistence', () => {
     expect(restored.getLLMConfig('local')).toMatchObject({ model: 'chosen-installed:7b', apiKey: 'synthetic-replaced-local-key' });
     expect(restored.getLLMConfig('codex').provider).toBe('codex');
     expect(restored.getLLMConfig('local', 'explicit-call:3b').model).toBe('explicit-call:3b');
+    const displayed = status();
+    expect(displayed).toMatch(/Default Provider\s*│ openai/);
+    expect(displayed).toContain('chosen-fixture-model');
+    expect(displayed).not.toContain('synthetic-replaced-provider-key');
     if (process.platform === 'win32') {
       const script = `$acl = [IO.File]::GetAccessControl($env:VULNORA_TEST_SETTINGS_FILE);
         [string]::Join('|', $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value)`;

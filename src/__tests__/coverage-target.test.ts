@@ -18,6 +18,14 @@ describe('coverage recovery target handling', () => {
     expect(plan('http://fixture.test:8081/base/?mode=read', 'ffuf_fuzz')?.parameters.url)
       .toBe('http://fixture.test:8081/base/FUZZ?mode=read');
   });
+  it('includes the explicit website port when planning service detection', () => {
+    const target = 'http://fixture.test:8081/base';
+    const snapshot = evaluateCoverage(target, []); snapshot.retryable = ['service_detection'];
+    expect(planCoverageRecovery({ snapshot, records: [], availableTools: new Set(['nmap_scan']), attempts: {},
+      network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
+      budget: { remaining: { tool_call_budget: 10, total_request_budget: 10 } as TargetBudgets }, includeValidation: false })?.parameters)
+      .toMatchObject({ target: 'fixture.test', ports: '80,443,8081' });
+  });
   it.each([
     ['http://fixture.test:8081/base', 'dns_lookup', { domain: 'fixture.test', type: 'A' }],
     ['https://[::1]:8443/base', 'ssl_scan', { host: '::1', port: 8443 }],

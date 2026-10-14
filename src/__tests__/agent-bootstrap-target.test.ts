@@ -10,7 +10,8 @@ describe('local-agent reconnaissance target handling', () => {
     ['Content discovery', 'https://[::1]:8443/base', {}, 'robots_txt_fetch', { url: 'https://[::1]:8443/base' }],
     ['Web probing', '2001:db8::10', {}, 'header_analysis', { url: 'https://[2001:db8::10]' }],
     ['DNS Enumeration', 'https://fixture.test:8443/base', {}, 'dns_lookup', { domain: 'fixture.test', type: 'A' }],
-    ['Port detection', 'http://[::1]:8080/base', {}, 'port_scan', { target: '::1', ports: '80,443', timeout: 2000 }],
+    ['Port detection', 'http://[::1]:8080/base', {}, 'port_scan', { target: '::1', ports: '80,443,8080', timeout: 2000 }],
+    ['Port detection', 'https://fixture.test:8443/base', {}, 'port_scan', { target: 'fixture.test', ports: '80,443,8443', timeout: 2000 }],
     ['Web probing', 'fixture.test', { url: 'http://fixture.test:9000/legacy/path' }, 'header_analysis', { url: 'http://fixture.test:9000/legacy/path' }],
     ['Web probing', 'fixture.test', { url: 'http://other.test' }, 'header_analysis', { url: 'https://fixture.test' }],
   ])('preserves the intended %s target %s', async (name, address, metadata, tool, parameters) => {

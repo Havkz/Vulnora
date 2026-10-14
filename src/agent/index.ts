@@ -681,7 +681,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     }
 
     if (taskName.includes('port') && hasTool('port_scan')) {
-      return { id, name: 'port_scan', arguments: { target: host, ports: '80,443', timeout: 2000 } };
+      const ports = [...new Set([80, 443, Number(new URL(url).port) || 443])].join(',');
+      return { id, name: 'port_scan', arguments: { target: host, ports, timeout: 2000 } };
     }
 
     if ((taskName.includes('web') || taskName.includes('fingerprint')) && hasTool('header_analysis')) {

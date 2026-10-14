@@ -132,6 +132,7 @@ export function planCoverageRecovery(params: {
   const address = targetUrl(snapshot.target);
   const target = address.hostname.replace(/^\[|\]$/g, '');
   const url = address.href;
+  const webPorts = [...new Set([80, 443, Number(address.port) || 443])].join(',');
 
   if (open('dns_enumeration') && count('dns_enumeration') < 1 && availableTools.has('dns_lookup')) return { capability: 'dns_enumeration', toolName: 'dns_lookup', parameters: { domain: target, type: 'A' }, repeatReason: 'previous_failure', description: 'DNS baseline recovery' };
   if (open('http_probe') && count('http_probe') < 2 && availableTools.has('http_request')) return { capability: 'http_probe', toolName: 'http_request', parameters: { url, method: 'GET', headers: {}, body: '' }, repeatReason: 'previous_failure', description: 'HTTP baseline recovery' };
@@ -146,7 +147,7 @@ export function planCoverageRecovery(params: {
     if (availableTools.has('port_scan')) return { capability: 'port_discovery', toolName: 'port_scan', parameters: { target, ports: '22,25,53,80,443,3000,8000,8080,8443', timeout: 3000 }, repeatReason: 'materially_different_configuration', description: 'Minimal common-port fallback' };
   }
   if (open('service_detection') && count('service_detection') < 2 && availableTools.has('nmap_scan')) {
-    return { capability: 'service_detection', toolName: 'nmap_scan', parameters: { target, ports: '80,443', flags: '-sV --version-light' }, repeatReason: 'materially_different_configuration', description: 'Service detection on evidenced web ports', requiredCapability: 'port_discovery', missingEvidence: 'Open-port evidence', retryAfterCapability: 'port_discovery' };
+    return { capability: 'service_detection', toolName: 'nmap_scan', parameters: { target, ports: webPorts, flags: '-sV --version-light' }, repeatReason: 'materially_different_configuration', description: 'Service detection on evidenced web ports', requiredCapability: 'port_discovery', missingEvidence: 'Open-port evidence', retryAfterCapability: 'port_discovery' };
   }
   if (open('content_discovery') && count('content_discovery') < 3) {
     if (count('content_discovery') === 0 && availableTools.has('ffuf_fuzz')) {
