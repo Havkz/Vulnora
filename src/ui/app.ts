@@ -6,7 +6,7 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { formatProjectLog, projectActivity } from './project-log.js';
+import { formatProjectLog, phaseLabel, projectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
@@ -196,10 +196,33 @@ export class InteractiveApp {
     let tail = true; let offset = 0;
     let width = 0; let processed = 0;
     let wrapped: { text: string; event: number; character: number }[] = [];
+    let reflowAnchor: typeof wrapped[number] | undefined;
+    const results = new Map<number, ProjectLogEvent>();
+    const resultEvents = new Set<number>();
+    const pending = new Map<string, number[]>();
+    const linkResult = (index: number): number | undefined => {
+      const event = logs[index];
+      if (event.category !== 'scan:progress') return;
+      const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
+      const key = JSON.stringify([data.operatorId, data.taskId, data.toolName]);
+      if (data.kind === 'tool_call') {
+        const calls = pending.get(key) || []; calls.push(index); pending.set(key, calls);
+      } else if (data.kind === 'tool_result') {
+        const call = pending.get(key)?.shift();
+        if (call !== undefined) { results.set(call, event); resultEvents.add(index); return call; }
+      }
+      return undefined;
+    };
+    logs.forEach((_event, index) => linkResult(index));
     let activity = 'Working'; let activitySince = Date.now();
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
       logs.push(event);
+      const changed = linkResult(logs.length - 1);
+      if (changed !== undefined && changed < processed) {
+        if (!tail) reflowAnchor = wrapped[offset];
+        processed = changed; wrapped = wrapped.filter(line => line.event < changed);
+      }
       const next = projectActivity(event);
       if (next && next !== activity) { activity = next; activitySince = Date.now(); }
       this.surface.refresh();
@@ -214,9 +237,11 @@ export class InteractiveApp {
     const render = () => {
       const active = session.command.llm.getActiveProvider();
       const dense = this.surface.rows < 18;
-      const header = [dense ? `${session.project.status} · ${session.project.progress}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
-        session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
+      const mission = session.command.mission.getActiveMission() || session.command.mission.getAllMissions().at(-1);
       const completed = session.project.status === 'completed';
+      const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}`,
+        dense ? `${session.project.status} · ${session.project.progress}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
+        session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
       const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),
         ...(completed ? wrapAnsi('Press Enter to view results', this.surface.panelColumns, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line)) : [])];
       const headroom = Math.max(1, this.surface.panelRows - bottom.length - (dense ? 1 : 3));
@@ -225,10 +250,12 @@ export class InteractiveApp {
         (headroom >= 3 ? header : [header[0], `${active.provider} · ${active.model}`]).slice(0, headroom)
           .map(line => fitTerminalText(line, this.surface.panelColumns));
       const resized = width !== this.surface.panelColumns;
-      const anchor = resized && !tail ? wrapped[offset] : undefined;
+      const anchor = resized && !tail ? wrapped[offset] : reflowAnchor;
+      reflowAnchor = undefined;
       if (resized) { width = this.surface.panelColumns; processed = 0; wrapped = []; }
       for (; processed < logs.length; processed++) {
-        const formatted = formatProjectLog(logs[processed], this.transcript, this.surface.colors, width);
+        if (resultEvents.has(processed)) continue;
+        const formatted = formatProjectLog(logs[processed], this.transcript, this.surface.colors, width, results.get(processed));
         const clean = terminalText(formatted);
         let character = 0;
         for (const line of formatted ? wrapAnsi(formatted, width, { hard: true, wordWrap: false, trim: false }).split('\n') : []) {
@@ -242,7 +269,7 @@ export class InteractiveApp {
           if (line.event === anchor.event && line.character <= anchor.character) offset = index;
         });
       }
-      const status = completed ? [] : [this.surface.colors.active(fitTerminalText(`${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
+      const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(`${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
       const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - status.length - (dense ? 0 : 2));
       offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),

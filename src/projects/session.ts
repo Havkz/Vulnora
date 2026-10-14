@@ -48,7 +48,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.on('command:stopped', () => {
       if (!this.closing && this.command.mission.getAllMissions().some(mission => mission.status === 'completed')) {
         this.project.status = 'completed';
-        this.record('project:completed', { projectId: project.id });
+        this.record('project:completed', { projectId: project.id, phase: this.command.mission.getAllMissions().at(-1)?.currentPhase });
       }
     });
   }

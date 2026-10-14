@@ -39,9 +39,11 @@ visual/acceptance gates.
 
 The main menu contains **Create New Project**, **Resume Project**, and **Settings**.
 Use arrows and Enter to select; Esc returns and Ctrl+X or Ctrl+C saves and quits.
-Startup expands provider checks into timed substeps. Live logs show tool invocations
-and three output lines; Ctrl+T toggles the full transcript. Commands, flags and values
-use distinct colors. The complete event journal is retained with each project.
+Startup expands provider checks into timed substeps. The live view pins the current
+scan stage and shows one `Ran` block per tool call, followed by three gray output
+lines and a blank line. Ctrl+T reveals the full output in white. Commands are dark
+blue, flags red, and quoted strings green; result dots show success or failure.
+Stage completion remains in the log. The complete event journal is retained.
 
 Create a project, enter a URL, hostname, IPv4 or IPv6 address, then confirm
 **READY — Press Enter to start**. The original target remains visible. Entering a

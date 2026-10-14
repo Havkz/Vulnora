@@ -11,7 +11,7 @@ import * as projectLog from '../ui/project-log.js';
 import { visibleWidth } from '../ui/theme.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
-import type { LLMConfig } from '../types/index.js';
+import { KillChainPhase, type LLMConfig } from '../types/index.js';
 
 const directories: string[] = [];
 const surfaces: TerminalSurface[] = [];
@@ -45,6 +45,39 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it('pins the current stage, pairs concurrent command results, and separates command blocks', async () => {
+    const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
+    f.input.write('\rStage fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
+    await f.wait('Esc Pause');
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
+    const text = () => view().lines.map(stripVTControlCharacters).join('\n');
+    const stagePosition = view().lines.findIndex(line => line.includes('Stage: Recon'));
+    for (const operatorId of ['one', 'two']) session.command.emit('scan:progress', {
+      id: 'call-' + operatorId, timestamp: Date.now(), kind: 'tool_call', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
+      detail: `http_request {"url":"https://fixture.test/${operatorId}"}`,
+    });
+    for (const operatorId of ['two', 'one']) session.command.emit('scan:progress', {
+      id: 'result-' + operatorId, timestamp: Date.now(), kind: 'tool_result', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
+      detail: operatorId + ' OUTPUT', success: operatorId === 'one',
+    });
+    expect(text().match(/● Ran http_request/g)).toHaveLength(2);
+    const content = view().lines.map(stripVTControlCharacters).map(line => line.replace(/^│/, '').replace(/│$/, '').trim()).join('\n');
+    expect(content).toMatch(/--url https:\/\/fixture.test\/one\none OUTPUT\n\n● Ran/);
+    expect(view().lines.join('\n')).toContain(f.surface.colors.success('●'));
+    expect(view().lines.join('\n')).toContain(f.surface.colors.error('●'));
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
+    session.command.mission.advancePhase(mission.id);
+    expect(mission.currentPhase).toBe(KillChainPhase.WEAPONIZE);
+    expect(view().lines.findIndex(line => line.includes('Stage: Scanning'))).toBe(stagePosition);
+    expect(text()).toContain('Recon completed');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    await f.store.flush(session.project.id);
+    const journal = await f.store.readLogs(session.project.id);
+    expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(4);
+  });
+
   it.each(['running', 'paused'])('saves and exits with Ctrl+X from a %s project', async status => {
     const f = await fixture(); const result = f.start();
     f.input.write('\rExit fixture\r'); await f.wait('Target URL or IP:');
@@ -115,7 +148,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\r'); await expect.poll(() => report.mock.calls.length).toBe(1);
     f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
-  it('colors full live errors, caches stable logs, and retains the visible content anchor on resize', async () => {
+  it('shows white full output, caches stable logs, and retains the visible content anchor on resize', async () => {
     const f = await fixture(); const result = f.start();
     const screens = vi.spyOn(f.surface, 'show');
     const formatting = vi.spyOn(projectLog, 'formatProjectLog');
@@ -129,7 +162,7 @@ describe('durable interactive project flow', () => {
     expect(stripVTControlCharacters(f.transcript())).not.toContain('EVIDENCE_END');
     f.input.write('\x14');
     await f.wait('EVIDENCE_END');
-    expect(f.transcript()).toContain(f.surface.colors.error('EVIDENCE_END'));
+    expect(f.transcript()).toContain(f.surface.colors.bright('EVIDENCE_END'));
     const counted = () => formatting.mock.calls.filter(([event]) => (event.data as { detail?: string })?.detail?.includes('EVIDENCE_BEGIN')).length;
     const before = counted();
     for (let index = 0; index < 20; index++) f.surface.refresh();
@@ -137,8 +170,8 @@ describe('durable interactive project flow', () => {
     const navigation = vi.spyOn(f.surface, 'nextKey');
     f.input.write('\x1b[H' + '\x1b[B'.repeat(30));
     await expect.poll(() => navigation.mock.calls.length).toBeGreaterThanOrEqual(31);
-    const errorStart = f.surface.colors.error('x').split('x')[0];
-    const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines.find(line => line.includes(errorStart)) || '')
+    const outputStart = f.surface.colors.bright('x').split('x')[0];
+    const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines.find(line => line.includes(outputStart)) || '')
       .replace(/^│\s*/, '').replace(/\s*│$/, '').trim();
     await expect.poll(firstLog).toContain('Evidence row');
     const anchor = firstLog().slice(0, 20);
@@ -265,7 +298,7 @@ describe('durable interactive project flow', () => {
   it('keeps every multiline technical log detail available to the view and journal', () => {
     const detail = 'First evidence line\n' + 'All technical evidence retained\n'.repeat(1000) + 'Final evidence line';
     const formatted = formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail } }, true);
-    expect(formatted.split('\n').slice(1).map(line => line.replace(/^ {2}└ /, '')).join('\n')).toBe(detail);
+    expect(formatted.split('\n').slice(1).map(line => line.replace(/^ {4}/, '')).join('\n')).toBe(detail);
     expect(formatted).toContain('Final evidence line');
   });
 });

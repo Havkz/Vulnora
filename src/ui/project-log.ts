@@ -1,23 +1,20 @@
 import type { ProjectLogEvent } from '../projects/session.js';
 import { redactSecrets } from '../redact.js';
 import { terminalText, wrapTerminalText } from './terminal.js';
-import { severityStyle, type TerminalTheme } from './theme.js';
+import type { TerminalTheme } from './theme.js';
+
+export function phaseLabel(phase?: string): string {
+  const names: Record<string, string> = { reconnaissance: 'Recon', weaponization: 'Scanning', delivery: 'Validation',
+    exploitation: 'Exploitation', installation: 'Verification', command_and_control: 'Connection checks', actions_on_objectives: 'Reporting' };
+  return phase ? names[phase] || phase.replace(/_/g, ' ') : 'Preparing';
+}
 
 function fields(event: ProjectLogEvent): Record<string, unknown> {
   return event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
 }
 
 export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
-  const data = fields(event);
-  const status = String(data.kind || data.action || event.category);
-  if (data.kind === 'task_failed' && data.detail === 'aborted: project pause') return colors.muted;
-  if (data.success === false || /error|failed|blocked/i.test(status)) return colors.error;
-  if (/fallback|deferred|skipped/i.test(status)) return colors.warning;
-  const finding = data.finding && typeof data.finding === 'object' ? data.finding as Record<string, unknown> : {};
-  const severity = data.severity || finding.severity;
-  if (typeof severity === 'string') return severityStyle(severity, colors);
-  if (/completed|executed/i.test(status) || data.success === true) return colors.success;
-  if (/thinking|started|progress/i.test(status)) return colors.active;
+  if (event.category === 'mission:phase_changed' || event.category === 'project:completed') return colors.foreground;
   return colors.muted;
 }
 
@@ -56,52 +53,63 @@ function outputPreview(text: string, transcript: boolean, columns: number): stri
     : lines.slice(0, 3).join('\n') + `\n+ ${lines.length - 3} lines (Ctrl+T full output)`;
 }
 
-function logContent(event: ProjectLogEvent, transcript: boolean): { title: string; body?: string; command?: string } | undefined {
+function logContent(event: ProjectLogEvent): { title: string; body?: string; command?: string } | undefined {
   const data = fields(event);
   const detail = typeof data.detail === 'string' ? data.detail : '';
   const operator = data.callsign ? ` · ${data.callsign}` : '';
   if (event.category === 'scan:progress') {
-    if (data.kind === 'tool_call') return { title: `Ran${operator}`, command: toolInvocation(data) };
-    if (data.kind === 'tool_result') return { title: `${data.success === false ? 'Failed' : 'Result'} · ${data.toolName || 'tool'}${operator}`, body: detail };
-    if (data.kind === 'thinking') return { title: `Thinking${operator}`, body: detail };
-    if (data.kind === 'task_started') return { title: `Working${operator} · ${data.taskName || detail}` };
+    if (data.kind === 'tool_call') return { title: 'Ran', command: toolInvocation(data) };
+    if (data.kind === 'tool_result') return { title: 'Ran', command: String(data.toolName || 'tool'), body: detail };
+    if (data.kind === 'thinking' || data.kind === 'task_started') return undefined;
     if (data.kind === 'task_failed') return { title: `${detail === 'aborted: project pause' ? 'Paused' : 'Failed'}${operator} · ${data.taskName || 'task'}`, body: detail };
-    if (data.kind === 'task_completed') return { title: `Done${operator} · ${data.taskName || 'task'}`, body: detail };
+    if (data.kind === 'task_completed') {
+      return /Findings:/.test(detail) ? { title: 'Findings', body: detail.slice(detail.indexOf('Findings:') + 9).trim() } : undefined;
+    }
   }
-  if (event.category === 'provider:progress') {
-    const name = data.agent || data.provider || 'AI';
-    if (data.type === 'thread.started' && !transcript) return undefined;
-    const title = data.type === 'turn.started' ? 'Thinking' : data.type === 'turn.completed' ? 'Thought complete'
-      : data.type === 'item.completed' ? 'Plan received' : 'AI working';
-    return { title: `${title} · ${name}`, body: transcript && typeof data.text === 'string' ? data.text : undefined };
-  }
+  if (event.category === 'provider:progress' || event.category === 'provider:availability') return undefined;
+  if (event.category === 'mission:phase_changed') return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} completed\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
+  if (event.category === 'project:completed') return { title: `${typeof data.phase === 'string' ? `${phaseLabel(data.phase)} completed\n` : ''}Scan completed` };
   if (event.category === 'provider:fallback') return { title: `Fallback · ${data.fromProvider} → ${data.toProvider}`, body: String(data.reason || data.error || '') };
-  if (event.category === 'provider:availability') return { title: `Provider · ${data.active && typeof data.active === 'object' ? (data.active as Record<string, unknown>).provider : data.provider || 'configured'}` };
-  if (event.category === 'orchestration:event') return { title: `${data.action || 'Evidence'} · ${data.toolName || 'tool'}`, body: `${data.reason || ''}${data.target ? ` · ${data.target}` : ''}` };
+  if (event.category === 'orchestration:event') {
+    return /^(executed|failed|repeated)$/i.test(String(data.action)) ? undefined
+      : { title: `${data.action || 'Evidence'} · ${data.toolName || 'tool'}`, body: `${data.reason || ''}${data.target ? ` · ${data.target}` : ''}` };
+  }
   const body = detail || (typeof event.data === 'string' ? event.data : Object.entries(data)
     .filter(([key]) => !['id', 'projectId', 'taskId', 'operatorId', 'timestamp'].includes(key))
     .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join('\n'));
   return { title: event.category.replace(/[:_]/g, ' '), body };
 }
 
-export function formatProjectLog(event: ProjectLogEvent, transcript = false, colors?: TerminalTheme, columns = 80): string {
+export function formatProjectLog(event: ProjectLogEvent, transcript = false, colors?: TerminalTheme, columns = 80, result?: ProjectLogEvent): string {
   const safe = redactSecrets(event) as ProjectLogEvent;
-  const content = logContent(safe, transcript);
+  const content = logContent(safe);
   if (!content) return '';
-  const time = new Date(event.timestamp).toLocaleTimeString('de-DE', { hour12: false });
-  const title = `${time} ${terminalText(content.title)}`;
+  const title = terminalText(content.title);
   const lines = [colors ? projectLogStyle(safe, colors)(title) : title];
   if (content.command) {
-    const tokens = terminalText(content.command).match(/"(?:\\.|[^"\\])*"|'[^']*'|\S+/g) || [];
-    const command = tokens.map((token, index) => !colors ? token : index === 0 ? colors.accent(token)
-      : token.startsWith('-') ? colors.secondary(token) : colors.detail(token)).join(' ');
-    lines.push('  ' + command);
+    let first = true;
+    const tokens = terminalText(content.command).match(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s"']+|\s+/g) || [];
+    const command = tokens.map(token => {
+      if (!colors || /^\s+$/.test(token)) return token;
+      if (first) { first = false; return colors.command(token); }
+      if (/^["']/.test(token)) return colors.success(token);
+      if (token.startsWith('-')) {
+        const equal = token.indexOf('=');
+        return equal < 0 ? colors.error(token) : colors.error(token.slice(0, equal)) + colors.muted(token.slice(equal));
+      }
+      return colors.muted(token);
+    }).join('');
+    const response = result ? redactSecrets(result) as ProjectLogEvent : safe;
+    const success = fields(response).success;
+    const dot = colors ? success === false ? colors.error('●') : success === true ? colors.success('●') : colors.muted('●') : '●';
+    lines[0] = `${dot} ${colors ? colors.foreground('Ran') : 'Ran'} ${command}`;
+    if (result && typeof fields(response).detail === 'string') content.body = String(fields(response).detail);
   }
   if (content.body) {
     const body = outputPreview(terminalText(content.body), transcript, columns);
-    const failed = fields(safe).success === false || /error|failed|blocked/.test(event.category);
-    const style = colors ? failed ? projectLogStyle(safe, colors) : colors.muted : (text: string) => text;
-    lines.push(...body.split('\n').map(line => '  └ ' + style(line)));
+    const style = colors ? transcript ? colors.bright : colors.muted : (text: string) => text;
+    lines.push(...body.split('\n').map(line => '    ' + style(line)));
   }
+  if (content.command) lines.push('');
   return lines.join('\n');
 }

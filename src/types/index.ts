@@ -615,7 +615,7 @@ export interface CommandEvents {
   'credential:harvested': { credential: Credential; operatorId: string };
   'target:owned': { target: Target; operatorId: string };
   'detection:triggered': DetectionEvent;
-  'mission:phase_changed': { missionId: string; phase: KillChainPhase };
+  'mission:phase_changed': { missionId: string; phase: KillChainPhase; previousPhase?: KillChainPhase };
   'scan:progress': ScanProgressEvent;
   'orchestration:event': {
     action: string;

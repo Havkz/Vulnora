@@ -587,8 +587,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       this.stop();
     });
 
-    this.mission.on('mission:phase_changed', ({ mission, newPhase }) => {
-      this.emit('mission:phase_changed', { missionId: mission.id, phase: newPhase });
+    this.mission.on('mission:phase_changed', ({ mission, oldPhase, newPhase }) => {
+      this.emit('mission:phase_changed', { missionId: mission.id, phase: newPhase, previousPhase: oldPhase });
       this.hooks.onMissionPhaseChange?.(mission.id, newPhase);
     });
 
