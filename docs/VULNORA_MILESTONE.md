@@ -391,3 +391,29 @@ offering a resumable menu. A completed project opens its results without startin
   applying these aliases. Windows launcher lifecycle fixtures and shell syntax pass.
   Regression: 67 Windows suites, 709 passed/18 skips, 11 preflight checks; build and
   focused lint pass. The Linux launcher has its own actual-process fixture.
+- Release 6f3ada1 passes clean-install Linux build/lint (0 errors), all 67 suites
+  with 722 passed/5 platform skips and 11 preflight checks. Validation directory:
+  /home/tempest/.vulnora/validation/6f3ada1.6kGZOf.
+- The committed release is actually installed in Tempest-Arsenal at
+  /home/tempest/.vulnora/releases/6f3ada1b84f485c8ec3b7e71cc3832b478833d87.
+  Strict readiness is 23/23. Before/after SHA256 verifies the original application
+  package, CLI and legacy environment remain unchanged. Migration retains Linux
+  legacy settings and fills missing configuration from Windows without overwrites.
+- Live checks now import the installed release, not the checkout: Codex and the
+  installed 30B model pass real inference; forced Codex failure yields a real local
+  tool call; release confirms the held model unloads. A kernel PTY at 80x30/24x12
+  verifies installed-launch READY without scan, partial edit persistence, Settings,
+  model holding/release and terminal cleanup. Saved transcript:
+  /home/tempest/.vulnora/validation/ui-preview-o0o3mryu/terminal-transcript.ansi.
+- Alias installation is applied and verified: fresh PowerShell 7, Windows PowerShell
+  and CMD all execute `vulnora --help` successfully. Old profile functions and the
+  old CMD wrapper were backed up to
+  C:\Users\User\.vulnora\backups\aliases-20261014-185154-3748; the CMD wrapper is
+  replaced and the preserved Tempest runtime files remain intact. No Ollama service
+  remains after the owned validation service exits.
+- Full goal completion is still unproven: the visual panel/spacing and narrow-screen
+  prompt acceptance, final branding/data-recovery audit, and physical Windows Terminal
+  live scan/report flows remain outstanding. Claude live inference is unavailable
+  without an installation. GitHub run 38600463109 has runner_id=0 and no executed
+  test steps; its annotation confirms failed account payments or a spending-limit
+  restriction. Hosted CI remains an external validation gate; billing is not changed.

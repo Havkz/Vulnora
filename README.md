@@ -19,10 +19,21 @@ npm run build
 npm start
 ```
 
-The package executable is `vulnora`. Final Windows/WSL launcher installation is
-still being validated; existing local launchers remain on the preserved runtime.
-See the [milestone ledger](docs/VULNORA_MILESTONE.md) for verified state and
-remaining acceptance gates.
+The package executable is `vulnora`. On Windows, install a committed WSL release
+and the shell command from the checkout:
+
+```powershell
+pwsh -NoProfile -File scripts/setup-windows-arsenal.ps1
+pwsh -NoProfile -File scripts/install-windows-alias.ps1
+vulnora
+```
+
+Setup reuses the existing Kali arsenal and provider authentication. New commits
+can be installed by rerunning setup; normal launches keep the installed release.
+The command has been checked in fresh PowerShell 7, Windows PowerShell and CMD
+sessions. See the [Windows installation guide](docs/WINDOWS_ARSENAL.md) and
+[milestone ledger](docs/VULNORA_MILESTONE.md) for runtime evidence and remaining
+visual/acceptance gates.
 
 ## Projects and navigation
 
