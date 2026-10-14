@@ -324,3 +324,12 @@ offering a resumable menu. A completed project opens its results without startin
   11 preflight checks; build/typecheck and lint pass (0 errors). Timing tests also
   simulate slow durable writes: request starts remain paced after checkpointing,
   cancellation stops queued work, and bodies retain their concurrency slots.
+- Committed mode snapshot 4665b22 passes clean-install Linux build/lint (0 errors),
+  all 65 suites with 713 passed/4 Windows skips and all 11 preflight checks.
+  Validation directory: /home/tempest/.vulnora/validation/4665b22.ldle58.
+  The TCP timing fixture measures client initiation; server accept notifications
+  can arrive after the client has completed its handshake, particularly on Linux.
+- README now documents the actual website/API CLI, persistent projects, controls,
+  reports, adaptive modes and primary/local/deterministic providers. Old unrelated
+  cloud/mobile/binary marketing, download examples and unsupported benchmark
+  claims were removed. Final installed-command validation remains explicit.
