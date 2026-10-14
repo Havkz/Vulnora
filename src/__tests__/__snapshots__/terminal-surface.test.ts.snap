@@ -14,7 +14,15 @@ exports[`terminal surface > keeps four startup rows and the fixed Starting posit
 `;
 
 exports[`terminal surface > keeps four startup rows and the fixed Starting position inside 40 × 24 1`] = `
-"Vulnora
+"              ╭───────────╮
+              │  ╲     ╱  │
+              │   ╲   ╱   │
+              │    ╲ ╱    │
+               ╲    V    ╱ 
+                ╲       ╱  
+                 ╲_____╱   
+              V U L N O R A
+     website & API security testing
 
 ╭─────────────────────────────────────╮
 │                                     │
@@ -29,17 +37,14 @@ exports[`terminal surface > keeps four startup rows and the fixed Starting posit
 `;
 
 exports[`terminal surface > keeps four startup rows and the fixed Starting position inside 80 × 30 1`] = `
-"                                     ░░░░░█░░░░░
-                               ░░█████████████████░░
-                             ░█████████████████████░
-                            ░███████████████████████░
-                            ░███████████████████████░
-                            ███████  Vulnora  ███████
-                            ░███████████████████████░
-                            ░███████████████████████░
-                             ░█████████████████████░
-                               ░░█████████████████░░
-                                     ░░░░░█░░░░░
+"                                  ╭───────────╮
+                                  │  ╲     ╱  │
+                                  │   ╲   ╱   │
+                                  │    ╲ ╱    │
+                                   ╲    V    ╱ 
+                                    ╲       ╱  
+                                     ╲_____╱   
+                                  V U L N O R A
                          website & API security testing
 
 ╭─────────────────────────────────────────────────────────────────────────────╮
@@ -66,17 +71,14 @@ VULNORA
 `;
 
 exports[`terminal surface > retains the reference composition at 80 columns × 30 rows 1`] = `
-"                                     ░░░░░█░░░░░
-                               ░░█████████████████░░
-                             ░█████████████████████░
-                            ░███████████████████████░
-                            ░███████████████████████░
-                            ███████  Vulnora  ███████
-                            ░███████████████████████░
-                            ░███████████████████████░
-                             ░█████████████████████░
-                               ░░█████████████████░░
-                                     ░░░░░█░░░░░
+"                                  ╭───────────╮
+                                  │  ╲     ╱  │
+                                  │   ╲   ╱   │
+                                  │    ╲ ╱    │
+                                   ╲    V    ╱ 
+                                    ╲       ╱  
+                                     ╲_____╱   
+                                  V U L N O R A
                          website & API security testing
 
 VULNORA

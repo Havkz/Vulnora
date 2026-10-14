@@ -303,9 +303,6 @@ export class InteractiveApp {
         if (!id?.trim()) continue;
         if (provider === 'local' && !models.includes(id)) { await this.notice('Model unavailable', 'Select an installed model.'); continue; }
         config.setDefaultModel(provider, id); config.setDefaultProvider(provider);
-        if (process.env.VULNORA_DEFAULT_PROVIDER && process.env.VULNORA_DEFAULT_PROVIDER !== provider) {
-          await this.notice('Environment override', 'VULNORA_DEFAULT_PROVIDER overrides the saved selection for this process.');
-        }
         await this.refreshProviders();
       } else {
         const providers: ApiKeyProvider[] = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local'];

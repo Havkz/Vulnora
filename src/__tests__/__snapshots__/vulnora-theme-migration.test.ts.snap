@@ -1,18 +1,15 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`Vulnora reference theme > retains the actual VoidAccess palette and centered circular composition 1`] = `
+exports[`Vulnora theme > centers the original shield and wordmark with steel-blue colors 1`] = `
 [
-  "                                     ░░░░░█░░░░░",
-  "                               ░░█████████████████░░",
-  "                             ░█████████████████████░",
-  "                            ░███████████████████████░",
-  "                            ░███████████████████████░",
-  "                            ███████  Vulnora  ███████",
-  "                            ░███████████████████████░",
-  "                            ░███████████████████████░",
-  "                             ░█████████████████████░",
-  "                               ░░█████████████████░░",
-  "                                     ░░░░░█░░░░░",
+  "                                  ╭───────────╮",
+  "                                  │  ╲     ╱  │",
+  "                                  │   ╲   ╱   │",
+  "                                  │    ╲ ╱    │",
+  "                                   ╲    V    ╱ ",
+  "                                    ╲       ╱  ",
+  "                                     ╲_____╱   ",
+  "                                  V U L N O R A",
   "                         website & API security testing",
 ]
 `;

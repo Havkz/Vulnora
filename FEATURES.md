@@ -582,9 +582,9 @@ _The per-tool checklists below document the **retired** design (historical only)
 - [ ] Scripting support
 
 ### UI Features
-- [x] Shared source-derived VoidAccess colors and adapted Vulnora circle logo
+- [x] Original Vulnora shield wordmark and shared steel-blue palette
 - [x] Fixed Starting animation and exactly four real initialization rows
-- [x] Rounded magenta status panels, reference padding and status hierarchy
+- [x] Rounded steel-blue status panels, reference padding and status hierarchy
 - [x] One keyboard/render owner, differential redraw and terminal restoration
 - [x] Arrow menus, editable/masked prompts and scrollable full technical logs
 - [x] Responsive READY/completion hints and pageable project metadata

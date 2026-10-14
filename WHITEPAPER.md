@@ -540,8 +540,8 @@ explicit READY confirmation. Resume Project restores saved tasks, tool batches,
 intermediate results, budgets, backoff and logs. Unsafe interrupted writes are held
 for review. Completed projects reopen their saved reports without another scan.
 
-The renderer uses source-derived VoidAccess tokens, a Vulnora circle logo, four
-live startup rows, magenta panels and differential redraw. Esc drains/cancels active
+The renderer uses an original Vulnora shield wordmark and steel-blue palette, four
+live startup rows, rounded panels and differential redraw. Esc drains/cancels active
 work before pause; Ctrl+C saves, flushes, releases providers and restores the terminal.
 Completion waits for Enter before report display. Auto/Stealth/Aggressive control
 real bounded concurrency, pacing, retries and adaptive backoff.

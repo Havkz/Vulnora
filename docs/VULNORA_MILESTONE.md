@@ -69,7 +69,7 @@ All entries below remain unproven until the corresponding tests or real runtime 
 | Private GitHub repository and recoverable history | GitHub visibility/default branch/remote SHA and baseline tag | verified preparation |
 | Vulnora command/package/references, no old UI branding or emojis | package bin execution, source audit, installed shell command | pending |
 | Legacy config/projects/history/reports preserved | migration fixtures plus actual before/after hashes; no credential output | pending |
-| Reference logo/colors/shared theme across all screens | reference-derived snapshots at wide/narrow terminal widths | pending |
+| Original shield/logo and steel-blue shared theme (user override on 2026-10-14) | shared theme and snapshots at wide/narrow terminal widths | pending |
 | Exactly four real startup rows and animated fixed Starting | renderer event tests, real startup success and failure transcripts | pending |
 | Three-item menu; arrows/Enter/Esc/Ctrl+C | keyboard-driven terminal integration tests | pending |
 | Name and URL/IP/IPv6/hostname validation, original input visible, READY wait | validation and UI flow tests; no request before confirmation | pending |
@@ -448,3 +448,19 @@ offering a resumable menu. A completed project opens its results without startin
   settings. Retained library/research documentation is explicitly scoped separately.
   Physical Windows Terminal live scan/report and final requirement-by-requirement
   audit remain outstanding; this is not a full-goal completion claim.
+
+### User correction: provider notice and original visual identity (2026-10-14)
+
+- Explicit Settings selections already override inherited startup defaults. Removed
+  the obsolete environment-override notice when choosing installed Codex/Claude;
+  the normal availability check still validates the selected provider immediately.
+  The interactive regression reproduces startup `codex` -> installed CLI `codex`
+  and checks both the saved effective configuration and provider preparation.
+- User superseded the copied reference logo/colors requirement: original shield
+  wordmark with steel-blue/cyan accents replaces the circular mark and purple
+  palette. Navigation, panel structure and status meanings retain existing behavior.
+  Narrow terminals use the compact wordmark; snapshots cover bounded layouts.
+  Reference attribution remains for retained panel/spacing/status conventions.
+- Windows validation: 67 suites, 717 passed/18 platform skips; all 11 preflight
+  checks, TypeScript build and focused lint pass. Graph regenerated after edits.
+  Installed release/provider-switch verification follows this source milestone.

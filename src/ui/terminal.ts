@@ -84,7 +84,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   get panelColumns(): number { return Math.max(1, this.columns - (this.rows >= 12 ? 7 : 4)); }
   get panelRows(): number { return Math.max(1, this.rows - (this.rows >= 12 ? 6 : 2)); }
 
-  /** Rich Panel's rounded magenta border and padding (1, 2); compact below 12 rows. */
+  /** Rounded panel and padding (1, 2); compact below 12 rows. */
   panel(lines: string[]): string[] {
     if (this.rows < 12 || this.columns < 16) return lines.map(line => '  ' + line);
     const border = this.colors.border;

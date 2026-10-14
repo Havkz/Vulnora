@@ -6,14 +6,14 @@ import { stripVTControlCharacters } from 'node:util';
 import { migrateEnvironment, migrateLegacyData } from '../config/migration.js';
 import { THEME_TOKENS, createTheme, renderLogo, visibleWidth } from '../ui/theme.js';
 
-describe('Vulnora reference theme', () => {
-  it('retains the actual VoidAccess palette and centered circular composition', () => {
-    expect(THEME_TOKENS).toEqual({ accent: 141, secondary: 183, border: 5, foreground: 7,
-      bright: 15, muted: 244, detail: 247, active: 6, success: 2, error: 1, warning: 3 });
+describe('Vulnora theme', () => {
+  it('centers the original shield and wordmark with steel-blue colors', () => {
+    expect(THEME_TOKENS).toEqual({ accent: 75, secondary: 109, border: 67, foreground: 7,
+      bright: 15, muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3 });
     const lines = renderLogo(80, createTheme(3));
-    expect(lines).toHaveLength(12);
-    expect(lines[5]).toContain('\u001b[38;5;141m');
-    expect(stripVTControlCharacters(lines[5]).trim()).toBe('███████  Vulnora  ███████');
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toContain('\u001b[38;5;75m');
+    expect(stripVTControlCharacters(lines[7]).trim()).toBe('V U L N O R A');
     expect(lines.map(line => stripVTControlCharacters(line))).toMatchSnapshot();
     for (const width of [10, 24, 25, 40, 80, 120]) {
       expect(renderLogo(width, createTheme(0)).every(line => visibleWidth(line) <= width)).toBe(true);

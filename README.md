@@ -167,8 +167,8 @@ The library, backend API and MCP integration remain available for existing calle
 
 ## License and design attribution
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). Adapted logo composition, indexed palette
-and terminal design derive from the inspected
+AGPL-3.0-or-later; see [LICENSE](LICENSE). Vulnora uses an original shield wordmark
+and steel-blue palette. Terminal spacing, panels and status conventions derive from the inspected
 [VoidAccess source](https://github.com/KatrielMoses/voidaccess). Its MIT notice and
 inspected revision are recorded in the milestone ledger and
 [third-party notice](THIRD_PARTY_NOTICES.md).

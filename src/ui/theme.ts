@@ -1,10 +1,10 @@
 import chalk, { Chalk } from 'chalk';
 import stringWidth from 'string-width';
 
-// VoidAccess main.py/display.py: preserve indexed colors and standard ANSI status colors.
+// Vulnora's steel-blue identity; standard status colors retain their meaning.
 export const THEME_TOKENS = Object.freeze({
-  accent: 141, secondary: 183, border: 5, foreground: 7, bright: 15,
-  muted: 244, detail: 247, active: 6, success: 2, error: 1, warning: 3,
+  accent: 75, secondary: 109, border: 67, foreground: 7, bright: 15,
+  muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3,
 });
 
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;
@@ -56,23 +56,19 @@ export function centerLines(lines: string[], width: number): string[] {
 
 export function renderLogo(width: number, colors: TerminalTheme = theme): string[] {
   const primary = colors.accent;
-  const shade = colors.secondary;
   if (width < 25) return centerLines([colors.bright('Vulnora')], width);
-  const disk = [
-    shade('     ░░░░░') + primary('█') + shade('░░░░░'),
-    shade('  ░░') + primary('█'.repeat(17)) + shade('░░'),
-    shade(' ░') + primary('█'.repeat(21)) + shade('░'),
-    shade('░') + primary('█'.repeat(23)) + shade('░'),
-    shade('░') + primary('█'.repeat(23)) + shade('░'),
-    primary('███████') + '  ' + colors.bright('Vulnora') + '  ' + primary('███████'),
-    shade('░') + primary('█'.repeat(23)) + shade('░'),
-    shade('░') + primary('█'.repeat(23)) + shade('░'),
-    shade(' ░') + primary('█'.repeat(21)) + shade('░'),
-    shade('  ░░') + primary('█'.repeat(17)) + shade('░░'),
-    shade('     ░░░░░') + primary('█') + shade('░░░░░'),
-  ];
+  const shield = [
+    '╭───────────╮',
+    '│  ╲     ╱  │',
+    '│   ╲   ╱   │',
+    '│    ╲ ╱    │',
+    ' ╲    V    ╱ ',
+    '  ╲       ╱  ',
+    '   ╲_____╱   ',
+  ].map(line => primary(line));
   const caption = width >= 30 ? ['website & API security testing'] : ['website & API', 'security testing'];
-  return centerLines([...disk, ...caption.map(line => colors.muted(line))], width);
+  return centerLines([...shield, colors.emphasis(colors.bright('V U L N O R A')),
+    ...caption.map(line => colors.muted(line))], width);
 }
 
 export function statusStyle(status: RowStatus, colors: TerminalTheme = theme) {

@@ -19,6 +19,7 @@ const running: Promise<unknown>[] = [];
 afterEach(async () => {
   for (const surface of surfaces.splice(0)) { surface.interrupt(); surface.dispose(); }
   await Promise.allSettled(running.splice(0));
+  vi.unstubAllEnvs();
   for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true });
 });
 
@@ -40,10 +41,34 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
   const app = new InteractiveApp(surface, services);
   const start = () => { const result = app.run().catch(error => error); running.push(result); return result; };
   const wait = async (text: string) => { await expect.poll(() => stripVTControlCharacters(transcript), { timeout: 5000 }).toContain(text); };
-  return { input, output, surface, store, open, start, wait, session: () => session, transcript: () => transcript };
+  return { input, output, surface, store, open, services, start, wait, session: () => session, transcript: () => transcript };
 }
 
 describe('durable interactive project flow', () => {
+  it('switches to the installed Codex CLI despite an inherited startup provider without a false override notice', async () => {
+    const f = await fixture();
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-provider-choice-')); directories.push(directory);
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory);
+    vi.stubEnv('VULNORA_DEFAULT_PROVIDER', 'codex');
+    vi.resetModules();
+    const { config } = await import('../config/index.js');
+    f.services.configuration = config;
+    f.services.installedAgents = async () => ['codex'];
+    const prepare = vi.fn(async () => {
+      expect(config.getLLMConfig()).toMatchObject({ provider: 'local-agent', model: 'codex' });
+      return 'Installed Codex CLI ready';
+    });
+    f.services.prepareProviders = prepare;
+    const result = f.start();
+    f.input.write('\x1b[B\x1b[B\r'); await f.wait('Change Default Model / Provider');
+    f.input.write('\x1b[B\r'); await f.wait('Installed Codex / Claude CLI');
+    f.input.write('\x1b[B\r'); await f.wait('Default model');
+    f.input.write('\r'); await f.wait('Installed Codex CLI ready');
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(stripVTControlCharacters(f.transcript())).not.toContain('Environment override');
+    expect(process.env.VULNORA_DEFAULT_PROVIDER).toBe('codex');
+    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
   it.each([[24, 12], [16, 8]])('keeps READY and completion visible at %s × %s with a long original target and preserves all scrollable metadata', async (columns, rows) => {
     const f = await fixture(); f.output.columns = columns; f.output.rows = rows;
     const target = 'https://fixture.test/' + 'segment/'.repeat(50) + 'TARGET_END';
