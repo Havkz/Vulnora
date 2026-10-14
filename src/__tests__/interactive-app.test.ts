@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { InteractiveApp, formatProjectLog, type InteractiveServices } from '../ui/app.js';
 import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
-import * as terminal from '../ui/terminal.js';
+import * as projectLog from '../ui/project-log.js';
 import { visibleWidth } from '../ui/theme.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
@@ -45,6 +45,22 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it.each(['running', 'paused'])('saves and exits with Ctrl+X from a %s project', async status => {
+    const f = await fixture(); const result = f.start();
+    f.input.write('\rExit fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
+    await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    if (status === 'paused') { f.input.write('\x1b'); await f.wait('> Resume'); }
+    f.input.write('\x18');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect(session.command.isRunning()).toBe(false);
+    const saved = await f.store.load(session.project.id);
+    expect(saved.status).toBe('paused'); expect(saved.checkpoint).toBeDefined();
+    const reopened = await ProjectSession.open(f.store, saved.id, { llm: { provider: 'mock', model: 'fixture' } });
+    await reopened.close();
+  });
+
   it('switches to the installed Codex CLI despite an inherited startup provider without a false override notice', async () => {
     const f = await fixture();
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-provider-choice-')); directories.push(directory);
@@ -102,7 +118,7 @@ describe('durable interactive project flow', () => {
   it('colors full live errors, caches stable logs, and retains the visible content anchor on resize', async () => {
     const f = await fixture(); const result = f.start();
     const screens = vi.spyOn(f.surface, 'show');
-    const wrapping = vi.spyOn(terminal, 'wrapTerminalText');
+    const formatting = vi.spyOn(projectLog, 'formatProjectLog');
     f.input.write('\rLog fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await f.wait('Esc Pause');
@@ -110,9 +126,11 @@ describe('durable interactive project flow', () => {
     const detail = 'EVIDENCE_BEGIN\n' + Array.from({ length: 200 }, (_, index) => `Evidence row ${String(index).padStart(3, '0')} · complete technical detail`).join('\n') + '\nEVIDENCE_END';
     session.command.emit('scan:progress', { id: 'colored-fixture', timestamp: Date.now(), kind: 'tool_result',
       operatorId: 'fixture', callsign: 'Fixture', archetype: 'recon', toolName: 'http_request', detail, success: false });
+    expect(stripVTControlCharacters(f.transcript())).not.toContain('EVIDENCE_END');
+    f.input.write('\x14');
     await f.wait('EVIDENCE_END');
     expect(f.transcript()).toContain(f.surface.colors.error('EVIDENCE_END'));
-    const counted = () => wrapping.mock.calls.filter(([text]) => text.includes('EVIDENCE_BEGIN')).length;
+    const counted = () => formatting.mock.calls.filter(([event]) => (event.data as { detail?: string })?.detail?.includes('EVIDENCE_BEGIN')).length;
     const before = counted();
     for (let index = 0; index < 20; index++) f.surface.refresh();
     expect(counted()).toBe(before);
@@ -129,6 +147,9 @@ describe('durable interactive project flow', () => {
     await f.store.flush(session.project.id);
     const journal = await f.store.readLogs(session.project.id);
     expect(journal.events.some(event => (event as { data?: { detail?: string } }).data?.detail === detail)).toBe(true);
+    f.input.write('\x14');
+    await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('^T Full');
+    expect(screens.mock.calls.at(-1)?.[0]().lines.map(stripVTControlCharacters).join('\n')).not.toContain('EVIDENCE_END');
     f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
   it('saves the name and incomplete target before READY, preserves edits on Esc, and never starts automatically', async () => {
@@ -243,8 +264,8 @@ describe('durable interactive project flow', () => {
 
   it('keeps every multiline technical log detail available to the view and journal', () => {
     const detail = 'First evidence line\n' + 'All technical evidence retained\n'.repeat(1000) + 'Final evidence line';
-    const formatted = formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail } });
-    expect(formatted).toContain(detail);
+    const formatted = formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail } }, true);
+    expect(formatted.split('\n').slice(1).map(line => line.replace(/^ {2}└ /, '')).join('\n')).toBe(detail);
     expect(formatted).toContain('Final evidence line');
   });
 });

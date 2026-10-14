@@ -38,7 +38,10 @@ visual/acceptance gates.
 ## Projects and navigation
 
 The main menu contains **Create New Project**, **Resume Project**, and **Settings**.
-Use arrows and Enter to select; Esc returns and Ctrl+C saves and quits.
+Use arrows and Enter to select; Esc returns and Ctrl+X or Ctrl+C saves and quits.
+Startup expands provider checks into timed substeps. Live logs show tool invocations
+and three output lines; Ctrl+T toggles the full transcript. Commands, flags and values
+use distinct colors. The complete event journal is retained with each project.
 
 Create a project, enter a URL, hostname, IPv4 or IPv6 address, then confirm
 **READY — Press Enter to start**. The original target remains visible. Entering a
@@ -167,7 +170,7 @@ The library, backend API and MCP integration remain available for existing calle
 
 ## License and design attribution
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). Vulnora uses an original shield wordmark
+AGPL-3.0-or-later; see [LICENSE](LICENSE). Vulnora uses an original browser-and-lock wordmark
 and steel-blue palette. Terminal spacing, panels and status conventions derive from the inspected
 [VoidAccess source](https://github.com/KatrielMoses/voidaccess). Its MIT notice and
 inspected revision are recorded in the milestone ledger and

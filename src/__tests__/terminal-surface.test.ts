@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import type { ReadStream, WriteStream } from 'node:tty';
 import { stripVTControlCharacters } from 'node:util';
-import { initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText, type InitializationRows, type TerminalFrame } from '../ui/terminal.js';
+import { initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText, type InitializationRows, type InitializationStep, type TerminalFrame } from '../ui/terminal.js';
 import { visibleWidth } from '../ui/theme.js';
 
 const surfaces: TerminalSurface[] = [];
@@ -21,6 +21,44 @@ function terminal(columns = 80, rows = 30) {
 }
 
 describe('terminal surface', () => {
+  it.each([[80, 30], [40, 24], [24, 12], [40, 8], [16, 8]])('shows actual startup substeps and elapsed time within %s × %s', async (columns, height) => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    const { surface, transcript } = terminal(columns, height);
+    let report!: (step: InitializationStep) => void;
+    let finish!: (value: string) => void;
+    const initializing = initializeTerminal(surface, [async () => {}, async () => {}, callback => {
+      report = callback; return new Promise(resolve => { finish = resolve; });
+    }, async () => {}]);
+    await vi.waitFor(() => expect(report).toBeTypeOf('function'));
+    const view = () => (surface as unknown as { screen: () => TerminalFrame }).screen();
+    const starting = view().lines.findIndex(line => line.includes('Starting'));
+    report({ label: 'Discovering installed Ollama models', status: 'active' });
+    report({ label: 'Discovering installed Ollama models', status: 'completed' });
+    report({ label: 'Loading Ollama model', status: 'active', detail: 'installed:30b' });
+    vi.advanceTimersByTime(72000);
+    expect(view().lines.map(stripVTControlCharacters).join('\n')).toContain('1m 12s');
+    report({ label: 'Loading Ollama model', status: 'completed', detail: 'installed:30b' });
+    report({ label: 'Testing Ollama inference', status: 'active' });
+    vi.advanceTimersByTime(2000);
+    const displayed = view().lines.map(stripVTControlCharacters).join('\n');
+    expect(displayed).toContain('2s');
+    if (height >= 20) {
+      expect(displayed).toContain('Checking AI providers ▾');
+      expect(displayed).toContain('✓ Loading Ollama');
+      expect(displayed).toContain('Testing Ollama');
+      expect(displayed).toContain('1m 12s');
+    }
+    expect(view().lines.findIndex(line => line.includes('Starting'))).toBe(starting);
+    expect(view().lines.length).toBeLessThanOrEqual(height - 2);
+    expect(view().lines.every(line => visibleWidth(line) < columns)).toBe(true);
+    expect(transcript()).not.toContain('\x1b[2J');
+    const finishedAt = Date.now();
+    report({ label: 'Testing Ollama inference', status: 'failed', detail: 'Timeout' });
+    finish('Primary available');
+    const result = await initializing;
+    expect(result[2].steps?.at(-1)).toMatchObject({ status: 'failed', detail: 'Timeout', finishedAt });
+  });
+
   it.each([[80, 30], [40, 24], [24, 12], [16, 8]])('keeps four startup rows and the fixed Starting position inside %s × %s', (columns, rows) => {
     const { surface } = terminal(columns, rows);
     const stages: InitializationRows = ['Configuration', 'Scanner', 'LLM', 'Projects'].map(label => ({ label, status: 'pending' })) as InitializationRows;

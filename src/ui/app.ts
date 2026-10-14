@@ -6,7 +6,8 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { severityStyle, type TerminalTheme } from './theme.js';
+import { formatProjectLog, projectActivity } from './project-log.js';
+export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
 import { redactString } from '../redact.js';
@@ -27,6 +28,7 @@ export class InteractiveApp {
   private session?: ProjectSession;
   private draft?: ProjectDraft;
   private issue = '';
+  private transcript = false;
 
   constructor(readonly surface: TerminalSurface, private services: InteractiveServices) {}
 
@@ -57,10 +59,10 @@ export class InteractiveApp {
   }
 
   private async notice(title: string, text: string): Promise<void> {
-    await this.document(title, text, 'Enter Continue    Esc Back    Ctrl+C Save & Quit');
+    await this.document(title, text, 'Enter Continue    Esc Back    Ctrl+X Save & Quit');
   }
 
-  private async document(title: string, text: string, footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+C Save & Quit', markdown = false): Promise<void> {
+  private async document(title: string, text: string, footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+X Save & Quit', markdown = false): Promise<void> {
     let offset = 0;
     const safeText = terminalText(text);
     const content = markdown ? formatTerminalReport(safeText, this.surface.colors) : safeText;
@@ -128,7 +130,7 @@ export class InteractiveApp {
         offset = Math.max(0, Math.min(offset, Math.max(0, target.length - room)));
         return { lines: [...logo, ...(logo.length ? [''] : []), ...this.surface.panel([
           ...target.slice(offset, offset + room).map(line => this.surface.colors.foreground(line)), '', ...status])],
-        footer: this.surface.columns < 60 ? 'Enter Start  Esc Edit' : 'Enter Start    Esc Edit    PgUp/PgDn Target    Ctrl+C Save & Quit' };
+        footer: this.surface.columns < 60 ? 'Enter Start  Esc Edit' : 'Enter Start    Esc Edit    PgUp/PgDn Target    Ctrl+X Save & Quit' };
       });
       const { key } = await this.surface.nextKey();
       if (key.name === 'up' || key.name === 'pageup') offset -= key.name === 'up' ? 1 : room;
@@ -181,7 +183,7 @@ export class InteractiveApp {
       if (choice === 0) await this.scan();
       else if (choice === 1) {
         const history = await this.services.store.readLogs(project.id);
-        await this.document('Saved project logs', history.events.map(event => formatProjectLog(event as ProjectLogEvent)).join('\n\n'));
+        await this.document('Saved project logs', history.events.map(event => formatProjectLog(event as ProjectLogEvent, true)).join('\n\n'));
       }
     }
   }
@@ -194,8 +196,14 @@ export class InteractiveApp {
     let tail = true; let offset = 0;
     let width = 0; let processed = 0;
     let wrapped: { text: string; event: number; character: number }[] = [];
+    let activity = 'Working'; let activitySince = Date.now();
     this.issue = '';
-    const onLog = (event: ProjectLogEvent) => { logs.push(event); this.surface.refresh(); };
+    const onLog = (event: ProjectLogEvent) => {
+      logs.push(event);
+      const next = projectActivity(event);
+      if (next && next !== activity) { activity = next; activitySince = Date.now(); }
+      this.surface.refresh();
+    };
     const onError = (error: Error) => {
       this.issue = redactString(error.message);
       if ((logs.at(-1)?.data as { error?: string } | undefined)?.error !== this.issue) {
@@ -220,12 +228,12 @@ export class InteractiveApp {
       const anchor = resized && !tail ? wrapped[offset] : undefined;
       if (resized) { width = this.surface.panelColumns; processed = 0; wrapped = []; }
       for (; processed < logs.length; processed++) {
-        const clean = terminalText(formatProjectLog(logs[processed]));
-        const style = projectLogStyle(logs[processed], this.surface.colors);
+        const formatted = formatProjectLog(logs[processed], this.transcript, this.surface.colors, width);
+        const clean = terminalText(formatted);
         let character = 0;
-        for (const line of wrapTerminalText(clean, width)) {
-          wrapped.push({ text: style(line), event: processed, character });
-          character += line.length;
+        for (const line of formatted ? wrapAnsi(formatted, width, { hard: true, wordWrap: false, trim: false }).split('\n') : []) {
+          wrapped.push({ text: line, event: processed, character });
+          character += terminalText(line).length;
           if (clean[character] === '\n') character++;
         }
       }
@@ -234,21 +242,24 @@ export class InteractiveApp {
           if (line.event === anchor.event && line.character <= anchor.character) offset = index;
         });
       }
-      const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - (dense ? 0 : 2));
+      const status = completed ? [] : [this.surface.colors.active(fitTerminalText(`${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
+      const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - status.length - (dense ? 0 : 2));
       offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
-        ...wrapped.slice(offset, offset + room).map(line => line.text), ...(dense ? [] : ['']), ...bottom]),
-      footer: this.surface.columns < 60 ? 'Esc Pause  ^C Save/Quit' : 'Esc Pause    Ctrl+C Save & Quit    PgUp/PgDn Logs    End Live' };
+        ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
+      footer: this.surface.columns < 60 ? `Esc Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
+        : `Esc Pause  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
     };
     try {
       this.surface.show(render);
       await session.start();
       for (;;) {
         const { key } = await this.surface.nextKey();
+        if (key.ctrl && key.name === 't') { this.transcript = !this.transcript; processed = 0; wrapped = []; tail = true; }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }
         if (key.name === 'escape') {
           if (session.project.status === 'completed') return;
-          this.surface.show(() => ({ lines: [this.surface.colors.active('Saving progress and stopping active work…')], footer: 'Ctrl+C Save & Quit' }));
+          this.surface.show(() => ({ lines: [this.surface.colors.active('Saving progress and stopping active work…')], footer: 'Ctrl+X Save & Quit' }));
           await session.pause();
           for (;;) {
             const choice = await this.surface.menu('Paused', ['Resume', 'Settings']);
@@ -323,29 +334,6 @@ export class InteractiveApp {
   }
 }
 
-export function formatProjectLog(event: ProjectLogEvent): string {
-  const time = new Date(event.timestamp).toLocaleTimeString('de-DE', { hour12: false });
-  if (event.data && typeof event.data === 'object' && 'detail' in event.data && typeof event.data.detail === 'string') {
-    const { detail, ...metadata } = event.data;
-    return `${time} ${event.category}\n${detail}\n${JSON.stringify(metadata, null, 2)}`;
-  }
-  return `${time} ${event.category}\n${typeof event.data === 'string' ? event.data : JSON.stringify(event.data, null, 2)}`;
-}
-
-export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
-  const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
-  const status = String(data.kind || data.action || event.category);
-  if (data.success === false || /error|failed|blocked/i.test(status)) return colors.error;
-  if (/fallback|deferred|skipped/i.test(status)) return colors.warning;
-  const finding = data.finding && typeof data.finding === 'object' ? data.finding as Record<string, unknown> : {};
-  const severity = data.severity || finding.severity;
-  if (typeof severity === 'string') return severityStyle(severity, colors);
-  if (/completed|executed/i.test(status) || data.success === true) return colors.success;
-  if (/thinking|started|progress/i.test(status)) return colors.active;
-  if (/paused|closed/i.test(status)) return colors.muted;
-  return colors.foreground;
-}
-
 /** Dynamic initialization keeps terminal ownership active while services load. */
 export async function runInteractive(surface = new TerminalSurface()): Promise<void> {
   const controller = new AbortController();
@@ -389,7 +377,10 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
         };
         return `${ready.length} tools ready; ${arsenal.getToolDefinitions().length - ready.length} unavailable`;
       },
-      prepareProviders,
+      async report => {
+        if (!providers) throw new Error('Provider environment unavailable.');
+        return providers.prepare(report);
+      },
       async () => {
         if (!configuration) throw new Error('Configuration unavailable.');
         const { ProjectStore } = await import('../projects/store.js');
@@ -402,7 +393,7 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     ], controller.signal);
     if (!configuration || !store || !open) throw new Error('Required initialization failed; saved data is preserved.');
     if (rows.some(row => row.status === 'failed')) {
-      surface.startup(rows, 'Enter Continue    Ctrl+C Save & Quit');
+      surface.startup(rows, 'Enter Continue    Ctrl+X Save & Quit');
       for (;;) { if ((await surface.nextKey()).key.name === 'return') break; }
     }
     const runtime = providers;

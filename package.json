@@ -1,7 +1,7 @@
 {
   "name": "vulnora",
   "version": "1.0.0",
-  "description": "Persistent AI-assisted website and API security testing CLI",
+  "description": "Website pentesting tool with persistent projects and AI assistance",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

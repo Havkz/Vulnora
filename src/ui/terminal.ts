@@ -8,7 +8,9 @@ export class TerminalInterrupted extends Error {
   constructor() { super('Terminal session interrupted.'); this.name = 'TerminalInterrupted'; }
 }
 
-export interface InitializationRow { label: string; status: RowStatus; detail?: string }
+export interface InitializationStep { label: string; status: RowStatus; detail?: string; startedAt?: number; finishedAt?: number }
+export interface InitializationRow extends InitializationStep { steps?: InitializationStep[] }
+type InitializationReporter = (step: InitializationStep) => void;
 export type InitializationRows = [InitializationRow, InitializationRow, InitializationRow, InitializationRow];
 export interface TerminalFrame { lines: string[]; footer?: string; cursor?: { row: number; column: number } }
 
@@ -95,7 +97,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   private onKey = (text: string, key: Key): void => {
     if (this.stopped) return;
-    if (key.ctrl && key.name === 'c') {
+    if (key.ctrl && (key.name === 'c' || key.name === 'x')) {
       this.emit('interrupt');
       this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
       this.stopped = true;
@@ -126,7 +128,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       ? [this.colors.warning(fitTerminalText('Resize terminal (minimum 16 columns × 8 rows).', this.columns - 1))].slice(0, this.rows - 1)
       : view.lines.slice(0, this.rows - 2);
     while (lines.length < this.rows - 1) lines.push('');
-    lines.push(this.colors.muted(fitTerminalText(view.footer || 'Esc Back    Ctrl+C Save & Quit', this.columns - 1)));
+    lines.push(this.colors.muted(fitTerminalText(view.footer || 'Esc Back    Ctrl+X Save & Quit', this.columns - 1)));
     let update = '';
     for (let index = 0; index < lines.length; index++) {
       if (lines[index] !== this.previous[index]) update += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
@@ -150,20 +152,36 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   logo(): string[] {
     return this.rows >= 24 ? renderLogo(this.columns, this.colors)
-      : [this.colors.bright('Vulnora'), this.colors.muted(fitTerminalText('website & API security testing', this.columns - 1))];
+      : [this.colors.bright('Vulnora'), this.colors.muted(fitTerminalText('website pentesting tool', this.columns - 1))];
   }
 
-  startup(rows: InitializationRows, footer = 'Ctrl+C Save & Quit'): void {
+  startup(rows: InitializationRows, footer = 'Ctrl+X Save & Quit'): void {
     this.show(() => {
-      const room = this.panelRows - 7;
+      const childRoom = rows.some(row => row.steps) ? Math.min(6, Math.max(0, this.panelRows - 7)) : 0;
+      const room = this.panelRows - 7 - childRoom;
       const logo = this.logo().length <= room ? this.logo() : room >= 1 ? [this.colors.bright('Vulnora')] : [];
-      const body = [this.colors.emphasis(this.colors.border(`${SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]} Starting`)), '', ...rows.map(row => {
+      const body = [this.colors.emphasis(this.colors.border(`${SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]} Starting`)), '', ...rows.flatMap(row => {
         const glyph = row.status === 'active' ? SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] : STATUS_GLYPHS[row.status];
         const indent = this.rows >= 12 ? '   ' : '';
-        const label = fitTerminalText(row.label, this.panelColumns - indent.length - 2);
-        const detailRoom = this.panelColumns - indent.length - 2 - visibleWidth(label);
+        const steps = row.steps || [];
+        const elapsed = (step: InitializationStep) => {
+          const seconds = Math.max(0, Math.floor(((step.finishedAt ?? Date.now()) - (step.startedAt ?? Date.now())) / 1000));
+          return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+        };
+        const active = steps.find(step => step.status === 'active');
+        const suffix = !childRoom && active ? ` · ${elapsed(active)}` : childRoom && steps.length ? ' ▾' : '';
+        const label = fitTerminalText(!childRoom && active ? active.label : row.label, this.panelColumns - indent.length - 2 - visibleWidth(suffix));
+        const detailRoom = this.panelColumns - indent.length - 2 - visibleWidth(label) - visibleWidth(suffix);
         const detail = row.detail && detailRoom > 4 ? this.colors.detail(fitTerminalText(`  (${row.detail})`, detailRoom)) : '';
-        return indent + statusStyle(row.status, this.colors)(glyph) + ' ' + (row.status === 'pending' ? this.colors.muted(label) : this.colors.foreground(label)) + detail;
+        const parent = indent + statusStyle(row.status, this.colors)(glyph) + ' ' + (row.status === 'pending' ? this.colors.muted(label) : this.colors.foreground(label)) + this.colors.muted(suffix) + detail;
+        const children = (childRoom ? steps.slice(-childRoom) : []).map(step => {
+          const symbol = step.status === 'active' ? SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] : STATUS_GLYPHS[step.status];
+          const prefix = indent + '  ' + statusStyle(step.status, this.colors)(symbol) + ' ';
+          const timer = ` · ${elapsed(step)}`;
+          const text = fitTerminalText(step.label + (step.detail ? ` (${step.detail})` : ''), this.panelColumns - visibleWidth(prefix) - visibleWidth(timer));
+          return prefix + statusStyle(step.status, this.colors)(text) + this.colors.muted(timer);
+        });
+        return [parent, ...children];
       })];
       return { lines: [...logo, ...(logo.length ? [''] : []), ...this.panel(body)], footer };
     });
@@ -186,7 +204,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
           const text = fitTerminalText(label, this.columns - 5);
           return offset + start === selected ? this.colors.accent(`  > ${text}`) : this.colors.foreground(`    ${text}`);
         }), ...(detailRoom && detailLines.length ? ['', ...detailLines.slice(detailOffset, detailOffset + detailRoom).map(line => '  ' + this.colors.detail(line))] : [])],
-        footer: details ? '↑/↓ Select    Enter Open    PgUp/PgDn Details    Esc Back    Ctrl+C Save & Quit' : '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+C Save & Quit' };
+        footer: details ? '↑/↓ Select    Enter Open    PgUp/PgDn Details    Esc Back    Ctrl+X Save & Quit' : '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+X Save & Quit' };
     });
     for (;;) {
       const { key } = await this.nextKey();
@@ -264,15 +282,25 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 }
 
 export async function initializeTerminal(surface: TerminalSurface,
-  jobs: [() => Promise<string | void>, () => Promise<string | void>, () => Promise<string | void>, () => Promise<string | void>],
+  jobs: [(report: InitializationReporter) => Promise<string | void>, (report: InitializationReporter) => Promise<string | void>, (report: InitializationReporter) => Promise<string | void>, (report: InitializationReporter) => Promise<string | void>],
   signal?: AbortSignal): Promise<InitializationRows> {
   const rows: InitializationRows = ['Loading configuration', 'Initializing scanner', 'Checking AI providers', 'Loading project environment']
     .map(label => ({ label, status: 'pending' as RowStatus })) as InitializationRows;
+  rows[2].steps = [];
   surface.startup(rows);
   for (let index = 0; index < jobs.length; index++) {
     signal?.throwIfAborted();
     rows[index].status = 'active'; surface.startup(rows);
-    try { rows[index].detail = await jobs[index]() || undefined; rows[index].status = 'completed'; }
+    const report: InitializationReporter = update => {
+      const steps = rows[index].steps ??= [];
+      let step = [...steps].reverse().find(entry => entry.label === update.label);
+      if (!step || update.status === 'active') {
+        step = { ...update, startedAt: Date.now(), finishedAt: update.status === 'active' ? undefined : Date.now() }; steps.push(step);
+      }
+      else Object.assign(step, update, { finishedAt: Date.now() });
+      surface.refresh();
+    };
+    try { rows[index].detail = await jobs[index](report) || undefined; rows[index].status = 'completed'; }
     catch (cause) {
       signal?.throwIfAborted();
       rows[index].detail = cause instanceof Error ? cause.message : String(cause); rows[index].status = 'failed';

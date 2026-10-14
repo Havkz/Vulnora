@@ -14,7 +14,7 @@ vi.mock('../agent/local-agents.js', () => ({ detectLocalAgent: detection }));
 vi.mock('../llm/ollama-session.js', () => ({ createOllamaSession: () => {
   const session = { start: vi.fn(async () => {}), stop: vi.fn(async () => {}) }; held.push(session); return session;
 } }));
-import { ProviderSession, validateProvider } from '../llm/provider-session.js';
+import { ProviderSession, validateProvider, type ProviderProgress } from '../llm/provider-session.js';
 
 const primary: LLMConfig = { provider: 'codex', model: 'configured-primary', timeout: 120000 };
 const local: LLMConfig = { provider: 'local', model: 'installed:7b', baseUrl: 'http://127.0.0.1:11434/api' };
@@ -35,6 +35,38 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('truthful provider initialization', () => {
+  it('reports real substeps without marking a pending inference completed', async () => {
+    const { runtime } = fixture();
+    const steps: ProviderProgress[] = [];
+    let finish!: (value: string) => void;
+    probe.mockImplementation(config => config.provider === 'local' ? new Promise(resolve => { finish = resolve; }) : Promise.resolve('VULNORA_READY'));
+    const prepared = runtime.prepare(step => steps.push(step));
+    await vi.waitFor(() => expect(steps.at(-1)).toMatchObject({ label: 'Testing Ollama inference', status: 'active' }));
+    expect(steps.filter(step => step.status === 'completed').map(step => step.label))
+      .toEqual(['Discovering installed Ollama models', 'Loading Ollama model']);
+    expect(detection).not.toHaveBeenCalled();
+    finish('VULNORA_READY'); await prepared;
+    expect(steps.filter(step => step.status === 'completed').map(step => step.label)).toEqual([
+      'Discovering installed Ollama models', 'Loading Ollama model', 'Testing Ollama inference',
+      'Checking codex CLI authentication', 'Testing codex inference', 'Using codex/configured-primary',
+    ]);
+    await runtime.close();
+  });
+
+  it('marks failed substeps and redacts their diagnostics while validating the fallback independently', async () => {
+    const { runtime } = fixture(); const steps: ProviderProgress[] = [];
+    probe.mockImplementation(async config => {
+      if (config.provider === 'local') throw new Error('token=secret-fixture-value-1234567890');
+      return 'VULNORA_READY';
+    });
+    await runtime.prepare(step => steps.push(step));
+    expect(steps).toContainEqual(expect.objectContaining({ label: 'Testing Ollama inference', status: 'failed' }));
+    expect(steps).not.toContainEqual(expect.objectContaining({ label: 'Testing Ollama inference', status: 'completed' }));
+    expect(JSON.stringify(steps)).not.toContain('secret-fixture-value');
+    expect(steps.at(-1)).toMatchObject({ label: 'Using codex/configured-primary', status: 'completed' });
+    await runtime.close();
+  });
+
   it('validates primary and installed local inference independently and attaches only the bounded fallback chain', async () => {
     const { runtime } = fixture();
     const description = await runtime.prepare();

@@ -56,18 +56,21 @@ export function centerLines(lines: string[], width: number): string[] {
 
 export function renderLogo(width: number, colors: TerminalTheme = theme): string[] {
   const primary = colors.accent;
-  if (width < 25) return centerLines([colors.bright('Vulnora')], width);
-  const shield = [
-    '╭───────────╮',
-    '│  ╲     ╱  │',
-    '│   ╲   ╱   │',
-    '│    ╲ ╱    │',
-    ' ╲    V    ╱ ',
-    '  ╲       ╱  ',
-    '   ╲_____╱   ',
+  if (width < 26) return centerLines([colors.bright('Vulnora')], width);
+  const browser = [
+    '╭───────────────────────╮',
+    '│ · · ·       https://  │',
+    '├───────────────────────┤',
+    '│          ╭───╮        │',
+    '│          │   │        │',
+    '│        ╭─┴───┴─╮      │',
+    '│        │   ●   │      │',
+    '│        │   │   │      │',
+    '│        ╰───────╯      │',
+    '╰───────────────────────╯',
   ].map(line => primary(line));
-  const caption = width >= 30 ? ['website & API security testing'] : ['website & API', 'security testing'];
-  return centerLines([...shield, colors.emphasis(colors.bright('V U L N O R A')),
+  const caption = ['website pentesting tool'];
+  return centerLines([...browser, colors.emphasis(colors.bright('V U L N O R A')),
     ...caption.map(line => colors.muted(line))], width);
 }
 

@@ -15,7 +15,7 @@ const program = new Command();
 
 program
   .name('vulnora')
-  .description('Vulnora - persistent website and API security testing')
+  .description('Vulnora - website pentesting tool')
   .version('1.0.0');
 
 program
