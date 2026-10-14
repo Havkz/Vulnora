@@ -6,6 +6,7 @@ import { Arsenal, BUILTIN_TOOLS } from '../arsenal/index.js';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { ToolOrchestrator } from '../orchestrator/tool-orchestrator.js';
 import * as dns from 'node:dns';
+import { Socket } from 'node:net';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -175,7 +176,12 @@ describe('effective scanning behavior', () => {
   it('paces native TCP probes and native TRACE requests through the same scheduler', async () => {
     const starts: number[] = [];
     const endpoints = await Promise.all([0, 1, 2].map(() => server((_request, response) => response.end())));
-    for (const instance of servers) instance.on('connection', () => starts.push(Date.now()));
+    const ports = endpoints.map(url => Number(url.port));
+    const connect = Socket.prototype.connect;
+    vi.spyOn(Socket.prototype, 'connect').mockImplementation(function (this: Socket, ...args) {
+      if (typeof args[0] === 'number' && ports.includes(args[0])) starts.push(Date.now());
+      return Reflect.apply(connect, this, args);
+    });
     const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS);
     arsenal.getOrchestrator().scanPolicy.setBehavior('aggressive');
     const result = await arsenal.execute('port_scan', { parameters: { target: '127.0.0.1', ports: endpoints.map(url => url.port).join(',') } });
