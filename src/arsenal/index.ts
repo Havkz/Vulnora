@@ -262,6 +262,12 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
   throw new Error('Target request redirect handling failed');
 }
 
+function discoveryBaseUrl(input: string): string {
+  const url = new URL(input);
+  url.search = ''; url.hash = '';
+  return url.href.replace(/\/+$/, '');
+}
+
 function discoveryFingerprint(response: Response, body: string): string {
   return createHash('sha256').update(JSON.stringify([
     response.status, response.headers.get('content-type'), response.headers.get('location'), body,
@@ -1280,7 +1286,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       { name: 'timeout', type: 'number', description: 'Timeout per request in ms', required: false, default: 5000 },
     ],
     handler: async (context) => {
-      const baseUrl = (context.parameters.url as string).replace(/\/$/, '');
+      const baseUrl = discoveryBaseUrl(context.parameters.url as string);
       const wordlistType = context.parameters.wordlist as string || 'common';
       const timeout = (context.parameters.timeout as number) || 5000;
 
@@ -1968,7 +1974,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       { name: 'url', type: 'string', description: 'Base URL of the target (e.g., https://example.com)', required: true },
     ],
     handler: async (context) => {
-      const baseUrl = (context.parameters.url as string).replace(/\/+$/, '');
+      const baseUrl = new URL(context.parameters.url as string).origin;
 
       try {
         const robotsUrl = `${baseUrl}/robots.txt`;
@@ -2128,7 +2134,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
     ],
     handler: async (context) => {
       const url = context.parameters.url as string;
-      const baseUrl = url.replace(/\/+$/, '');
+      const baseUrl = discoveryBaseUrl(url);
       const detected: { software: string; version: string; source: string }[] = [];
 
       try {
@@ -2378,7 +2384,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       { name: 'wordlist', type: 'string', description: 'Probe set: common, graphql, rest', required: false, default: 'common' },
     ],
     handler: async (context) => {
-      const baseUrl = (context.parameters.url as string).replace(/\/+$/, '');
+      const baseUrl = discoveryBaseUrl(context.parameters.url as string);
       const wordlistType = context.parameters.wordlist as string || 'common';
 
       const wordlists: Record<string, string[]> = {

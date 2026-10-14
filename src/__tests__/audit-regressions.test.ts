@@ -46,6 +46,27 @@ afterEach(async () => {
 });
 
 describe('audit security regressions', () => {
+  it.each(['dir_bruteforce', 'api_endpoint_discovery', 'robots_txt_fetch'])(
+    'builds actual paths rather than query suffixes in %s', async name => {
+      const paths: string[] = [];
+      const origin = await listen(createServer((request, response) => {
+        paths.push(request.url || '');
+        if (request.url === '/robots.txt') { response.end('User-agent: *\nDisallow: /private\n'); }
+        else if (request.url === '/app/api') { response.writeHead(200, { 'content-type': 'application/json' }); response.end('{"fixture":true}'); }
+        else { response.writeHead(404); response.end('missing'); }
+      }));
+      const tool = BUILTIN_TOOLS.find(tool => tool.name === name);
+      if (!tool) throw new Error('Missing discovery tool');
+      const result = await tool.handler(createToolContext(undefined, { url: origin + '/app/?mode=read' }));
+      expect(result.success).toBe(true);
+      expect(paths.every(path => !path.includes('mode=read'))).toBe(true);
+      if (name === 'robots_txt_fetch') expect(paths).toEqual(['/robots.txt']);
+      else {
+        expect(paths).toContain('/app/api');
+        expect(paths.some(path => path.startsWith('/app/vulnora-not-found-'))).toBe(true);
+        expect(result.output).toMatch(/Found [1-9]/);
+      }
+    });
   it.each(['dir_bruteforce', 'api_endpoint_discovery'])('rejects uniform SPA and authentication responses in %s discovery', async name => {
     for (const status of [200, 401]) {
       const origin = await listen(createServer((_req, res) => {
