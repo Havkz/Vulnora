@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import type { EvidenceRecord, NetworkContext, TargetBudgets } from './tool-orchestrator.js';
 
 export type CoverageCapability =
@@ -74,10 +75,16 @@ function classify(records: EvidenceRecord[]): CoverageStatus {
   return last.executionStatus === 'skipped' ? 'incomplete' : 'failed_retryable';
 }
 
+function targetUrl(target: string): URL {
+  const address = target.trim();
+  return new URL(/^https?:\/\//i.test(address) ? address : `https://${isIP(address) === 6 ? `[${address}]` : address}`);
+}
+
 export function evaluateCoverage(target: string, records: EvidenceRecord[], reportingCompleted = false): CoverageSnapshot {
+  const host = targetUrl(target).hostname;
   const hostRecords = records.filter(record => {
-    try { return new URL(record.target).hostname === target || record.target === target; }
-    catch { return record.target.includes(target); }
+    try { return targetUrl(record.target).hostname === host; }
+    catch { return record.target === target; }
   });
   const entries = Object.fromEntries(CAPABILITIES.map(capability => {
     const matching = hostRecords.filter(record => belongs(record, capability));
@@ -122,13 +129,15 @@ export function planCoverageRecovery(params: {
   if (network.blockState === 'probable_edge_block' || budget.remaining.tool_call_budget <= 0 || budget.remaining.total_request_budget <= 0) return undefined;
   const count = (capability: CoverageCapability) => attempts[capability] || 0;
   const open = (capability: CoverageCapability) => snapshot.retryable.includes(capability);
-  const target = snapshot.target;
+  const address = targetUrl(snapshot.target);
+  const target = address.hostname.replace(/^\[|\]$/g, '');
+  const url = address.href;
 
   if (open('dns_enumeration') && count('dns_enumeration') < 1 && availableTools.has('dns_lookup')) return { capability: 'dns_enumeration', toolName: 'dns_lookup', parameters: { domain: target, type: 'A' }, repeatReason: 'previous_failure', description: 'DNS baseline recovery' };
-  if (open('http_probe') && count('http_probe') < 2 && availableTools.has('http_request')) return { capability: 'http_probe', toolName: 'http_request', parameters: { url: `https://${target}/`, method: 'GET', headers: {}, body: '' }, repeatReason: 'previous_failure', description: 'HTTP baseline recovery' };
-  if (open('tls_analysis') && count('tls_analysis') < 1 && availableTools.has('ssl_scan')) return { capability: 'tls_analysis', toolName: 'ssl_scan', parameters: { host: target, port: 443 }, repeatReason: 'previous_failure', description: 'TLS coverage recovery' };
-  if (open('header_analysis') && count('header_analysis') < 1 && availableTools.has('header_analysis')) return { capability: 'header_analysis', toolName: 'header_analysis', parameters: { url: `https://${target}/` }, repeatReason: 'previous_failure', description: 'Security-header coverage recovery' };
-  if (open('technology_detection') && count('technology_detection') < 1 && availableTools.has('technology_detect')) return { capability: 'technology_detection', toolName: 'technology_detect', parameters: { url: `https://${target}/` }, repeatReason: 'previous_failure', description: 'Technology coverage recovery' };
+  if (open('http_probe') && count('http_probe') < 2 && availableTools.has('http_request')) return { capability: 'http_probe', toolName: 'http_request', parameters: { url, method: 'GET', headers: {}, body: '' }, repeatReason: 'previous_failure', description: 'HTTP baseline recovery' };
+  if (open('tls_analysis') && count('tls_analysis') < 1 && availableTools.has('ssl_scan')) return { capability: 'tls_analysis', toolName: 'ssl_scan', parameters: { host: target, port: address.protocol === 'https:' ? Number(address.port || 443) : 443 }, repeatReason: 'previous_failure', description: 'TLS coverage recovery' };
+  if (open('header_analysis') && count('header_analysis') < 1 && availableTools.has('header_analysis')) return { capability: 'header_analysis', toolName: 'header_analysis', parameters: { url }, repeatReason: 'previous_failure', description: 'Security-header coverage recovery' };
+  if (open('technology_detection') && count('technology_detection') < 1 && availableTools.has('technology_detect')) return { capability: 'technology_detection', toolName: 'technology_detect', parameters: { url }, repeatReason: 'previous_failure', description: 'Technology coverage recovery' };
 
   if (open('port_discovery') && count('port_discovery') < 3) {
     const attempt = count('port_discovery');
@@ -140,12 +149,15 @@ export function planCoverageRecovery(params: {
     return { capability: 'service_detection', toolName: 'nmap_scan', parameters: { target, ports: '80,443', flags: '-sV --version-light' }, repeatReason: 'materially_different_configuration', description: 'Service detection on evidenced web ports', requiredCapability: 'port_discovery', missingEvidence: 'Open-port evidence', retryAfterCapability: 'port_discovery' };
   }
   if (open('content_discovery') && count('content_discovery') < 3) {
-    if (count('content_discovery') === 0 && availableTools.has('ffuf_fuzz')) return { capability: 'content_discovery', toolName: 'ffuf_fuzz', parameters: { url: `https://${target}/FUZZ`, wordlist: '/usr/share/wordlists/dirb/common.txt', mc: '200,204,301,302,307,401,403' }, description: 'Bounded FFUF content discovery' };
-    for (const toolName of ['feroxbuster_tool', 'gobuster_tool', 'dir_bruteforce']) if (availableTools.has(toolName)) return { capability: 'content_discovery', toolName, parameters: toolName === 'dir_bruteforce' ? { url: `https://${target}/`, wordlist: 'common' } : { url: `https://${target}/`, wordlist: '/usr/share/wordlists/dirb/common.txt' }, repeatReason: 'materially_different_configuration', description: `Content discovery fallback via ${toolName}` };
+    if (count('content_discovery') === 0 && availableTools.has('ffuf_fuzz')) {
+      const fuzz = new URL(url); fuzz.pathname = fuzz.pathname.replace(/\/?$/, '/FUZZ');
+      return { capability: 'content_discovery', toolName: 'ffuf_fuzz', parameters: { url: fuzz.href, wordlist: '/usr/share/wordlists/dirb/common.txt', mc: '200,204,301,302,307,401,403' }, description: 'Bounded FFUF content discovery' };
+    }
+    for (const toolName of ['feroxbuster_tool', 'gobuster_tool', 'dir_bruteforce']) if (availableTools.has(toolName)) return { capability: 'content_discovery', toolName, parameters: toolName === 'dir_bruteforce' ? { url, wordlist: 'common' } : { url, wordlist: '/usr/share/wordlists/dirb/common.txt' }, repeatReason: 'materially_different_configuration', description: `Content discovery fallback via ${toolName}` };
   }
-  if (open('api_discovery') && count('api_discovery') < 1 && availableTools.has('api_endpoint_discovery')) return { capability: 'api_discovery', toolName: 'api_endpoint_discovery', parameters: { url: `https://${target}/`, wordlist: 'common' }, description: 'Bounded API discovery' };
-  if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: `https://${target}/`, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };
-  if (params.includeValidation && open('targeted_validation') && count('targeted_validation') < 1 && availableTools.has('http_methods_test')) return { capability: 'targeted_validation', toolName: 'http_methods_test', parameters: { url: `https://${target}/` }, description: 'Low-impact targeted HTTP validation' };
+  if (open('api_discovery') && count('api_discovery') < 1 && availableTools.has('api_endpoint_discovery')) return { capability: 'api_discovery', toolName: 'api_endpoint_discovery', parameters: { url, wordlist: 'common' }, description: 'Bounded API discovery' };
+  if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: url, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };
+  if (params.includeValidation && open('targeted_validation') && count('targeted_validation') < 1 && availableTools.has('http_methods_test')) return { capability: 'targeted_validation', toolName: 'http_methods_test', parameters: { url }, description: 'Low-impact targeted HTTP validation' };
   return undefined;
 }
 

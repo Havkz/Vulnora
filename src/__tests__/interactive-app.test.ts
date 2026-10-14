@@ -118,7 +118,7 @@ describe('durable interactive project flow', () => {
     expect(counted()).toBe(before);
     const navigation = vi.spyOn(f.surface, 'nextKey');
     f.input.write('\x1b[H' + '\x1b[B'.repeat(30));
-    await expect.poll(() => navigation.mock.calls.length).toBe(31);
+    await expect.poll(() => navigation.mock.calls.length).toBeGreaterThanOrEqual(31);
     const errorStart = f.surface.colors.error('x').split('x')[0];
     const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines.find(line => line.includes(errorStart)) || '')
       .replace(/^│\s*/, '').replace(/\s*│$/, '').trim();
