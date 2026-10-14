@@ -26,7 +26,7 @@ install -d -o vulnora -g vulnora -m 700 /home/vulnora/app /home/vulnora/.vulnora
 tar -xf "$archive" -C /home/vulnora/app --no-same-owner
 chown -R vulnora:vulnora /home/vulnora/app
 for config_file in .env config.json; do
-  if [[ -f "$windows_config/$config_file" ]]; then
+  if [[ -f "$windows_config/$config_file" && ! -e "/home/vulnora/.vulnora/$config_file" ]]; then
     install -o vulnora -g vulnora -m 600 "$windows_config/$config_file" "/home/vulnora/.vulnora/$config_file"
   fi
 done

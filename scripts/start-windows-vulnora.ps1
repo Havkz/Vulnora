@@ -1,42 +1,35 @@
 $ErrorActionPreference = 'Stop'
-$env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
-& (Join-Path $PSScriptRoot 'setup-windows-arsenal.ps1')
+$runtimePath = Join-Path $env:USERPROFILE '.vulnora\sandbox\runtime.json'
+if (-not (Test-Path -LiteralPath $runtimePath)) { & (Join-Path $PSScriptRoot 'setup-windows-arsenal.ps1') }
+$runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
 $ollamaProcess = $null
-$model = 'huihui_ai/qwen3-coder-abliterated:30b'
-$needsModel = ($args.Count -eq 0 -or $args[0] -in 'interactive', 'test')
-$providerCheck = Join-Path $env:USERPROFILE '.vulnora\sandbox\providers-verified'
+$needsModel = ($args.Count -eq 0 -or $args[0] -in 'interactive', 'test', 'models', '--verify-providers')
 try {
     if ($needsModel) {
         try { $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2 }
         catch {
-            $ollamaExe = (Get-Command ollama.exe -ErrorAction Stop).Source
-            $env:OLLAMA_HOST = '127.0.0.1:11434'
-            $ollamaProcess = Start-Process $ollamaExe -ArgumentList 'serve' -WindowStyle Hidden -PassThru
-            $ready = $false
-            for ($attempt = 0; $attempt -lt 20; $attempt++) {
-                Start-Sleep -Milliseconds 500
+            $ollamaExe = Get-Command ollama.exe -ErrorAction SilentlyContinue
+            if ($ollamaExe) {
+                $previousHost = $env:OLLAMA_HOST
                 try {
-                    $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2
-                    $ready = $true
-                    break
-                } catch { }
-            }
-            if (-not $ready) { throw 'Ollama konnte nicht gestartet werden.' }
+                    $env:OLLAMA_HOST = '127.0.0.1:11434'
+                    $ollamaProcess = Start-Process $ollamaExe.Source -ArgumentList 'serve' -WindowStyle Hidden -PassThru
+                } finally { $env:OLLAMA_HOST = $previousHost }
+                $ready = $false
+                for ($attempt = 0; $attempt -lt 20; $attempt++) {
+                    Start-Sleep -Milliseconds 500
+                    try {
+                        $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/tags' -TimeoutSec 2
+                        $ready = $true
+                        break
+                    } catch { }
+                }
+                if (-not $ready) { Write-Warning 'Ollama unavailable. Vulnora will report provider readiness and supported fallback.' }
+            } else { Write-Warning 'Ollama is not installed. Vulnora will report provider readiness and supported fallback.' }
         }
     }
-    if ($needsModel -and -not (Test-Path $providerCheck)) {
-        & wsl.exe -d Vulnora-Arsenal --user vulnora --exec bash /home/vulnora/app/scripts/start-linux-vulnora.sh --verify-providers
-        if ($LASTEXITCODE -ne 0) { throw 'Codex/Ollama-Verbindungstest fehlgeschlagen. Linux-CLI wurde nicht gestartet.' }
-        [IO.File]::WriteAllText($providerCheck, (Get-Date -Format o))
-    }
-    & wsl.exe -d Vulnora-Arsenal --user vulnora --exec bash /home/vulnora/app/scripts/start-linux-vulnora.sh @args
-    if ($LASTEXITCODE -ne 0) { throw "Vulnora wurde mit Fehlercode $LASTEXITCODE beendet." }
+    & wsl.exe -d $runtime.distro --user $runtime.user --exec bash "$($runtime.appDirectory)/scripts/start-linux-vulnora.sh" @args
+    if ($LASTEXITCODE -notin 0, 130) { throw "Vulnora exited with code $LASTEXITCODE." }
 } finally {
-    if ($needsModel) {
-        try {
-            $body = @{ model = $model; stream = $false; keep_alive = 0 } | ConvertTo-Json -Compress
-            $null = Invoke-RestMethod 'http://127.0.0.1:11434/api/generate' -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 30
-        } catch { Write-Warning 'Ollama-Modell konnte nicht entladen werden.' }
-    }
     if ($ollamaProcess -and -not $ollamaProcess.HasExited) { Stop-Process -Id $ollamaProcess.Id }
 }

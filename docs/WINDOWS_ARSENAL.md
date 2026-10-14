@@ -1,15 +1,19 @@
 # Windows CLI with a dedicated Linux arsenal
 
-The local `vulnora` launcher uses the WSL 2 distribution `Vulnora-Arsenal`. Its disk and
-verified Kali rootfs live in `%USERPROFILE%\.vulnora\sandbox`. The application runs as
-the Linux user `vulnora` in `/home/vulnora/app`, from an archive of the committed repository.
+The `vulnora` launcher reuses `Vulnora-Arsenal` or the existing `Tempest-Arsenal`
+distribution with its `tempest` user. These OS identifiers preserve installed tools
+and provider authentication. Releases live under `~/.vulnora/releases/<git-revision>`.
+Setup installs an archive of the committed repository and records its runtime in
+`%USERPROFILE%\.vulnora\sandbox\runtime.json` after successful build and strict checks.
+The original application remains available as a rollback boundary.
 It opens the terminal CLI. No web UI or API server is started.
 Passwordless sudo is granted during installation and removed after the installer succeeds.
 
 Windows must restart after enabling Windows Subsystem for Linux and Virtual Machine Platform.
-The first `vulnora` invocation then imports the staged rootfs and installs the arsenal using
-`scripts/setup-windows-arsenal.ps1`. Package installation can take substantial time and disk
-space. A failed install stops with an error and never writes the readiness marker. It can be
+Run `scripts/setup-windows-arsenal.ps1` to install the runtime. If no existing
+distribution is available, setup requires a staged rootfs with verified SHA256SUMS.
+Fresh package installation can take substantial time and disk space. A failed install
+stops with an error and never publishes the new runtime manifest. It can be
 retried by running `vulnora` again.
 
 Setup checks a default route and Kali DNS before package installation. Package-index
@@ -31,17 +35,21 @@ and the directory-discovery wordlist are installed. The installer also installs 
 `node scripts/arsenal-doctor.mjs --offline --strict` checks all 23 adapters without an API server.
 
 The launcher starts native Windows Ollama bound to `127.0.0.1:11434` if needed. WSL mirrored
-networking lets the Linux application reach that same loopback address. Existing custom
-kernel settings are preserved; the previous `.wslconfig` is backed up in the sandbox folder.
-The Linux VM is limited to 4 GB RAM plus 4 GB swap to leave memory for the Windows model.
+networking lets the Linux application reach that same loopback address. Existing
+Windows/WSL networking, kernel and memory settings are preserved by this installer.
 
-Codex remains the primary provider. The existing file-based Codex login is copied with
-private Linux file permissions; Windows hooks and global CLI configuration are not copied.
-The first interactive launch checks a harmless Base64 harness call with Codex, then injects
-a missing Codex executable to verify Ollama fallback with the same tool. This check must pass
-before the provider-verification marker is written. The interactive session loads the local
-model, holds it until exit, and unloads it afterwards. The launcher stops only an Ollama
-service it started itself.
+Saved provider/model choices remain effective. Codex/Claude reuse authentication
+through documented CLI invocation; their credential files are never copied or edited.
+Startup validates actual inference and shows failures honestly, permitting supported
+fallback, Settings and saved reports. The session holds the selected local model until
+graceful exit and unloads that model afterwards. The launcher stops only an Ollama
+service it started itself and does not unload an unrelated hardcoded model.
+
+Linux legacy application data is migrated first; Windows Vulnora data fills missing
+files only. Destination files and original sources remain intact; migration records
+file hashes. After validating the runtime, run `scripts/install-windows-alias.ps1`
+to install `vulnora` in PowerShell 7, Windows PowerShell and CMD. Existing `tempest`
+profile functions are replaced, and profiles/wrappers are backed up in `.vulnora/backups`.
 
 Regular agents receive installed, relevant, non-equivalent tools. Ollama receives concise
 descriptions, required argument markers, defaults and enums. Codex gets longer descriptions
@@ -52,4 +60,4 @@ advertising new scan tools. Uniform catch-all responses do not count as discover
 
 This is a separate Linux execution environment, not a hardened hostile-code sandbox.
 To check the installer manifest locally, run `npm run build` and `npm run arsenal:test-linux`.
-The first installation and interactive Linux behavior must be verified after the reboot.
+Installed-command and interactive checks are tracked separately in the milestone ledger.

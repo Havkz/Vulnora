@@ -37,7 +37,7 @@ for recipe in \
   read -r binary module <<< "$recipe"
   if ! command -v "$binary" >/dev/null; then go install "$module@latest"; fi
 done
-npm install --global --prefix "$HOME/.local" @openai/codex
+if ! command -v codex >/dev/null; then npm install --global --prefix "$HOME/.local" @openai/codex; fi
 npm ci
 npm run build
 nuclei -update-templates

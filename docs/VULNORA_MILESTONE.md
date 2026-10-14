@@ -373,3 +373,21 @@ offering a resumable menu. A completed project opens its results without startin
   Local bearer aliases are now tested through actual configuration resolution;
   the resize fixture waits until queued navigation finishes before checking its
   reading anchor. Linux validation and final deployment remain separate gates.
+- Settings/security commit 1ddb04a also passes clean-install Linux build/lint
+  (0 errors), all 66 suites with 721 passed/4 Windows skips and 11 preflight checks.
+  Actual Linux file/directory permissions are asserted after saved-key updates.
+  Validation directory: /home/tempest/.vulnora/validation/1ddb04a.VVJQo4.
+- Windows setup now reuses the existing Kali distribution and Linux provider user,
+  deploying committed releases under ~/.vulnora/releases/<revision>. Strict tool
+  checks, build and non-overwriting data migration precede runtime publication.
+  Original application files and native provider credentials are left in place.
+- The Linux launcher resolves its own release directory and respects saved/default
+  provider configuration. Windows uses the runtime manifest, starts loopback Ollama
+  only when needed, stops only its own service, and accepts normal Ctrl+C exit 130.
+  Model loading/unloading remains owned by ProviderSession; no hardcoded model is
+  unloaded by the wrapper. A failed provider no longer blocks all startup before UI.
+- The alias installer selectively replaces old profile functions and the CMD wrapper,
+  backing them up first. Actual installed-launch validation remains required before
+  applying these aliases. Windows launcher lifecycle fixtures and shell syntax pass.
+  Regression: 67 Windows suites, 709 passed/18 skips, 11 preflight checks; build and
+  focused lint pass. The Linux launcher has its own actual-process fixture.
