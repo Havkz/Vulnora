@@ -5,7 +5,13 @@
  * the SSE feed.
  */
 import { describe, it, expect } from 'vitest';
-import { redactString, redactSecrets } from '../redact.js';
+import { redactString, redactSecrets, registerSecret } from '../redact.js';
+
+it('redacts complete overlapping configured credentials before shorter ones', () => {
+  registerSecret('opaque-fixture-prefix');
+  registerSecret('opaque-fixture-prefix-private-suffix');
+  expect(redactString('Rejected opaque-fixture-prefix-private-suffix')).toBe('Rejected [redacted]');
+});
 
 describe('redactString — URL userinfo (basic-auth) scrub', () => {
   it('strips the password from a scheme://user:pass@host login URL (all schemes)', () => {

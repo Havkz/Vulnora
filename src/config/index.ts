@@ -7,10 +7,11 @@
 
 import Conf from 'conf';
 import { homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
-import { configDirectory, migrateEnvironment } from './migration.js';
+import { configDirectory, migrateEnvironment, protectConfigSecrets } from './migration.js';
+import { registerSecret } from '../redact.js';
 
 export type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'local';
 
@@ -35,6 +36,8 @@ export interface VulnoraSettings {
   // Default LLM settings
   defaultProvider: LLMProvider;
   defaultModel: string;
+  /** Explicit saved choices take precedence over inherited startup defaults. */
+  userSelections: string[];
 
   scanningBehavior: 'auto' | 'stealth' | 'aggressive';
   local: { baseUrl: string; defaultModel: string };
@@ -125,6 +128,7 @@ export type TempestSettings = VulnoraSettings;
 
 const DEFAULT_SETTINGS: VulnoraSettings = {
   apiKeys: {},
+  userSelections: [],
 
   defaultProvider: 'openrouter',
   defaultModel: 'anthropic/claude-opus-4.8',
@@ -587,7 +591,10 @@ class ConfigManager {
       projectName: 'vulnora',
       cwd: directory,
       defaults: DEFAULT_SETTINGS,
+      configFileMode: 0o600,
     });
+
+    if (process.platform !== 'win32' || Object.keys(this.config.get('apiKeys')).length || existsSync(join(directory, '.env'))) protectConfigSecrets(directory);
 
     this.loadEnvVariables();
   }
@@ -613,7 +620,7 @@ class ConfigManager {
         const envContent = readFileSync(envPath, 'utf-8');
         const lines = envContent.split('\n');
         // Validation variables added
-        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local'];
+        const VALID_PROVIDERS = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local', 'codex', 'local-agent'];
 
         for (const line of lines) {
           const trimmed = line.trim();
@@ -644,8 +651,8 @@ class ConfigManager {
 
     migrateEnvironment();
     // Environment variables (including values loaded from ~/.vulnora/.env above)
-    // are intentionally process-local. getApiKey() already gives env vars highest
-    // priority, so do not persist them into Conf's apiKeys store as a side effect.
+    // are intentionally process-local defaults, so do not persist them into
+    // Conf's apiKeys store as a side effect. Explicit saved choices take precedence.
     // (XAI_API_KEY / Grok Build follows the same safe path — see the envVarMap in getApiKey.)
     this.envLoaded = true;
   }
@@ -675,16 +682,20 @@ class ConfigManager {
    * Set an API key for a provider
    */
   setApiKey(provider: ApiKeyProvider, key: string): void {
+    protectConfigSecrets(dirname(this.getConfigPath()));
     const apiKeys = this.config.get('apiKeys');
     apiKeys[provider] = key;
-    this.config.set('apiKeys', apiKeys);
+    this.config.set({ apiKeys, userSelections: this.selections(`apiKey:${provider}`) });
+    registerSecret(key);
   }
 
   /**
    * Get an API key for a provider
    */
   getApiKey(provider: ApiKeyProvider): string | undefined {
-    // First check environment variables (highest priority)
+    if (/^(1|true|yes|on)$/i.test((process.env.VULNORA_FORCE_UNCONFIGURED || '').trim())) return undefined;
+    if (this.selected(`apiKey:${provider}`)) return this.config.get('apiKeys')[provider];
+    // Environment supplies defaults until the user explicitly replaces a key.
     // local provider: a self-hosted/OpenAI-compatible server MAY require a bearer
     // (Zhipu/z.ai, Together, etc.) — accept VULNORA_LOCAL_API_KEY or provider-specific vars.
     if (provider === 'local') {
@@ -707,7 +718,6 @@ class ConfigManager {
     // arsenal:smoke so the key-required / fail-closed paths are exercisable. Gated behind
     // an explicit flag so a normal operator's STORED key is NEVER silently disabled by an
     // empty exported env var (round-2 code-sweep regression fix).
-    if (/^(1|true|yes|on)$/i.test((process.env.VULNORA_FORCE_UNCONFIGURED || '').trim())) return undefined;
 
     const envKey = process.env[envVarMap[provider]];
     if (envKey) return envKey;   // a non-empty env var wins; empty/unset falls through
@@ -730,7 +740,7 @@ class ConfigManager {
   removeApiKey(provider: ApiKeyProvider): void {
     const apiKeys = this.config.get('apiKeys');
     delete apiKeys[provider];
-    this.config.set('apiKeys', apiKeys);
+    this.config.set({ apiKeys, userSelections: this.selections().filter(value => value !== `apiKey:${provider}`) });
   }
 
   /**
@@ -775,7 +785,7 @@ class ConfigManager {
 
     if (!actualProvider) {
       const envProvider = process.env.VULNORA_DEFAULT_PROVIDER?.trim();
-      if (envProvider) {
+      if (envProvider && !this.selected('provider')) {
         actualProvider = envProvider as LLMProvider;
       } else {
         actualProvider = this.config.get('defaultProvider');
@@ -816,7 +826,8 @@ class ConfigManager {
       case 'litellm':
         apiKey = this.getApiKey('litellm');
         baseUrl = process.env.LITELLM_BASE_URL?.trim() || this.config.get('litellm').baseUrl;
-        actualModel = model || process.env.LITELLM_MODEL?.trim() || this.config.get('litellm').defaultModel;
+        actualModel = model || (this.selected('model:litellm') ? this.config.get('litellm').defaultModel : undefined)
+          || process.env.LITELLM_MODEL?.trim() || this.config.get('litellm').defaultModel;
         break;
       case 'gemini':
         // Google Gemini via its OpenAI-compatible endpoint (native tool-calling).
@@ -852,8 +863,10 @@ class ConfigManager {
         // Placeholder ids from AVAILABLE_MODELS / the static UI are not real served model tags.
         // Treat them as unset so VULNORA_LOCAL_MODEL (or the llama3 default) wins; a real tag
         // passed in still takes priority.
-        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined) || process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3';
-        apiKey = process.env.VULNORA_LOCAL_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || process.env.ZHIPUAI_API_KEY?.trim();
+        actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined)
+          || (this.selected('model:local') ? this.config.get('local').defaultModel : undefined)
+          || process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3';
+        apiKey = this.getApiKey('local');
         break;
       default:
         throw new Error(`Unknown provider: ${actualProvider}`);
@@ -888,11 +901,12 @@ class ConfigManager {
     const chain: FallbackEntry[] = [];
     if (['local', 'ollama'].includes(flag)) {
       if (primary !== 'local') {
+        const local = this.getLLMConfig('local');
         chain.push({
           provider: 'local',
-          model: process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3',
-          apiKey: process.env.VULNORA_LOCAL_API_KEY?.trim() || undefined,
-          baseUrl: process.env.VULNORA_LOCAL_BASE_URL?.trim() || this.config.get('local').baseUrl,
+          model: local.model,
+          apiKey: local.apiKey,
+          baseUrl: local.baseUrl,
         });
       }
       return chain;
@@ -922,89 +936,22 @@ class ConfigManager {
    * Set the default provider
    */
   setDefaultProvider(provider: LLMProvider): void {
-    this.config.set('defaultProvider', provider);
-
-    // Also set the appropriate default model
-    switch (provider) {
-      case 'openrouter':
-        this.config.set('defaultModel', this.config.get('openrouter').defaultModel);
-        break;
-      case 'venice':
-        this.config.set('defaultModel', this.config.get('venice').defaultModel);
-        break;
-      case 'anthropic':
-        this.config.set('defaultModel', this.config.get('anthropic').defaultModel);
-        break;
-      case 'openai':
-        this.config.set('defaultModel', this.config.get('openai').defaultModel);
-        break;
-      case 'deepseek':
-        this.config.set('defaultModel', this.config.get('deepseek').defaultModel);
-        break;
-      case 'xai':
-        this.config.set('defaultModel', this.config.get('xai').defaultModel);
-        break;
-      case 'gemini':
-        this.config.set('defaultModel', this.config.get('gemini').defaultModel);
-        break;
-      case 'litellm':
-        this.config.set('defaultModel', this.config.get('litellm').defaultModel);
-        break;
-      case 'codex':
-        this.config.set('defaultModel', this.config.get('codex').defaultModel);
-        break;
-      case 'local':
-        this.config.set('defaultModel', this.getLLMConfig('local').model);
-        break;
-      case 'local-agent':
-        this.config.set('defaultModel', this.config.get('localAgent').defaultModel);
-        break;
-    }
+    this.config.set({ defaultProvider: provider, defaultModel: this.getLLMConfig(provider).model,
+      userSelections: this.selections('provider') });
   }
 
   /**
    * Set the default model for a provider
    */
   setDefaultModel(provider: LLMProvider, model: string): void {
-    switch (provider) {
-      case 'openrouter':
-        this.config.set('openrouter', { ...this.config.get('openrouter'), defaultModel: model });
-        break;
-      case 'venice':
-        this.config.set('venice', { ...this.config.get('venice'), defaultModel: model });
-        break;
-      case 'anthropic':
-        this.config.set('anthropic', { ...this.config.get('anthropic'), defaultModel: model });
-        break;
-      case 'openai':
-        this.config.set('openai', { ...this.config.get('openai'), defaultModel: model });
-        break;
-      case 'deepseek':
-        this.config.set('deepseek', { ...this.config.get('deepseek'), defaultModel: model });
-        break;
-      case 'xai':
-        this.config.set('xai', { ...this.config.get('xai'), defaultModel: model });
-        break;
-      case 'gemini':
-        this.config.set('gemini', { ...this.config.get('gemini'), defaultModel: model });
-        break;
-      case 'litellm':
-        this.config.set('litellm', { ...this.config.get('litellm'), defaultModel: model });
-        break;
-      case 'codex':
-        this.config.set('codex', { ...this.config.get('codex'), defaultModel: model });
-        break;
-      case 'local':
-        this.config.set('local', { ...this.config.get('local'), defaultModel: model });
-        break;
-      case 'local-agent':
-        this.config.set('localAgent', { defaultModel: model });
-        break;
+    const changes: Partial<VulnoraSettings> = { userSelections: this.selections(`model:${provider}`) };
+    if (provider !== 'mock' && provider !== 'deterministic') {
+      const key = provider === 'local-agent' ? 'localAgent' : provider;
+      if (!Object.hasOwn(DEFAULT_SETTINGS, key)) throw new Error(`Unknown provider: ${provider}`);
+      Object.assign(changes, { [key]: { ...this.config.get(key), defaultModel: model } });
     }
-
-    if (this.config.get('defaultProvider') === provider) {
-      this.config.set('defaultModel', model);
-    }
+    if (this.config.get('defaultProvider') === provider) changes.defaultModel = model;
+    this.config.set(changes);
   }
 
   /**
@@ -1013,6 +960,14 @@ class ConfigManager {
   reset(): void {
     this.config.clear();
   }
+
+  private selections(key?: string): string[] {
+    const saved = this.config.get('userSelections');
+    const values = Array.isArray(saved) ? saved.filter(value => typeof value === 'string') : [];
+    return [...new Set([...values, ...(key ? [key] : [])])];
+  }
+
+  private selected(key: string): boolean { return this.selections().includes(key); }
 
   /**
    * Get the config file path

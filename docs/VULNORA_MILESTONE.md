@@ -349,3 +349,27 @@ offering a resumable menu. A completed project opens its results without startin
   17 POSIX skips, 11 preflight checks; build/typecheck and lint pass (0 errors).
   Focused interactive tests also verify stable wrapping, severity colors, resizing
   without losing the reading anchor and complete journal content.
+
+- Committed presentation snapshot e1eea8e also passes clean-install Linux build/lint
+  (0 errors), 65 suites with 716 passed/4 Windows skips and 11 preflight checks.
+  Validation directory: /home/tempest/.vulnora/validation/e1eea8e.ou8qEp.
+  Real Codex/Ollama readiness, forced local fallback and model release pass; the
+  kernel PTY preview passes at 80x30 and 24x12, including READY without scan,
+  interrupted edit persistence and terminal restoration. Preview transcript:
+  /home/tempest/.vulnora/validation/ui-preview-kaeisw0c/terminal-transcript.ansi.
+- Saved provider, model and API-key choices now survive stale startup environment
+  defaults and reopening. Local fallback uses the same resolved configuration,
+  including an explicitly saved bearer. Environment credentials are not persisted.
+- Configured opaque credentials are redacted from API errors, stacks and request
+  events; HTTP status remains available so permanent authentication failures are
+  not retried. Overlapping credentials are scrubbed longest first.
+- Configuration writes use mode 600 and the dedicated Unix directory mode 700.
+  On Windows, existing credential files and atomic replacements are protected by
+  directory/file ACLs granting only the current user, SYSTEM and administrators.
+  This is permission-protected local storage, not an encrypted vault. Provider CLI
+  authentication files remain untouched. Real Windows ACLs are asserted in tests.
+- Settings/security milestone Windows validation: 66 suites, 708 passed/17 POSIX
+  skips, all 11 preflight checks; build/typecheck and lint pass (0 errors).
+  Local bearer aliases are now tested through actual configuration resolution;
+  the resize fixture waits until queued navigation finishes before checking its
+  reading anchor. Linux validation and final deployment remain separate gates.

@@ -122,6 +122,12 @@ For a local primary, select Ollama in Settings or set `LLM_PROVIDER=local` and
 `VULNORA_DEFAULT_PROVIDER=local`. API providers remain available through Settings;
 **Change API Key** masks entry and credentials are redacted from logs.
 
+Explicit choices saved in Settings take precedence over inherited startup defaults.
+API credentials are stored in the dedicated configuration directory with owner-only
+Unix permissions; Windows access is limited to the current user, SYSTEM and administrators.
+This protects local files through operating-system permissions; the settings file is
+not an encrypted credential vault.
+
 Graceful exit unloads the held model and waits for removal from Ollama's running
 list. After a force-kill, use `ollama stop your-installed-model` if it remains
 loaded. Other installed models are left alone.

@@ -21,7 +21,7 @@ import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
 import { localAgentChat, type LocalAgentProgress } from '../agent/local-agents.js';
-import { redactLedgerText, redactSecrets } from '../redact.js';
+import { redactLedgerText, redactSecrets, redactString, registerSecret } from '../redact.js';
 
 // =============================================================================
 // LLM EVENTS
@@ -678,7 +678,7 @@ class OpenAIAdapter implements LLMProviderAdapter {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${errorText}`);
+      throw new LLMApiError(`OpenAI API error: ${response.status} - ${errorText}`, response.status);
     }
 
     const data = await response.json() as OpenRouterResponse;
@@ -1398,6 +1398,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   }
 
   private createAdapter(config: LLMConfig): LLMProviderAdapter {
+    registerSecret(config.apiKey);
     switch (config.provider) {
       case 'openrouter':
         return new OpenRouterAdapter(config);
@@ -1519,7 +1520,9 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           break;
         } catch (error) {
           options?.signal?.throwIfAborted();
-          lastError = error as Error;
+          lastError = error instanceof Error ? error : new Error(String(error));
+          lastError.message = redactString(lastError.message);
+          if (lastError.stack) lastError.stack = redactString(lastError.stack);
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
           const permanent = error instanceof LLMUnavailableError || (error instanceof LLMApiError &&
             (error.status === 401 || error.status === 403 || error.status === 404));

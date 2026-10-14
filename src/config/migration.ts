@@ -3,6 +3,42 @@ import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, statSync, 
 import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+
+/** Protect the dedicated settings directory, including atomic replacement files. */
+export function protectConfigSecrets(directory: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    chmodSync(directory, 0o700);
+    for (const name of ['config.json', '.env']) {
+      const file = join(directory, name);
+      if (existsSync(file)) chmodSync(file, 0o600);
+    }
+    return;
+  }
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    $identities = @([Security.Principal.WindowsIdentity]::GetCurrent().User,
+      [Security.Principal.SecurityIdentifier]::new('S-1-5-18'),
+      [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    foreach ($target in @($env:VULNORA_SETTINGS_ROOT, [IO.Path]::Combine($env:VULNORA_SETTINGS_ROOT, 'config.json'), [IO.Path]::Combine($env:VULNORA_SETTINGS_ROOT, '.env'))) {
+      if ([IO.Directory]::Exists($target)) { $item = [IO.DirectoryInfo]::new($target); $inherit = 'ContainerInherit, ObjectInherit' }
+      elseif ([IO.File]::Exists($target)) { $item = [IO.FileInfo]::new($target); $inherit = 'None' }
+      else { continue }
+      $acl = $item.GetAccessControl()
+      $acl.SetAccessRuleProtection($true, $false)
+      foreach ($rule in @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) { $acl.RemoveAccessRuleSpecific($rule) }
+      foreach ($identity in $identities) {
+        $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($identity, 'FullControl', $inherit, 'None', 'Allow'))
+      }
+      $item.SetAccessControl($acl)
+    }`;
+  execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+    Buffer.from(script, 'utf16le').toString('base64')], {
+    windowsHide: true, timeout: 15000, stdio: 'pipe',
+    env: { ...process.env, VULNORA_SETTINGS_ROOT: directory },
+  });
+}
 
 /** Old environment names stay input-compatible; new names always take precedence. */
 export function migrateEnvironment(env: NodeJS.ProcessEnv = process.env): void {

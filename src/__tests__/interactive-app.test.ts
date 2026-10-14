@@ -60,7 +60,9 @@ describe('durable interactive project flow', () => {
     const before = counted();
     for (let index = 0; index < 20; index++) f.surface.refresh();
     expect(counted()).toBe(before);
+    const navigation = vi.spyOn(f.surface, 'nextKey');
     f.input.write('\x1b[H' + '\x1b[B'.repeat(30));
+    await expect.poll(() => navigation.mock.calls.length).toBe(31);
     const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines[4] || '').trim();
     await expect.poll(firstLog).toContain('Evidence row');
     const anchor = firstLog().slice(0, 20);

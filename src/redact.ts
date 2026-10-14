@@ -27,8 +27,16 @@ export const SECRET_PATTERNS: Record<string, { pattern: RegExp; severity: string
   api_key_field: { pattern: /api[_-]?key["\s]*[:=]["\s]*["']?[A-Za-z0-9\-_]{16,}["']?/gi, severity: 'high', provider: 'Generic' },
 };
 
+const registeredSecrets: string[] = [];
+export function registerSecret(value?: string): void {
+  if (!value || registeredSecrets.includes(value)) return;
+  registeredSecrets.push(value);
+  registeredSecrets.sort((a, b) => b.length - a.length);
+}
+
 export function redactString(value: string): string {
   let redacted = value;
+  for (const secret of registeredSecrets) redacted = redacted.split(secret).join('[redacted]');
   for (const { pattern } of Object.values(SECRET_PATTERNS)) {
     pattern.lastIndex = 0;
     redacted = redacted.replace(pattern, '[redacted]');

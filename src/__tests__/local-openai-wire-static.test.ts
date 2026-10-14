@@ -34,15 +34,6 @@ describe('local OpenAI-compatible provider hardening', () => {
     expect(fn).not.toMatch(/\/v1\(/);
   });
 
-  it('getLLMConfig forwards an optional bearer for local servers that require auth', () => {
-    const localCase = block(configSource, "case 'local':", 'break;');
-
-    expect(localCase).toContain('VULNORA_LOCAL_API_KEY');
-    // Provider-specific aliases are accepted as a convenience.
-    expect(localCase).toMatch(/ZAI_API_KEY/);
-    expect(localCase).toMatch(/ZHIPUAI_API_KEY/);
-  });
-
   it('getLLMConfig treats UI local placeholders as unset model names', () => {
     const localCase = block(configSource, "case 'local':", 'break;');
 
