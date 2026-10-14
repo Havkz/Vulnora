@@ -225,7 +225,7 @@ export class InteractiveApp {
         if (selected !== undefined) {
           const behavior: ScanningBehavior = ['auto', 'stealth', 'aggressive'][selected] as ScanningBehavior;
           config.set('scanningBehavior', behavior);
-          if (this.session) { this.session.project.behavior = behavior; await this.services.store.save(this.session.project); }
+          if (this.session) await this.session.setScanningBehavior(behavior);
         }
       } else if (choice === 1) {
         const providers = ['codex', 'local-agent', 'local', 'openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek'] as const;

@@ -9,6 +9,7 @@ import { stat, statfs } from 'fs/promises';
 import { promisify } from 'util';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 import { evidenceStoreFromEnvironment, type EvidenceStore } from './evidence-store.js';
+import { ScanPolicy } from './scan-policy.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +70,7 @@ export interface NetworkContext {
   latencyMs?: number;
   consecutiveTimeouts: number;
   blockingResponses: number;
+  scanning?: { behavior: NonNullable<ScanPolicy['behavior']>; limits: ReturnType<ScanPolicy['limits']> };
 }
 
 export interface EvidenceRecord {
@@ -352,6 +354,7 @@ function edgeFrom(headers: Record<string, string> = {}, output = ''): { edge: bo
 }
 
 export class ToolOrchestrator {
+  readonly scanPolicy = new ScanPolicy();
   private readonly records: EvidenceRecord[] = [];
   private readonly events: OrchestratorEvent[] = [];
   private readonly conflicts: EvidenceConflict[] = [];
@@ -400,7 +403,12 @@ export class ToolOrchestrator {
     const state = this.budgetState(target);
     return { limits: { ...state.limits }, used: { ...state.used }, remaining: Object.fromEntries(Object.keys(state.limits).map(key => [key, Math.max(0, state.limits[key as keyof TargetBudgets] - state.used[key as keyof TargetBudgets])])) as unknown as TargetBudgets };
   }
-  getNetworkContext(target: string): NetworkContext { const state = this.networkState(target); return { edgeSurface: state.edgeSurface, edgeProvider: state.edgeProvider, blockState: state.blockState, latencyMs: state.latencyMs, consecutiveTimeouts: state.consecutiveTimeouts, blockingResponses: state.blockingResponses }; }
+  getNetworkContext(target: string): NetworkContext {
+    const state = this.networkState(target);
+    return { edgeSurface: state.edgeSurface, edgeProvider: state.edgeProvider, blockState: state.blockState,
+      latencyMs: state.latencyMs, consecutiveTimeouts: state.consecutiveTimeouts, blockingResponses: state.blockingResponses,
+      ...(this.scanPolicy.behavior ? { scanning: { behavior: this.scanPolicy.behavior, limits: this.scanPolicy.limits(targetKey(target)) } } : {}) };
+  }
   getPreflightStatus(): Record<string, { available: boolean; path?: string; version?: string; checkedAt: number }> {
     return Object.fromEntries([...this.dependencyStatus.entries()].map(([name, value]) => [name, { ...value }]));
   }
@@ -413,12 +421,13 @@ export class ToolOrchestrator {
   exportCheckpoint() {
     return structuredClone({ records: this.records, events: this.events, conflicts: this.conflicts,
       budgets: [...this.budgets], network: [...this.network], metrics: this.metrics,
-      wildcardDns: [...this.wildcardDns], lastHostRequest: [...this.lastHostRequest] });
+      wildcardDns: [...this.wildcardDns], lastHostRequest: [...this.lastHostRequest], scanPolicy: this.scanPolicy.exportCheckpoint() });
   }
 
   restoreCheckpoint(state: ReturnType<ToolOrchestrator['exportCheckpoint']>): void {
     if (this.activeExecutions.size || this.inFlight.size) throw new Error('Cannot restore over active tool executions.');
     const saved = structuredClone(state);
+    if (saved.scanPolicy) this.scanPolicy.restoreCheckpoint(saved.scanPolicy);
     this.records.splice(0, this.records.length, ...saved.records);
     this.events.splice(0, this.events.length, ...saved.events);
     this.conflicts.splice(0, this.conflicts.length, ...saved.conflicts);
@@ -498,14 +507,15 @@ export class ToolOrchestrator {
     return 1;
   }
 
-  private reserveBudget(call: NormalizedToolCall, cost: number): { failure: ToolResult | null; key: keyof TargetBudgets; estimated: number } {
+  private reserveBudget(call: NormalizedToolCall, cost: number, additionalRequest = false): { failure: ToolResult | null; key: keyof TargetBudgets; estimated: number } {
     const preciseKey = this.preciseBudgetKey(call);
     if (cost <= 0) return { failure: null, key: preciseKey, estimated: 0 };
     const state = this.budgetState(call.host);
     const key = this.budgetKey(call.toolCategory);
-    const preciseCost = preciseKey === 'batch_tool_budget' || preciseKey === 'tool_call_budget' ? 1 : cost;
+    const toolCost = additionalRequest ? 0 : 1;
+    const preciseCost = preciseKey === 'batch_tool_budget' || preciseKey === 'tool_call_budget' ? toolCost : cost;
     if (state.used.total_request_budget + cost > state.limits.total_request_budget
-      || state.used.tool_call_budget + 1 > state.limits.tool_call_budget
+      || state.used.tool_call_budget + toolCost > state.limits.tool_call_budget
       || state.used[preciseKey] + preciseCost > state.limits[preciseKey]
       || (key && state.used[key] + cost > state.limits[key])) {
       this.metrics.blockedCalls++;
@@ -513,7 +523,7 @@ export class ToolOrchestrator {
       return { failure: { success: false, error: 'ORCHESTRATOR budget_exceeded: target request budget exhausted.', metadata: { orchestrationStatus: 'budget_exceeded', networkRequests: 0 } }, key: preciseKey, estimated: cost };
     }
     state.used.total_request_budget += cost;
-    state.used.tool_call_budget += 1;
+    state.used.tool_call_budget += toolCost;
     if (preciseKey !== 'tool_call_budget') state.used[preciseKey] += preciseCost;
     if (key) state.used[key] += cost;
     this.metrics.actualNetworkRequests += cost;
@@ -600,6 +610,7 @@ export class ToolOrchestrator {
   }
 
   private async runWithNetworkPolicy(call: NormalizedToolCall, runner: () => Promise<ToolResult>): Promise<ToolResult> {
+    if (this.scanPolicy.behavior) return runner();
     const networked = !['offline', 'reporting', 'http_analysis'].includes(call.toolCategory);
     const state = this.networkState(call.host);
     if (!networked || state.blockState === 'clear') return runner();
@@ -809,12 +820,28 @@ export class ToolOrchestrator {
     const controller = new AbortController();
     context.abortSignal = context.abortSignal ? AbortSignal.any([controller.signal, context.abortSignal]) : controller.signal;
     context.abortSignal.throwIfAborted();
+    let httpRequests = 0;
+    let httpCheckpointError: CheckpointWriteError | undefined;
+    if (this.scanPolicy.behavior) context.beforeHttpRequest = async () => {
+      if (httpCheckpointError) { throw httpCheckpointError; }
+      if (httpRequests >= reservation.estimated) {
+        const extra = this.reserveBudget(call, 1, true);
+        if (extra.failure) throw new Error(extra.failure.error);
+        reservation.estimated++;
+      }
+      try { await this.persistCheckpoint(); }
+      catch (error) { httpCheckpointError = error as CheckpointWriteError; throw error; }
+      context.abortSignal?.throwIfAborted();
+      httpRequests++;
+    };
     this.activeExecutions.set(call.normalizedSignature, { host: call.host, controller, supportsAbort: tool.supportsAbort === true });
     const execution = (async () => {
       try {
         const wildcard = /(?:subdomain_enum|subfinder|amass)/i.test(tool.name) ? await this.detectWildcard(call.host) : undefined;
         context.abortSignal?.throwIfAborted();
         const raw = await this.runWithNetworkPolicy(call, runner);
+        if (httpCheckpointError) throw httpCheckpointError;
+        if (httpRequests) raw.metadata = { ...(raw.metadata || {}), networkRequestsActual: httpRequests };
         if (context.abortSignal?.aborted) return { ...raw, success: false, error: `Execution aborted: ${String(context.abortSignal.reason || 'policy stop')}`, metadata: { ...(raw.metadata || {}), aborted: true } };
         if (wildcard?.detected) {
           return {
@@ -825,12 +852,21 @@ export class ToolOrchestrator {
           };
         }
         return raw;
-      } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error), metadata: context.abortSignal?.aborted ? { aborted: true } : undefined }; }
+      } catch (error) {
+        if (httpCheckpointError) throw httpCheckpointError;
+        if (error instanceof CheckpointWriteError) throw error;
+        return { success: false, error: error instanceof Error ? error.message : String(error), metadata: {
+          ...(httpRequests ? { networkRequestsActual: httpRequests } : {}), ...(context.abortSignal?.aborted ? { aborted: true } : {}),
+        } };
+      }
     })();
     this.inFlight.set(call.equivalentSignature, execution);
     try {
       const result = await execution;
       const duration = Date.now() - started;
+      if (this.scanPolicy.behavior && !httpRequests && cost > 0) {
+        this.scanPolicy.observe(call.host, 0, result.success ? Number(result.metadata?.responseStatus || 200) : undefined);
+      }
       const reconciled = this.reconcileBudget(call, reservation, result);
       const record = this.store(call, context, result, duration, undefined, reservation.estimated, reconciled.actual, reconciled.source);
       if (inferredRepeatReason) {

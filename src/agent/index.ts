@@ -252,7 +252,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           tools: toolDefs,
           profile,
           security: securityContext,
-          sourceContext: [coverageGaps ? `Coverage gaps: ${coverageGaps}` : '', storedEvidence, sourceContext, sharedContext].filter(Boolean).join('\n'),
+          sourceContext: [coverageGaps ? `Coverage gaps: ${coverageGaps}` : '',
+            this.arsenal.getOrchestrator().scanPolicy?.behavior && evidenceTarget
+              ? `Scanner limits (enforced, scope cannot change): ${JSON.stringify(this.arsenal.getOrchestrator().getNetworkContext(evidenceTarget).scanning)}. Prioritize relevant checks using existing findings; avoid redundant or unavailable checks.` : '',
+            storedEvidence, sourceContext, sharedContext].filter(Boolean).join('\n'),
         }),
       },
     ];

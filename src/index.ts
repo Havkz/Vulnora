@@ -273,6 +273,7 @@ import { TOOL_ADAPTERS } from './arsenal/catalog.js';
 import { OpsecController, createBalancedOpsecConfig } from './opsec/index.js';
 import { CommsChannel } from './comms/index.js';
 import { AnalysisEngine } from './analysis/index.js';
+import { normalizeToolCall } from './orchestrator/tool-orchestrator.js';
 import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
@@ -392,6 +393,12 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     return Object.fromEntries(this.coverageSnapshots);
   }
 
+  public setScanningBehavior(behavior: NonNullable<VulnoraConfig['scanningBehavior']>): void {
+    if (this.activeDispatches.size) throw new Error('Drain running tasks before changing scanning behavior.');
+    this.arsenal.getOrchestrator().scanPolicy.setBehavior(behavior);
+    this.opsec.updateConfig({ avoidDetection: false, trafficBlending: false, jitterRange: [0, 0] });
+  }
+
   /**
    * White-box source context (security-prioritized code excerpt), set by the
    * large-repo analysis pipeline via setWhiteboxSource(). When present it is
@@ -440,6 +447,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.arsenal = new Arsenal();
     if (this.hooks.onStateCheckpoint) this.arsenal.getOrchestrator().setCheckpointWriter(() => this.persistState());
     this.opsec = new OpsecController(config.opsec);
+    if (config.scanningBehavior) this.setScanningBehavior(config.scanningBehavior);
     this.comms = new CommsChannel();
 
     // Register built-in tools and external CLI wrappers. The built-in intrusive/credential probes
@@ -923,6 +931,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.vault.restoreCheckpoint(saved.vault);
     this.arsenal.getOrchestrator().restoreCheckpoint(saved.orchestrator);
     this.opsec.restoreCheckpoint(saved.opsec);
+    const restoredBehavior = this.arsenal.getOrchestrator().scanPolicy.behavior;
+    if (restoredBehavior) this.setScanningBehavior(restoredBehavior);
     this.packBoard.restoreCheckpoint(saved.board);
     const state = saved.command;
     this.tickCount = state.tickCount; this.taskSeeded = state.taskSeeded; this.whiteboxSource = state.whiteboxSource;
@@ -1242,6 +1252,10 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
     for (const task of pendingTasks) {
       if (this.paused) break;
+      const policy = this.arsenal.getOrchestrator().scanPolicy;
+      if (policy.behavior && this.activeDispatches.size >= Math.min(this.cell.getCapacity(),
+        ...this.targetEnv.getAllTargets().map(target => policy.limits(normalizeToolCall('http_request',
+          { target, parameters: { url: target.address } }).host).operators))) break;
       // Skip if already being dispatched
       if (this.activeDispatches.has(task.id)) continue;
 

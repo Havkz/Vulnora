@@ -99,9 +99,14 @@ Decomposed tasks retain their ordered child queues, intermediate results, indivi
 tool checkpoints and remaining cooldown. Resume skips completed children and uses
 the same conservative replay rules for interrupted requests.
 
-The new CLI is under active migration. Retuned adaptive scanning behavior,
-remaining presentation/documentation acceptance and final installation still need work.
-Changing the saved behavior setting alone does not yet apply the new presets.
+The interactive scan modes enforce shared concurrency, pacing, timeouts and bounded
+safe-request retries. Rate limiting, transport failures and slow responses reduce
+load; eight stable observations gradually restore the selected preset. Backoff and
+budgets survive mode changes and project restart. See [scan modes](docs/SCAN_MODES.md)
+for measured limits and external-tool boundaries.
+
+The new CLI is under active migration. Remaining presentation/documentation
+acceptance and final installation still need work.
 See the [milestone ledger](docs/VULNORA_MILESTONE.md) for verified state and remaining
 requirements. Existing local aliases remain on the preserved installed runtime
 until the new runtime passes its installation checks.

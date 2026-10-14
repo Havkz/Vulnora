@@ -20,7 +20,7 @@ import * as tls from 'tls';
 import * as http from 'http';
 import * as https from 'https';
 import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
-import { ToolOrchestrator, TOOL_BINARIES, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
+import { ToolOrchestrator, TOOL_BINARIES, normalizeToolCall, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
 
 const execFileAsync = promisify(execFile);
 import type {
@@ -32,21 +32,53 @@ import type {
   RiskTier,
 } from '../types/index.js';
 
-const dnsResolve = promisify(dns.resolve);
-const dnsResolve4 = promisify(dns.resolve4);
-const dnsResolveMx = promisify(dns.resolveMx);
-const dnsResolveTxt = promisify(dns.resolveTxt);
-const dnsResolveNs = promisify(dns.resolveNs);
-const dnsReverse = promisify(dns.reverse);
+const dnsResolve = (domain: string, type: string) => scheduledDns(resolver => resolver.resolve(domain, type), () => dns.promises.resolve(domain, type));
+const dnsResolve4 = (domain: string) => scheduledDns(resolver => resolver.resolve4(domain), () => dns.promises.resolve4(domain));
+const dnsResolveMx = (domain: string) => scheduledDns(resolver => resolver.resolveMx(domain), () => dns.promises.resolveMx(domain));
+const dnsResolveTxt = (domain: string) => scheduledDns(resolver => resolver.resolveTxt(domain), () => dns.promises.resolveTxt(domain));
+const dnsResolveNs = (domain: string) => scheduledDns(resolver => resolver.resolveNs(domain), () => dns.promises.resolveNs(domain));
+const dnsReverse = (ip: string) => scheduledDns(resolver => resolver.reverse(ip), () => dns.promises.reverse(ip));
+
+async function scheduledDns<T>(query: (resolver: dns.promises.Resolver) => Promise<T>, fallback: () => Promise<T>): Promise<T> {
+  const context = fetchContext.getStore();
+  const policy = context?.orchestrator?.scanPolicy;
+  if (!policy?.behavior || !context?.host) return fallback();
+  const host = context.host;
+  return policy.runNetwork(host, async () => {
+    const limits = policy.limits(host);
+    const resolver = new dns.promises.Resolver({ timeout: limits.timeoutMs, tries: limits.retries + 1 });
+    const cancel = () => resolver.cancel();
+    context.signal?.throwIfAborted();
+    context.signal?.addEventListener('abort', cancel, { once: true });
+    const started = Date.now();
+    try {
+      const result = await query(resolver);
+      policy.observe(host, Date.now() - started, 200);
+      return result;
+    } catch (error) {
+      if (!context.signal?.aborted) policy.observe(host, Date.now() - started,
+        ['ENOTFOUND', 'ENODATA'].includes(String((error as NodeJS.ErrnoException).code)) ? 404 : undefined);
+      throw error;
+    } finally { context.signal?.removeEventListener('abort', cancel); }
+  }, context.signal, false);
+}
 
 /** Interactive web analyzers used to abort too early on busy or rate-limited
  * targets, especially while Nuclei and discovery tools were running. Keep the
  * value configurable, but allow two minutes by default for one request. */
 export function webRequestTimeoutMs(): number {
+  const context = fetchContext.getStore();
+  if (context?.orchestrator?.scanPolicy.behavior && context.host) return context.orchestrator.scanPolicy.limits(context.host).timeoutMs;
   const configured = Number(process.env.VULNORA_WEB_REQUEST_TIMEOUT_MS || 120000);
   return Number.isFinite(configured)
     ? Math.max(5000, Math.min(600000, Math.round(configured)))
     : 120000;
+}
+
+function requestTimeoutSignal(milliseconds: number): AbortSignal {
+  const policy = fetchContext.getStore()?.orchestrator?.scanPolicy;
+  // The shared policy starts its timeout after admission, not while another operator is using the slot.
+  return policy?.behavior ? new AbortController().signal : AbortSignal.timeout(milliseconds);
 }
 
 async function usableWebWordlist(requested?: string): Promise<string> {
@@ -123,6 +155,21 @@ import type { CVEEntry } from '../stubs/index.js';
 type PortProbeState = 'open' | 'closed' | 'filtered/timeout' | 'unreachable';
 
 async function probePort(host: string, port: number, timeout: number = 2000): Promise<PortProbeState> {
+  const context = fetchContext.getStore();
+  if (context?.orchestrator?.scanPolicy.behavior) {
+    const policy = context.orchestrator.scanPolicy;
+    return policy.runNetwork(context.host || host, async () => {
+      const started = Date.now();
+      const result = await probePortSocket(host, port, Math.min(timeout, policy.limits(context.host || host).timeoutMs));
+      if (!context.signal?.aborted) policy.observe(context.host || host, Date.now() - started,
+        result === 'open' || result === 'closed' ? 200 : undefined);
+      return result;
+    }, context.signal, false);
+  }
+  return probePortSocket(host, port, timeout);
+}
+
+async function probePortSocket(host: string, port: number, timeout: number): Promise<PortProbeState> {
   fetchContext.getStore()?.signal?.throwIfAborted();
   return new Promise((resolve) => {
     const socket = new net.Socket({ signal: fetchContext.getStore()?.signal });
@@ -164,7 +211,9 @@ export function normalizePortScanTimeout(raw: unknown): number {
 
 import { parseTargetHeaderConfig, targetHeadersForUrl, redactConfiguredSecrets } from './target-headers.js';
 
-const fetchContext = new AsyncLocalStorage<{ scope: ArsenalScope | null; signal?: AbortSignal }>();
+const fetchContext = new AsyncLocalStorage<{
+  scope: ArsenalScope | null; signal?: AbortSignal; orchestrator?: ToolOrchestrator; beforeRequest?: () => Promise<void>; host?: string;
+}>();
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const CROSS_ORIGIN_CREDENTIAL_HEADERS = ['authorization', 'cookie', 'cookie2', 'proxy-authorization'];
@@ -188,7 +237,10 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
       throw new Error(`SCOPE DENIED: redirect target '${denied}' is not authorized`);
     }
     const headers = targetHeadersForUrl(currentUrl, explicitHeaders);
-    const response = await globalThis.fetch(currentUrl, { ...init, method, body, headers, signal, redirect: 'manual' });
+    const request = { ...init, method, body, headers, signal, redirect: 'manual' as const };
+    const response = context?.orchestrator?.scanPolicy.behavior
+      ? await context.orchestrator.scanPolicy.fetch(currentUrl, request, context.beforeRequest || (async () => {}))
+      : await globalThis.fetch(currentUrl, request);
     const location = response.headers.get('location');
     if (!REDIRECT_STATUS.has(response.status) || !location || init.redirect === 'manual') return response;
     await response.body?.cancel();
@@ -219,7 +271,7 @@ function discoveryFingerprint(response: Response, body: string): string {
 async function discoveryBaseline(baseUrl: string, timeout: number): Promise<string | undefined> {
   try {
     const response = await targetFetch(`${baseUrl}/vulnora-not-found-${randomUUID()}`, {
-      signal: AbortSignal.timeout(timeout), redirect: 'manual',
+      signal: requestTimeoutSignal(timeout), redirect: 'manual',
     });
     return discoveryFingerprint(response, await response.text());
   } catch { return undefined; }
@@ -232,21 +284,43 @@ async function nativeHttpRequest(
   body?: string,
   timeoutMs = 30000
 ): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]> }> {
+  const context = fetchContext.getStore();
+  if (context?.orchestrator?.scanPolicy.behavior) {
+    const policy = context.orchestrator.scanPolicy;
+    const host = new URL(url).hostname;
+    await context.beforeRequest?.();
+    return policy.runNetwork(host, async () => {
+      const started = Date.now();
+      try {
+        const result = await nativeHttpRequestRaw(url, method, explicitHeaders, body, timeoutMs);
+        policy.observe(host, Date.now() - started, result.status);
+        return result;
+      } catch (error) { if (!context.signal?.aborted) policy.observe(host, Date.now() - started); throw error; }
+    }, context.signal, false);
+  }
+  return nativeHttpRequestRaw(url, method, explicitHeaders, body, timeoutMs);
+}
+
+async function nativeHttpRequestRaw(url: string, method: string, explicitHeaders?: Record<string, string>, body?: string,
+  timeoutMs = 30000): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]> }> {
   const target = new URL(url);
   if (!['http:', 'https:'].includes(target.protocol)) throw new Error(`Unsupported protocol: ${target.protocol}`);
   const mergedHeaders = targetHeadersForUrl(target, explicitHeaders);
   const headers = mergedHeaders ? Object.fromEntries(mergedHeaders.entries()) : undefined;
   const transport = target.protocol === 'https:' ? https : http;
   return new Promise((resolve, reject) => {
-    const request = transport.request(target, { method, headers, signal: fetchContext.getStore()?.signal }, response => {
+    const parentSignal = fetchContext.getStore()?.signal;
+    const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs), ...(parentSignal ? [parentSignal] : [])]);
+    const request = transport.request(target, { method, headers, signal }, response => {
       const responseHeaders = Object.fromEntries(Object.entries(response.headers)
         .filter((entry): entry is [string, string | string[]] => entry[1] !== undefined));
-      response.resume();
-      resolve({
+      response.on('error', reject);
+      response.on('end', () => resolve({
         status: response.statusCode || 0,
         statusText: response.statusMessage || '',
         headers: responseHeaders,
-      });
+      }));
+      response.resume();
     });
     request.setTimeout(timeoutMs, () => request.destroy(new Error(`Request timed out after ${timeoutMs}ms`)));
     request.on('error', reject);
@@ -426,6 +500,10 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
   private async runToolHandler(toolName: string, context: ToolContext, handler: CustomTool['handler']): Promise<ToolResult> {
     context.abortSignal?.throwIfAborted();
+    if (toolName === 'ssl_scan' && this.orchestrator.scanPolicy.behavior) {
+      return this.orchestrator.scanPolicy.runNetwork(normalizeToolCall(toolName, context).host,
+        () => handler(context), context.abortSignal, false);
+    }
     const serialized = new Set(['nuclei_scan', 'nmap_scan', 'ffuf_fuzz', 'dir_bruteforce']);
     if (!serialized.has(toolName)) return handler(context);
 
@@ -576,7 +654,9 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       const result = redactConfiguredSecrets(await this.orchestrator.execute(
         tool,
         context,
-        () => fetchContext.run({ scope: this.scope, signal: context.abortSignal }, () => this.runToolHandler(toolName, context, tool.handler))
+        () => fetchContext.run({ scope: this.scope, signal: context.abortSignal, orchestrator: this.orchestrator,
+          beforeRequest: context.beforeHttpRequest, host: normalizeToolCall(toolName, context).host },
+          () => this.runToolHandler(toolName, context, tool.handler))
       ));
       const durationMs = Date.now() - startTime;
 
@@ -781,10 +861,10 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             records = await dnsResolveNs(domain);
             break;
           case 'SOA':
-            records = await dns.promises.resolveSoa(domain);
+            records = await scheduledDns(resolver => resolver.resolveSoa(domain), () => dns.promises.resolveSoa(domain));
             break;
           case 'CAA':
-            records = await dns.promises.resolveCaa(domain);
+            records = await scheduledDns(resolver => resolver.resolveCaa(domain), () => dns.promises.resolveCaa(domain));
             break;
           case 'DNSKEY':
           case 'DS': {
@@ -1118,7 +1198,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           method,
           headers,
           body: body && method !== 'GET' ? body : undefined,
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
 
         const responseHeaders = Object.fromEntries(response.headers.entries());
@@ -1175,7 +1255,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       try {
         const response = await targetFetch(url, {
           method: 'HEAD',
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
         const analysis = securityHeaders.map(h => {
           const value = response.headers.get(h);
@@ -1226,7 +1306,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             try {
               const response = await targetFetch(fullUrl, {
                 method: 'GET',
-                signal: AbortSignal.timeout(timeout),
+                signal: requestTimeoutSignal(timeout),
                 redirect: 'manual',
               });
               const contentLength = response.headers.get('content-length');
@@ -1287,7 +1367,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
 
       try {
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
 
         const headers = Object.fromEntries(response.headers.entries());
@@ -1414,7 +1494,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           testUrl.searchParams.set(param, payload);
 
           const response = await targetFetch(testUrl.toString(), {
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
           const body = await response.text();
 
@@ -1490,7 +1570,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       try {
         const baselineUrl = new URL(baseUrl);
         baselineUrl.searchParams.set(param, 'normalvalue');
-        const baselineResp = await targetFetch(baselineUrl.toString(), { signal: AbortSignal.timeout(5000) });
+        const baselineResp = await targetFetch(baselineUrl.toString(), { signal: requestTimeoutSignal(5000) });
         const baselineBody = await baselineResp.text();
         baselineLength = baselineBody.length;
       } catch {
@@ -1502,7 +1582,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           const testUrl = new URL(baseUrl);
           testUrl.searchParams.set(param, payload);
 
-          const response = await targetFetch(testUrl.toString(), { signal: AbortSignal.timeout(5000) });
+          const response = await targetFetch(testUrl.toString(), { signal: requestTimeoutSignal(5000) });
           const body = await response.text();
           const bodyLower = body.toLowerCase();
 
@@ -1721,7 +1801,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: baselineBody.toString(),
           redirect: 'manual',
-          signal: AbortSignal.timeout(5000),
+          signal: requestTimeoutSignal(5000),
         });
         baselineStatus = baselineResp.status;
         const baselineText = await baselineResp.text();
@@ -1745,7 +1825,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: body.toString(),
             redirect: 'manual',
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
 
           const status = response.status;
@@ -1893,7 +1973,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const robotsUrl = `${baseUrl}/robots.txt`;
         const response = await targetFetch(robotsUrl, {
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
 
         if (response.status === 404) {
@@ -2054,7 +2134,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         // Fetch main page
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
         const headers = Object.fromEntries(response.headers.entries());
         const body = await response.text();
@@ -2128,7 +2208,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
         const probePromises = versionPaths.map(async (vp) => {
           try {
             const probeResp = await targetFetch(`${baseUrl}${vp.path}`, {
-              signal: AbortSignal.timeout(5000),
+              signal: requestTimeoutSignal(5000),
               redirect: 'manual',
             });
             if (probeResp.status === 200) {
@@ -2192,7 +2272,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const response = await targetFetch(url, {
           method: 'GET',
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
 
         const csp = response.headers.get('content-security-policy');
@@ -2350,7 +2430,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
               const fullUrl = `${baseUrl}${path}`;
               const resp = await targetFetch(fullUrl, {
                 method: 'GET',
-                signal: AbortSignal.timeout(5000),
+                signal: requestTimeoutSignal(5000),
                 redirect: 'manual',
               });
               const contentType = resp.headers.get('content-type') || '';
@@ -2432,7 +2512,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const optResp = await targetFetch(url, {
           method: 'OPTIONS',
-          signal: AbortSignal.timeout(5000),
+          signal: requestTimeoutSignal(5000),
         });
         optionsAllow = optResp.headers.get('allow');
         const accessControlMethods = optResp.headers.get('access-control-allow-methods');
@@ -2454,7 +2534,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
         try {
           const response = await targetFetch(url, {
             method,
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
             redirect: 'manual',
           });
 
@@ -2534,7 +2614,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           const response = await targetFetch(url, {
             method: 'GET',
             headers: { 'Origin': test.origin },
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
 
           const acao = response.headers.get('access-control-allow-origin');
@@ -2603,7 +2683,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
 
       try {
         const response = await targetFetch(url, {
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
           redirect: 'manual', // Don't follow redirects to capture Set-Cookie
         });
 
@@ -2722,7 +2802,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
 
           const response = await targetFetch(testUrl.toString(), {
             redirect: 'manual', // Don't follow redirects
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
 
           const location = response.headers.get('location') || '';
@@ -2812,7 +2892,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const baselineUrl = new URL(baseUrl);
         baselineUrl.searchParams.set(param, 'nonexistent_file_xyz');
-        const baseResp = await targetFetch(baselineUrl.toString(), { signal: AbortSignal.timeout(5000) });
+        const baseResp = await targetFetch(baselineUrl.toString(), { signal: requestTimeoutSignal(5000) });
         const baseBody = await baseResp.text();
         baselineLength = baseBody.length;
       } catch {
@@ -2825,7 +2905,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           testUrl.searchParams.set(param, payload);
 
           const response = await targetFetch(testUrl.toString(), {
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
           const body = await response.text();
           const bodyLower = body.toLowerCase();
@@ -2927,7 +3007,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           testUrl.searchParams.set(param, payload);
 
           const response = await targetFetch(testUrl.toString(), {
-            signal: AbortSignal.timeout(5000),
+            signal: requestTimeoutSignal(5000),
           });
           const body = await response.text();
 
@@ -3004,7 +3084,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       try {
         const response = await targetFetch(url, {
           method: 'GET',
-          signal: AbortSignal.timeout(webRequestTimeoutMs()),
+          signal: requestTimeoutSignal(webRequestTimeoutMs()),
         });
 
         const xfo = response.headers.get('x-frame-options');
@@ -3178,6 +3258,17 @@ export async function runSubprocess(
   const maxOutput = options?.maxOutput ?? 1024 * 1024; // 1MB
   const signals = [options?.signal, fetchContext.getStore()?.signal].filter((signal): signal is AbortSignal => !!signal);
   const signal = signals.length ? AbortSignal.any(signals) : undefined;
+  const context = fetchContext.getStore();
+  const policy = context?.orchestrator?.scanPolicy;
+  if (policy?.behavior && context?.host) {
+    const argv = policy.commandArgs(command, args, context.host);
+    return policy.runNetwork(context.host,
+      () => executeSubprocess(command, argv, timeout, maxOutput, signal), signal);
+  }
+  return executeSubprocess(command, args, timeout, maxOutput, signal);
+}
+
+async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {
 
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {

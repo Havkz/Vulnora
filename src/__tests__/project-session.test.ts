@@ -30,6 +30,30 @@ async function open(store: ProjectStore, id: string) {
 }
 
 describe('persistent project sessions', () => {
+  it('applies mode changes durably without resetting budgets, backoff, scope, or operator capacity', async () => {
+    const { store, project } = await fixture();
+    const session = await open(store, project.id);
+    const orchestrator = session.command.arsenal.getOrchestrator();
+    orchestrator.scanPolicy.observe(project.target.hostname, 10, 429, '120');
+    const backoff = orchestrator.scanPolicy.exportCheckpoint()?.hosts[0][1].backoffUntil;
+    const budget = orchestrator.getBudget(project.target.input);
+    const scope = session.command.arsenal.getScope();
+    const capacity = session.command.cell.getCapacity();
+    await session.setScanningBehavior('stealth');
+    await session.close();
+    const restored = await open(store, project.id);
+    const saved = restored.command.arsenal.getOrchestrator();
+    expect(saved.scanPolicy.behavior).toBe('stealth');
+    expect(saved.scanPolicy.exportCheckpoint()?.hosts[0][1].backoffUntil).toBe(backoff);
+    expect(saved.getBudget(project.target.input)).toEqual(budget);
+    expect(restored.command.arsenal.getScope()).toEqual(scope);
+    expect(restored.command.cell.getCapacity()).toBe(capacity);
+    await restored.start();
+    await expect(restored.setScanningBehavior('aggressive')).rejects.toThrow('Pause');
+    await restored.pause();
+    await restored.setScanningBehavior('aggressive');
+    expect((await store.load(project.id)).behavior).toBe('aggressive');
+  });
   it('blocks model-supplied local and subdomain targets before the tool handler runs, including after resume', async () => {
     const { store, project } = await fixture();
     const first = await open(store, project.id);

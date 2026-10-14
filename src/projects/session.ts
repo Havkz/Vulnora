@@ -19,6 +19,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     configuration: Omit<VulnoraConfig, 'name' | 'hooks'>, private release: () => Promise<void>) {
     super();
     this.command = new VulnoraCommand({ ...configuration, name: project.name, strictScope: true,
+      scanningBehavior: project.behavior,
       hooks: { onStateCheckpoint: () => this.persist() } });
     try {
       if (project.checkpoint !== undefined) this.command.restoreCheckpoint(project.checkpoint);
@@ -26,6 +27,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
         this.command.targetEnv.addTarget({ name: project.target.hostname, type: 'web_application',
           zone: 'external', address: project.target.input.trim(), metadata: { originalInput: project.target.input } });
       }
+      this.command.setScanningBehavior(project.behavior);
     } catch (error) { this.command.opsec.cleanup(); throw error; }
 
     this.command.on('scan:progress', event => this.record('scan:progress', event));
@@ -110,6 +112,14 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     await this.command.pauseAndDrain();
     if (this.project.status !== 'completed') this.project.status = 'paused';
     this.record('project:paused', { projectId: this.project.id });
+    await this.persist();
+  }
+
+  async setScanningBehavior(behavior: ProjectRecord['behavior']): Promise<void> {
+    if (this.project.status === 'running') throw new Error('Pause the project before changing scanning behavior.');
+    this.command.setScanningBehavior(behavior);
+    this.project.behavior = behavior;
+    this.record('scan:behavior', { behavior });
     await this.persist();
   }
 

@@ -304,3 +304,23 @@ offering a resumable menu. A completed project opens its results without startin
   skips, 11 preflight checks, build/typecheck and focused lint pass. The CLI
   cancellation fixture now waits for complete invocation metadata before asserting
   termination; its PID file can become visible before the next file is fully written.
+- The committed decomposition snapshot also passes Linux: 64 suites, 694 passed/
+  4 Windows skips, 11 preflight checks, from the isolated validation directory
+  /home/tempest/.vulnora/validation/1f71557.lzLZkV.
+- Effective project modes now set actual operator dispatch ceilings and a shared
+  per-host HTTP/TCP/DNS scheduler. HTTP slots cover body consumption, retries are
+  limited to bodyless GET/HEAD, extra requests are charged before sending, and
+  checkpoint failures stop execution even when a handler catches the error.
+- Response latency, 429/5xx and transport failures reduce concurrency and increase
+  pacing/backoff; stable observations restore the bounded preset. Persisted policy
+  includes outstanding Retry-After, adaptive state and last admission. Mode changes
+  preserve scope, operator pool capacity, accumulated budgets and backoff.
+- External scanners use an exclusive host lane with supported rate/thread/delay/
+  timeout/retry options. Native CLI help was checked for installed tools, including
+  Naabu's pass-count semantics and Dalfox's current workers/backoff/bypass options.
+  Opaque subprocesses cannot be retuned per response from outside; subsequent work
+  adapts after completion. See docs/SCAN_MODES.md for exact limits and boundaries.
+- Mode milestone Windows validation: all 65 suites, 700 passed/17 POSIX skips,
+  11 preflight checks; build/typecheck and lint pass (0 errors). Timing tests also
+  simulate slow durable writes: request starts remain paced after checkpointing,
+  cancellation stops queued work, and bodies retain their concurrency slots.

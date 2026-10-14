@@ -449,6 +449,8 @@ export interface ToolContext {
   attemptId?: string;
   sourceToolCallId?: string;
   abortSignal?: AbortSignal;
+  /** Internal durable accounting hook, installed by the orchestrator. */
+  beforeHttpRequest?: () => Promise<void>;
   parameters: Record<string, unknown>;
 }
 
@@ -509,6 +511,7 @@ export interface VulnoraConfig {
   tools?: CustomTool[];
   /** Restrict project scans to explicitly selected hosts, including local targets. */
   strictScope?: boolean;
+  scanningBehavior?: 'auto' | 'stealth' | 'aggressive';
   hooks?: RuntimeHooks;
 }
 

@@ -7,6 +7,7 @@ import type { CoverageCapability, CoverageSnapshot } from '../orchestrator/cover
 import { KillChainPhase, type Credential, type Finding, type ScanProgressEvent, type Target } from '../types/index.js';
 import { restoreAgentCheckpoint, validateTaskDecomposition } from '../agent/checkpoint.js';
 import { validateProjectTarget } from './targets.js';
+import { ScanPolicy } from '../orchestrator/scan-policy.js';
 
 export interface EngineCheckpoint {
   version: 1;
@@ -118,6 +119,7 @@ export function validateEngineCheckpoint(value: unknown): asserts value is Engin
   }
   for (const [, wildcard] of orchestrator.wildcardDns) if (!record(wildcard) || typeof wildcard.detected !== 'boolean' || !strings(wildcard.addresses) || !Number.isFinite(wildcard.checkedAt)) return fail();
   if (!orchestrator.lastHostRequest.every(([, at]) => Number.isFinite(at))) return fail();
+  if (orchestrator.scanPolicy !== undefined) ScanPolicy.validateCheckpoint(orchestrator.scanPolicy);
   const opsec = saved.opsec;
   if (!record(opsec) || !record(opsec.config) || !['silent', 'covert', 'loud'].includes(opsec.config.level)
     || !count(opsec.config.maxDetectionEvents) || opsec.config.maxDetectionEvents < 1
