@@ -5,10 +5,11 @@ import type { ProjectSession, ProjectLogEvent } from '../projects/session.js';
 import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from '../projects/store.js';
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
-import { initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
+import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
 import { severityStyle, type TerminalTheme } from './theme.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
+import { redactString } from '../redact.js';
 
 type Configuration = typeof settings;
 export interface InteractiveServices {
@@ -71,7 +72,7 @@ export class InteractiveApp {
       }
       const room = Math.max(1, this.surface.rows - 5);
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - room)));
-      return { lines: [this.surface.colors.accent(terminalText(title)), '', ...lines.slice(offset, offset + room).map(line => '  ' + this.surface.colors.foreground(line))], footer };
+      return { lines: [this.surface.colors.accent(fitTerminalText(title, this.surface.columns - 1)), '', ...lines.slice(offset, offset + room).map(line => '  ' + this.surface.colors.foreground(line))], footer };
     });
     for (;;) {
       const { key } = await this.surface.nextKey();
@@ -112,12 +113,28 @@ export class InteractiveApp {
   }
 
   private async ready(project: ProjectRecord): Promise<void> {
+    let offset = 0; let width = 0; let target: string[] = []; let room = 1;
     for (;;) {
-      this.surface.show(() => ({ lines: [...(this.surface.rows >= 12 ? [...this.surface.logo(), ''] : []),
-        ...wrapTerminalText(`Target URL or IP: ${project.target.input}`, this.surface.columns - 4).map(line => '  ' + this.surface.colors.foreground(line)), '',
-        '  ' + this.surface.colors.success('READY') + '  ' + this.surface.colors.muted('Press Enter to start')],
-      footer: 'Enter Start    Esc Edit target    Ctrl+C Save & Quit' }));
+      this.surface.show(() => {
+        if (width !== this.surface.panelColumns) {
+          width = this.surface.panelColumns;
+          target = wrapTerminalText(`Target URL or IP: ${project.target.input}`, width);
+        }
+        const instruction = wrapAnsi('Press Enter to start', width, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line));
+        const status = width >= 26 ? [this.surface.colors.success('READY') + '  ' + instruction[0]]
+          : [this.surface.colors.success('READY'), ...instruction];
+        const logo = this.surface.logo().length + target.length + status.length + 2 <= this.surface.panelRows ? this.surface.logo() : [];
+        room = Math.max(1, this.surface.panelRows - status.length - 1 - (logo.length ? logo.length + 1 : 0));
+        offset = Math.max(0, Math.min(offset, Math.max(0, target.length - room)));
+        return { lines: [...logo, ...(logo.length ? [''] : []), ...this.surface.panel([
+          ...target.slice(offset, offset + room).map(line => this.surface.colors.foreground(line)), '', ...status])],
+        footer: this.surface.columns < 60 ? 'Enter Start  Esc Edit' : 'Enter Start    Esc Edit    PgUp/PgDn Target    Ctrl+C Save & Quit' };
+      });
       const { key } = await this.surface.nextKey();
+      if (key.name === 'up' || key.name === 'pageup') offset -= key.name === 'up' ? 1 : room;
+      if (key.name === 'down' || key.name === 'pagedown') offset += key.name === 'down' ? 1 : room;
+      if (key.name === 'home') offset = 0;
+      if (key.name === 'end') offset = Number.MAX_SAFE_INTEGER;
       if (key.name === 'escape') {
         let answer: string | undefined;
         try {
@@ -128,6 +145,7 @@ export class InteractiveApp {
         try {
           project.target = validateProjectTarget(answer); project.inputDraft = undefined; project.checkpoint = undefined;
           await this.services.store.save(project);
+          width = 0;
         }
         catch (error) { await this.notice('Invalid target', (error as Error).message); }
       } else if (key.name === 'return') {
@@ -146,9 +164,11 @@ export class InteractiveApp {
     if (!entries.length) { await this.notice('Resume Project', 'No saved projects. Create New Project to begin.'); return; }
     const selected = await this.surface.menu('Resume Project', entries.map(project => `${project.name} · ${'status' in project ? `${project.status} · ${project.progress}%` : 'Target pending'}`), index => {
       const project = entries[index];
-      return [`Target: ${'target' in project ? project.target.input : project.targetInput || '(not entered)'}`,
+      return [`Project: ${project.name}`, `Target: ${'target' in project ? project.target.input : project.targetInput || '(not entered)'}`,
         `Created: ${new Date(project.createdAt).toLocaleString()}`,
-        `Last activity: ${new Date(project.lastActivity).toLocaleString()}`];
+        `Last activity: ${new Date(project.lastActivity).toLocaleString()}`,
+        `Status: ${'status' in project ? project.status : 'Target pending'}`,
+        `Progress: ${'progress' in project ? project.progress : 0}%`];
     });
     if (selected === undefined) return;
     const project = entries[selected];
@@ -176,15 +196,29 @@ export class InteractiveApp {
     let wrapped: { text: string; event: number; character: number }[] = [];
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => { logs.push(event); this.surface.refresh(); };
-    const onError = (error: Error) => { this.issue = error.message; this.surface.refresh(); };
+    const onError = (error: Error) => {
+      this.issue = redactString(error.message);
+      if ((logs.at(-1)?.data as { error?: string } | undefined)?.error !== this.issue) {
+        onLog({ timestamp: Date.now(), category: 'project:error', data: { error: this.issue } });
+      } else this.surface.refresh();
+    };
     session.on('log', onLog); session.on('error', onError);
     const render = () => {
-      const header = [`${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
-        session.project.target.input, `Provider: ${session.command.llm.getActiveProvider().provider} · ${session.command.llm.getActiveProvider().model}`];
-      const heading = header.flatMap(line => wrapTerminalText(line, this.surface.columns - 4));
-      const resized = width !== this.surface.columns - 4;
+      const active = session.command.llm.getActiveProvider();
+      const dense = this.surface.rows < 18;
+      const header = [dense ? `${session.project.status} · ${session.project.progress}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
+        session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
+      const completed = session.project.status === 'completed';
+      const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),
+        ...(completed ? wrapAnsi('Press Enter to view results', this.surface.panelColumns, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line)) : [])];
+      const headroom = Math.max(1, this.surface.panelRows - bottom.length - (dense ? 1 : 3));
+      const fullHeading = header.flatMap(line => wrapTerminalText(line, this.surface.panelColumns));
+      const heading = fullHeading.length <= headroom ? fullHeading :
+        (headroom >= 3 ? header : [header[0], `${active.provider} · ${active.model}`]).slice(0, headroom)
+          .map(line => fitTerminalText(line, this.surface.panelColumns));
+      const resized = width !== this.surface.panelColumns;
       const anchor = resized && !tail ? wrapped[offset] : undefined;
-      if (resized) { width = this.surface.columns - 4; processed = 0; wrapped = []; }
+      if (resized) { width = this.surface.panelColumns; processed = 0; wrapped = []; }
       for (; processed < logs.length; processed++) {
         const clean = terminalText(formatProjectLog(logs[processed]));
         const style = projectLogStyle(logs[processed], this.surface.colors);
@@ -200,14 +234,11 @@ export class InteractiveApp {
           if (line.event === anchor.event && line.character <= anchor.character) offset = index;
         });
       }
-      const completed = session.project.status === 'completed';
-      const room = Math.max(1, this.surface.rows - heading.length - (completed || this.issue ? 7 : 5));
+      const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - (dense ? 0 : 2));
       offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
-      return { lines: [...heading.map(line => '  ' + this.surface.colors.accent(line)), '',
-        ...wrapped.slice(offset, offset + room).map(line => '  ' + line.text), '',
-        ...(this.issue ? wrapTerminalText(this.issue, this.surface.columns - 4).map(line => this.surface.colors.error(line)) : []),
-        ...(completed ? [this.surface.colors.muted('Press Enter to view results')] : [])],
-      footer: 'Esc Pause    Ctrl+C Save & Quit    PgUp/PgDn Logs    End Live' };
+      return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
+        ...wrapped.slice(offset, offset + room).map(line => line.text), ...(dense ? [] : ['']), ...bottom]),
+      footer: this.surface.columns < 60 ? 'Esc Pause  ^C Save/Quit' : 'Esc Pause    Ctrl+C Save & Quit    PgUp/PgDn Logs    End Live' };
     };
     try {
       this.surface.show(render);

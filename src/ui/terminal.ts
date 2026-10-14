@@ -39,9 +39,11 @@ export function wrapTerminalText(text: string, columns: number): string[] {
   return result;
 }
 
-function fit(text: string, columns: number): string {
+export function fitTerminalText(text: string, columns: number): string {
+  columns = Math.max(1, columns);
   const clean = terminalText(text).replace(/\n/g, ' ');
   if (visibleWidth(clean) <= columns) return clean;
+  if (columns === 1) return '…';
   return wrapTerminalText(clean, Math.max(1, columns - 1))[0] + '…';
 }
 
@@ -79,6 +81,17 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   get columns(): number { return Math.max(1, this.output.columns || 80); }
   get rows(): number { return Math.max(1, this.output.rows || 24); }
+  get panelColumns(): number { return Math.max(1, this.columns - (this.rows >= 12 ? 7 : 4)); }
+  get panelRows(): number { return Math.max(1, this.rows - (this.rows >= 12 ? 6 : 2)); }
+
+  /** Rich Panel's rounded magenta border and padding (1, 2); compact below 12 rows. */
+  panel(lines: string[]): string[] {
+    if (this.rows < 12 || this.columns < 16) return lines.map(line => '  ' + line);
+    const border = this.colors.border;
+    const edge = (left: string, right: string) => border(left + '─'.repeat(this.columns - 3) + right);
+    const row = (text: string) => border('│') + '  ' + text + ' '.repeat(Math.max(0, this.panelColumns - visibleWidth(text))) + '  ' + border('│');
+    return [edge('╭', '╮'), row(''), ...lines.map(row), row(''), edge('╰', '╯')];
+  }
 
   private onKey = (text: string, key: Key): void => {
     if (this.stopped) return;
@@ -110,10 +123,10 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     if (!this.screen) return;
     const view = this.screen();
     const lines = this.rows < 8 || this.columns < 16
-      ? [this.colors.warning(fit('Resize terminal (minimum 16 columns × 8 rows).', this.columns - 1))]
+      ? [this.colors.warning(fitTerminalText('Resize terminal (minimum 16 columns × 8 rows).', this.columns - 1))].slice(0, this.rows - 1)
       : view.lines.slice(0, this.rows - 2);
     while (lines.length < this.rows - 1) lines.push('');
-    lines.push(this.colors.muted(fit(view.footer || 'Esc Back    Ctrl+C Save & Quit', this.columns - 1)));
+    lines.push(this.colors.muted(fitTerminalText(view.footer || 'Esc Back    Ctrl+C Save & Quit', this.columns - 1)));
     let update = '';
     for (let index = 0; index < lines.length; index++) {
       if (lines[index] !== this.previous[index]) update += `\x1b[${index + 1};1H\x1b[2K${lines[index]}`;
@@ -137,38 +150,54 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   logo(): string[] {
     return this.rows >= 24 ? renderLogo(this.columns, this.colors)
-      : [this.colors.bright('Vulnora'), this.colors.muted(fit('website & API security testing', this.columns - 1))];
+      : [this.colors.bright('Vulnora'), this.colors.muted(fitTerminalText('website & API security testing', this.columns - 1))];
   }
 
   startup(rows: InitializationRows, footer = 'Ctrl+C Save & Quit'): void {
-    this.show(() => ({ lines: [...(this.rows >= 12 ? [...this.logo(), ''] : []), this.colors.accent(`${SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]} Starting`), '',
-      ...rows.map(row => {
+    this.show(() => {
+      const room = this.panelRows - 7;
+      const logo = this.logo().length <= room ? this.logo() : room >= 1 ? [this.colors.bright('Vulnora')] : [];
+      const body = [this.colors.emphasis(this.colors.border(`${SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]} Starting`)), '', ...rows.map(row => {
         const glyph = row.status === 'active' ? SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length] : STATUS_GLYPHS[row.status];
-        const line = fit(`${glyph} ${row.label}${row.detail ? ` · ${row.detail}` : ''}`, this.columns - 4);
-        return '  ' + statusStyle(row.status, this.colors)(line);
-      })], footer }));
+        const indent = this.rows >= 12 ? '   ' : '';
+        const label = fitTerminalText(row.label, this.panelColumns - indent.length - 2);
+        const detailRoom = this.panelColumns - indent.length - 2 - visibleWidth(label);
+        const detail = row.detail && detailRoom > 4 ? this.colors.detail(fitTerminalText(`  (${row.detail})`, detailRoom)) : '';
+        return indent + statusStyle(row.status, this.colors)(glyph) + ' ' + (row.status === 'pending' ? this.colors.muted(label) : this.colors.foreground(label)) + detail;
+      })];
+      return { lines: [...logo, ...(logo.length ? [''] : []), ...this.panel(body)], footer };
+    });
   }
 
   async menu(title: string, choices: string[], details?: (selected: number) => string[]): Promise<number | undefined> {
     if (!choices.length) throw new Error('Menu must contain at least one choice.');
-    let selected = 0;
+    let selected = 0; let detailOffset = 0; let detailRoom = 1;
     this.show(() => {
       const logo = this.rows < 12 ? [] : this.logo();
       const detailLines = details?.(selected).flatMap(line => wrapTerminalText(line, this.columns - 4)) || [];
-      const room = Math.max(1, this.rows - logo.length - 5 - detailLines.length);
+      const prefix = [...logo, ...(logo.length ? [''] : []), this.colors.accent(fitTerminalText(title, this.columns - 1)), ''];
+      const available = Math.max(1, this.rows - 2 - prefix.length);
+      const room = details ? Math.min(choices.length, Math.max(1, Math.floor(available / 2))) : available;
+      detailRoom = Math.max(0, available - room - 1);
+      detailOffset = Math.max(0, Math.min(detailOffset, Math.max(0, detailLines.length - detailRoom)));
       const start = Math.max(0, selected - room + 1);
-      return { lines: [...logo, ...(logo.length ? [''] : []), this.colors.accent(title), '',
+      return { lines: [...prefix,
         ...choices.slice(start, start + room).map((label, offset) => {
-          const text = fit(label, this.columns - 4);
+          const text = fitTerminalText(label, this.columns - 5);
           return offset + start === selected ? this.colors.accent(`  > ${text}`) : this.colors.foreground(`    ${text}`);
-        }), ...detailLines.map(line => '  ' + this.colors.detail(line))], footer: '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+C Save & Quit' };
+        }), ...(detailRoom && detailLines.length ? ['', ...detailLines.slice(detailOffset, detailOffset + detailRoom).map(line => '  ' + this.colors.detail(line))] : [])],
+        footer: details ? '↑/↓ Select    Enter Open    PgUp/PgDn Details    Esc Back    Ctrl+C Save & Quit' : '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+C Save & Quit' };
     });
     for (;;) {
       const { key } = await this.nextKey();
       if (key.name === 'escape') return undefined;
       if (key.name === 'return') return selected;
-      if (key.name === 'up') selected = (selected - 1 + choices.length) % choices.length;
-      if (key.name === 'down') selected = (selected + 1) % choices.length;
+      if (key.name === 'up') { selected = (selected - 1 + choices.length) % choices.length; detailOffset = 0; }
+      if (key.name === 'down') { selected = (selected + 1) % choices.length; detailOffset = 0; }
+      if (details && key.name === 'pageup') detailOffset -= Math.max(1, detailRoom);
+      if (details && key.name === 'pagedown') detailOffset += Math.max(1, detailRoom);
+      if (details && key.name === 'home') detailOffset = 0;
+      if (details && key.name === 'end') detailOffset = Number.MAX_SAFE_INTEGER;
       this.paint();
     }
   }

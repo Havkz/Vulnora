@@ -21,6 +21,30 @@ function terminal(columns = 80, rows = 30) {
 }
 
 describe('terminal surface', () => {
+  it.each([[80, 30], [40, 24], [24, 12], [16, 8]])('keeps four startup rows and the fixed Starting position inside %s × %s', (columns, rows) => {
+    const { surface } = terminal(columns, rows);
+    const stages: InitializationRows = ['Configuration', 'Scanner', 'LLM', 'Projects'].map(label => ({ label, status: 'pending' })) as InitializationRows;
+    surface.startup(stages);
+    const view = () => (surface as unknown as { screen: () => TerminalFrame }).screen();
+    const starting = view().lines.findIndex(line => line.includes('Starting'));
+    for (const stage of stages) { stage.status = 'completed'; surface.refresh(); }
+    expect(view().lines.findIndex(line => line.includes('Starting'))).toBe(starting);
+    expect(view().lines.filter(line => stripVTControlCharacters(line).includes('✓ '))).toHaveLength(4);
+    expect(view().lines.length).toBeLessThanOrEqual(rows - 2);
+    expect(view().lines.every(line => visibleWidth(line) < columns)).toBe(true);
+    if (rows >= 12) {
+      expect(view().lines).toContain(surface.colors.border('╭' + '─'.repeat(columns - 3) + '╮'));
+      expect(view().lines.map(stripVTControlCharacters).join('\n')).toMatchSnapshot();
+    }
+  });
+  it('handles resizing a panel below the supported dimensions without throwing or writing outside the terminal', () => {
+    const { surface, output, transcript } = terminal();
+    surface.startup(['Configuration', 'Scanner', 'LLM', 'Projects'].map(label => ({ label, status: 'pending' })) as InitializationRows);
+    output.columns = 1; output.rows = 1;
+    const before = transcript().length;
+    expect(() => output.emit('resize')).not.toThrow();
+    expect(transcript().slice(before)).not.toContain('\x1b[2;1H');
+  });
   it('handles real arrow and Enter bytes with the requested three-item menu', async () => {
     const { input, surface, transcript } = terminal();
     const selection = surface.menu('VULNORA', ['Create New Project', 'Resume Project', 'Settings']);

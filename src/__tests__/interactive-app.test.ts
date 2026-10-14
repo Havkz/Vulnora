@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { InteractiveApp, formatProjectLog, type InteractiveServices } from '../ui/app.js';
 import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
 import * as terminal from '../ui/terminal.js';
+import { visibleWidth } from '../ui/theme.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
 import type { LLMConfig } from '../types/index.js';
@@ -43,6 +44,36 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it.each([[24, 12], [16, 8]])('keeps READY and completion visible at %s × %s with a long original target and preserves all scrollable metadata', async (columns, rows) => {
+    const f = await fixture(); f.output.columns = columns; f.output.rows = rows;
+    const target = 'https://fixture.test/' + 'segment/'.repeat(50) + 'TARGET_END';
+    const project = await f.store.create('Long project ' + 'x'.repeat(60), target);
+    const screens = vi.spyOn(f.surface, 'show'); const result = f.start();
+    const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
+    const plain = () => view().lines.map(stripVTControlCharacters).join('\n');
+    const content = () => view().lines.map(stripVTControlCharacters).map(line => line.replace(/^│\s*/, '').replace(/\s*│$/, '').trim());
+    const bounded = () => {
+      expect(view().lines.length).toBeLessThanOrEqual(rows - 2);
+      expect(view().lines.every(line => visibleWidth(line) < columns)).toBe(true);
+    };
+    f.input.write('\x1b[B\r');
+    await expect.poll(plain).toContain('Resume Project');
+    f.input.write('\x1b[F'); await expect.poll(plain).toContain('Progress: 0%'); bounded();
+    f.input.write('\r'); await expect.poll(plain).toContain('READY'); bounded();
+    f.input.write('\x1b[F'); await expect.poll(() => content().join('')).toContain('TARGET_END'); bounded();
+    expect(content().join(' ')).toContain('Press Enter to start');
+    expect(f.open).not.toHaveBeenCalled(); expect((await f.store.load(project.id)).target.input).toBe(target);
+    f.input.write('\r'); await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
+    const session = f.session(); if (!session) throw new Error('Missing session');
+    const report = vi.spyOn(session, 'results');
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
+    session.command.mission.completeMission(mission.id);
+    await expect.poll(() => session.project.status).toBe('completed'); f.surface.refresh(); bounded();
+    expect(content().join(' ')).toContain('Press Enter to view results');
+    expect(report).not.toHaveBeenCalled();
+    f.input.write('\r'); await expect.poll(() => report.mock.calls.length).toBe(1);
+    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
   it('colors full live errors, caches stable logs, and retains the visible content anchor on resize', async () => {
     const f = await fixture(); const result = f.start();
     const screens = vi.spyOn(f.surface, 'show');
@@ -63,7 +94,9 @@ describe('durable interactive project flow', () => {
     const navigation = vi.spyOn(f.surface, 'nextKey');
     f.input.write('\x1b[H' + '\x1b[B'.repeat(30));
     await expect.poll(() => navigation.mock.calls.length).toBe(31);
-    const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines[4] || '').trim();
+    const errorStart = f.surface.colors.error('x').split('x')[0];
+    const firstLog = () => stripVTControlCharacters(screens.mock.calls.at(-1)?.[0]().lines.find(line => line.includes(errorStart)) || '')
+      .replace(/^│\s*/, '').replace(/\s*│$/, '').trim();
     await expect.poll(firstLog).toContain('Evidence row');
     const anchor = firstLog().slice(0, 20);
     f.output.columns = 40; f.output.emit('resize');

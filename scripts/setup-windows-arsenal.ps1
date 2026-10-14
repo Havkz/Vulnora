@@ -49,6 +49,11 @@ Invoke-VulnoraWsl -arguments @('-d', $distro, '--user', $linuxUser, '--exec', 'b
     (ConvertTo-LinuxPath (Join-Path $PSScriptRoot 'deploy-vulnora-linux.sh')), (ConvertTo-LinuxPath $archive),
     $revision, (ConvertTo-LinuxPath (Join-Path $env:USERPROFILE '.vulnora')))
 $runtime = @{ distro = $distro; user = $linuxUser; appDirectory = $appDirectory; revision = $revision }
+if (Test-Path -LiteralPath $runtimePath) {
+    $backupDirectory = Join-Path $env:USERPROFILE '.vulnora\backups'
+    $null = New-Item -ItemType Directory -Path $backupDirectory -Force
+    Copy-Item -LiteralPath $runtimePath -Destination (Join-Path $backupDirectory ('runtime-' + (Get-Date -Format 'yyyyMMdd-HHmmss-ffff') + '.json'))
+}
 $temporary = "$runtimePath.tmp"
 [IO.File]::WriteAllText($temporary, ($runtime | ConvertTo-Json))
 Move-Item -LiteralPath $temporary -Destination $runtimePath -Force

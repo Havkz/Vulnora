@@ -45,6 +45,10 @@ Create a project, enter a URL, hostname, IPv4 or IPv6 address, then confirm
 target alone does not begin scanning. The workflow tests websites and APIs; the
 browser dashboard and mobile/binary target picker are removed.
 
+Use PgUp/PgDn or Home/End to inspect a long target in READY or project metadata
+in the resume picker. Small windows retain the confirmation/completion prompts;
+saved target strings, reports and detailed logs remain complete.
+
 Resume Project shows saved status, progress, target and timestamps. Name/target
 drafts also survive interruption. During a scan, PgUp/PgDn scroll the complete log
 history and End returns to live output. Esc stops scheduling and drains or cancels

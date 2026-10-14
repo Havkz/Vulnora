@@ -1,5 +1,59 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`terminal surface > keeps four startup rows and the fixed Starting position inside 24 × 12 1`] = `
+"╭─────────────────────╮
+│                     │
+│  ⠋ Starting         │
+│                     │
+│     ✓ Configurati…  │
+│     ✓ Scanner       │
+│     ✓ LLM           │
+│     ✓ Projects      │
+│                     │
+╰─────────────────────╯"
+`;
+
+exports[`terminal surface > keeps four startup rows and the fixed Starting position inside 40 × 24 1`] = `
+"Vulnora
+
+╭─────────────────────────────────────╮
+│                                     │
+│  ⠋ Starting                         │
+│                                     │
+│     ✓ Configuration                 │
+│     ✓ Scanner                       │
+│     ✓ LLM                           │
+│     ✓ Projects                      │
+│                                     │
+╰─────────────────────────────────────╯"
+`;
+
+exports[`terminal surface > keeps four startup rows and the fixed Starting position inside 80 × 30 1`] = `
+"                                     ░░░░░█░░░░░
+                               ░░█████████████████░░
+                             ░█████████████████████░
+                            ░███████████████████████░
+                            ░███████████████████████░
+                            ███████  Vulnora  ███████
+                            ░███████████████████████░
+                            ░███████████████████████░
+                             ░█████████████████████░
+                               ░░█████████████████░░
+                                     ░░░░░█░░░░░
+                         website & API security testing
+
+╭─────────────────────────────────────────────────────────────────────────────╮
+│                                                                             │
+│  ⠋ Starting                                                                 │
+│                                                                             │
+│     ✓ Configuration                                                         │
+│     ✓ Scanner                                                               │
+│     ✓ LLM                                                                   │
+│     ✓ Projects                                                              │
+│                                                                             │
+╰─────────────────────────────────────────────────────────────────────────────╯"
+`;
+
 exports[`terminal surface > retains the reference composition at 24 columns × 12 rows 1`] = `
 "Vulnora
 website & API security…

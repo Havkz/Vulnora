@@ -417,3 +417,20 @@ offering a resumable menu. A completed project opens its results without startin
   without an installation. GitHub run 38600463109 has runner_id=0 and no executed
   test steps; its annotation confirms failed account payments or a spending-limit
   restriction. Hosted CI remains an external validation gate; billing is not changed.
+- Startup/live/READY status views now use the reference's rounded magenta panel,
+  padding (1, 2), white stage labels, status-colored glyphs and grey details. The
+  startup table retains the reference grid indentation. At tiny heights the border
+  is omitted so all four actual initialization rows remain visible. Snapshots cover
+  80x30, 40x24 and 24x12; minimum 16x8 and unsupported resize dimensions are tested.
+- READY reserves its confirmation rows and pages the full original target when it
+  exceeds the viewport. Resume metadata exposes full name, target, creation/activity,
+  status and progress with independent paging. Selected choices and document titles
+  no longer write into the last terminal cell and trigger unintended wrapping.
+- Live scans reserve their completion hint and shortcut bar even with long names,
+  URLs or model IDs. Complete log rows and their reading anchor remain preserved;
+  full error text remains accessible in the log viewport. Narrow 24x12/16x8 flows
+  assert bounded rows/cell widths, no scan before confirmation and no report before
+  Enter. Installing a new release now backs up the previous runtime manifest.
+- Panel/narrow-view milestone Windows validation: all 67 suites, 716 passed/18
+  platform skips, 11 preflight checks, build/typecheck and focused lint pass.
+  Installed-release/Linux/terminal checks remain separate evidence gates.
