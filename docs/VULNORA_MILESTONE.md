@@ -464,3 +464,23 @@ offering a resumable menu. A completed project opens its results without startin
 - Windows validation: 67 suites, 717 passed/18 platform skips; all 11 preflight
   checks, TypeScript build and focused lint pass. Graph regenerated after edits.
   Installed release/provider-switch verification follows this source milestone.
+- Release c14ae8a is installed at
+  /home/tempest/.vulnora/releases/c14ae8a84c512815e6dc381171fe85e95142595e;
+  the runtime manifest points to it and all 23 external web/API executables pass
+  readiness. Fresh Linux validation c14ae8a.JjAFXX passes build, lint (0 errors),
+  all 67 suites (730 passed/5 platform skips) and all 11 preflight checks.
+- Real installed-release kernel PTY transcript ui-preview-kjovt6qe validates the
+  reported Settings path with inherited startup provider `codex`: choosing installed
+  CLI `codex` saves `local-agent`, obtains real inference readiness and shows no
+  obsolete override notice. Ollama remains held until Ctrl+C; READY starts no scan,
+  buffered edits persist and the alternate buffer restores on exit.
+- Windows Terminal UI Automation reads the original shield and all four real
+  startup rows from the actual alias launch. Keyboard validation was stopped because
+  another foreground application was active; no keys were sent to that application.
+  Only the owned validation CLI/window were stopped and closed afterward.
+- Full localhost mission validation reaches actual completion with no AI and safe
+  pause/resume. Its report-gate assertion read the on-disk project before the final
+  queued save completed; the final saved record is completed/100% without a report.
+  Re-run after waiting for durable state. This run also exposed recovery URLs built
+  as `https://http://...` for original HTTP URLs with paths/ports; fix that shared
+  recovery-target handling before declaring the overall specification complete.
