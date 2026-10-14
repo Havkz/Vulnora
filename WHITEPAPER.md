@@ -2,7 +2,7 @@
 
 ## A Technical Whitepaper
 
-**Version 1.0 | February 2026**
+**Version 1.0 | October 2026**
 
 ---
 
@@ -50,7 +50,7 @@ This whitepaper details the architecture, agent model, execution pipeline, tooli
 8. [Evidence & Intelligence Pipeline](#8-evidence--intelligence-pipeline)
 9. [OPSEC Layer](#9-opsec-layer)
 10. [Integration Surfaces](#10-integration-surfaces)
-11. [Web UI & War Room](#11-web-ui--war-room)
+11. [Persistent Terminal Projects](#11-persistent-terminal-projects)
 12. [Benchmark System](#12-benchmark-system)
 13. [Security & Ethical Considerations](#13-security--ethical-considerations)
 14. [Comparison with Existing Tools](#14-comparison-with-existing-tools)
@@ -306,12 +306,16 @@ The `LLMBackbone` class (`src/llm/index.ts`) abstracts LLM access across provide
 
 ### 5.2 Fallback Chain
 
-The `safeLLMCall()` pattern implements resilient LLM communication:
+The interactive ProviderSession checks actual inference and selects:
 
-1. Attempt call with primary model
-2. If response is empty (<10 chars) or fails, retry with Hermes (via OpenRouter)
-3. 3-tier JSON parsing: code block extraction -> non-greedy match -> plain-text regex
-4. Empty response detection triggers automatic fallback
+1. The configured primary provider/model.
+2. The configured, installed and validated local Ollama model.
+3. Deterministic evidence-only functionality where supported.
+
+Switch events identify the actual provider/model. Installed model files are reused
+without automatic downloads; the selected model remains held until graceful exit.
+Native Codex/Claude invocation uses supported existing authentication and never
+copies provider credentials. See the acceptance ledger for tested integrations.
 
 ### 5.3 Model Configuration
 
@@ -530,15 +534,17 @@ Each operator maintains an independent detection risk score:
 
 ### 10.1 Command-Line Interface
 
-The CLI (`src/cli.ts`, 20K lines) provides an interactive REPL with:
+The CLI entry point (`src/cli.ts`) selects the shared terminal application in
+`src/ui`. Create New Project persists a name and validated target, then waits for
+explicit READY confirmation. Resume Project restores saved tasks, tool batches,
+intermediate results, budgets, backoff and logs. Unsafe interrupted writes are held
+for review. Completed projects reopen their saved reports without another scan.
 
-- Operation presets (balanced, stealth, aggressive, custom)
-- Operator spawning and management
-- Target addition and status monitoring
-- Mission creation and execution
-- AI chat with the LLM backbone
-- Report generation
-- Full settings management
+The renderer uses source-derived VoidAccess tokens, a Vulnora circle logo, four
+live startup rows, magenta panels and differential redraw. Esc drains/cancels active
+work before pause; Ctrl+C saves, flushes, releases providers and restores the terminal.
+Completion waits for Enter before report display. Auto/Stealth/Aggressive control
+real bounded concurrency, pacing, retries and adaptive backoff.
 
 ### 10.2 HTTP REST API
 
@@ -563,52 +569,39 @@ The server also includes SSE endpoints for real-time event streaming to the web 
 
 ### 10.3 Model Context Protocol (MCP) Server
 
-The MCP server (`src/mcp-server.ts`, 83K lines) implements the [Model Context Protocol](https://modelcontextprotocol.io/) specification, enabling AI assistants (Claude, etc.) to use VULNORA tools directly:
+The MCP server (`src/mcp-server.ts`) implements the Model Context Protocol for existing integrations:
 
 ```json
 {
   "mcpServers": {
-    "vulnora-pliny": {
+    "vulnora": {
       "command": "node",
-      "args": ["/path/to/vulnora/dist/mcp-server.js"],
-      "env": { "OPENROUTER_API_KEY": "sk-or-..." }
+      "args": ["/path/to/vulnora/dist/mcp-server.js"]
     }
   }
 }
 ```
 
-Exposed MCP tools: `pliny_leviathan`, `pliny_sphinx`, `pliny_gorgon`, `pliny_cerberus`, `pliny_typhon`, `pliny_griffin`, `pliny_simurgh`, `pliny_hydra`, `pliny_arachne`, `security_recon`.
+Registered capabilities come from the current server implementation. Retired Pliny
+tools are not part of the website/API arsenal. The interactive CLI, backend API and
+MCP server are separate execution surfaces; launching `vulnora` opens the terminal UI.
 
 ---
 
-## 11. Web UI & War Room
+## 11. Persistent Terminal Projects
 
-### 11.1 Architecture
+The browser dashboard is removed. ProjectStore uses atomic, versioned project and
+checkpoint files with an append-only detailed journal. ProjectSession owns an
+exclusive lease and integrates the existing mission, evidence and report engine.
 
-The web UI (`docs/index.html`, ~14K lines) is a single-page application with a dark cyberpunk theme. It communicates with the API server via REST and SSE for real-time updates.
+Recovery preserves task decomposition, AI context, queued tool calls, completed
+results, budgets and host cooldowns. TCP exchanges and opaque external processes
+cannot resume inside an arbitrary packet/process; safe requests restart at stored
+boundaries, while uncertain state-changing requests require review.
 
-### 11.2 Pages
-
-| Page | Function |
-|------|----------|
-| **War Room** | Unified dashboard with kill chain visualization, operator status, live intel feed, OPSEC monitor |
-| **Operators** | Agent management - spawn, monitor, view dossiers |
-| **Missions** | Mission creation, phase tracking, objective management |
-| **Evidence** | Findings vault with severity filtering |
-| **Arsenal** | Tool registry with code viewer, stats, and demo capabilities |
-| **Terminal** | Direct command execution |
-| **Benchmarks** | Performance testing against Cybench and NYU CTF Bench |
-| **Config Library** | OPSEC presets and templates |
-| **CTF Range** | Practice targets for training |
-| **Settings** | API key management, model selection, preferences |
-
-### 11.3 Real-Time Features
-
-- **SSE event stream** - Findings, operator status changes, phase transitions, and periodic status updates stream to the UI
-- **Operator hover tooltips** - Full dossier on mouseenter
-- **Console event tooltips** - Full event text on hover
-- **Keyboard shortcuts** - Rapid navigation and actions
-- **Sound cues** - Audio feedback for critical events
+Reports retain findings, severity, classifications, complete redacted evidence,
+explanations and recommendations. Exported Markdown and completed projects remain
+reopenable. See README and the acceptance ledger for controls and runtime evidence.
 
 ---
 
@@ -674,8 +667,11 @@ VULNORA is designed exclusively for **authorized security testing**:
 ### 13.3 API Key Security
 
 - API keys are stored in persistent config, never in source code
-- Environment variable override supported
-- `.env` file loading via `dotenv`
+- Saved explicit choices override inherited startup defaults
+- Application-owned environment loading avoids importing target-repository secrets
+- Owner-only Unix permissions and user/SYSTEM/administrator Windows ACLs protect settings
+- Configured credentials are redacted from errors and log events
+- Provider CLI authentication files stay owned by their applications
 - `.gitignore` excludes sensitive files
 
 ### 13.4 Compliance Considerations

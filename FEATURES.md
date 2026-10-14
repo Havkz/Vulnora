@@ -2,6 +2,11 @@
 
 > Comprehensive feature list for the Tactical Execution Multi-agent Platform for Elite Security Testing
 
+The current interactive application tests websites/APIs. Its verified workflow is
+documented in [README](README.md) and the [acceptance ledger](docs/VULNORA_MILESTONE.md).
+Other sections describe retained library interfaces and research scaffolding;
+they do not add target types or tools to the interactive website/API arsenal.
+
 **Legend:**
 - [x] Implemented and working
 - [~] Partially implemented / stub
@@ -25,7 +30,7 @@
 12. [CLI Interface](#12-cli-interface)
 13. [API Server](#13-api-server)
 14. [MCP Server (Agent Integration)](#14-mcp-server-agent-integration)
-15. [Web UI Dashboard](#15-web-ui-dashboard)
+15. [Terminal Session Views](#15-terminal-session-views)
 16. [Advanced Modules](#16-advanced-modules)
 17. [Configuration System](#17-configuration-system)
 18. [Integration & Extensibility](#18-integration--extensibility)
@@ -42,7 +47,7 @@
 - [x] Status reporting and health checks
 - [~] Hooks system for lifecycle events
 - [ ] Distributed command across multiple nodes
-- [ ] State persistence and recovery after crash
+- [x] Atomic project/task/tool checkpoints and safe interruption recovery
 
 ### Factory Functions
 - [x] `createVulnora()` - Standard operation
@@ -281,9 +286,9 @@ Real, re-derivable catalog (`verify-claims`): **35 built-in (default) + 48 opt-i
 
 ---
 
-## 7. Pliny Specials — ⛔ RETIRED
+## 7. Pliny Specials — RETIRED
 
-> **⛔ These nine tools were REMOVED and are NOT shipped or callable.** The `/api/pliny/*`
+> **These nine tools were REMOVED and are NOT shipped or callable.** The `/api/pliny/*`
 > routes and the `pliny_*` MCP tools no longer exist in the codebase (see the retirement
 > notes later in this file). Only `security_recon` survives as a live MCP tool. The table
 > and feature checklists below are kept **only as a historical record of the retired
@@ -294,15 +299,15 @@ Real, re-derivable catalog (`verify-claims`): **35 built-in (default) + 48 opt-i
 
 | Tool | Power | Type | Status |
 |------|-------|------|--------|
-| **LEVIATHAN** | 99 | Kill Chain Orchestrator | ⛔ RETIRED |
-| **SPHINX** | 88 | Vulnerability Validator | ⛔ RETIRED |
-| **GORGON** | 92 | Precision Exploitation | ⛔ RETIRED |
-| **CERBERUS** | 85 | Privilege Escalation | ⛔ RETIRED |
-| **TYPHON** | 90 | Payload Encoding | ⛔ RETIRED |
-| **GRIFFIN** | 95 | Secret Harvesting | ⛔ RETIRED |
-| **SIMURGH** | 100 | Zero-Day Research | ⛔ RETIRED |
-| **HYDRA** | 85 | Multi-Vector Attacks | ⛔ RETIRED |
-| **ARACHNE** | 87 | Exploit Chaining | ⛔ RETIRED |
+| **LEVIATHAN** | 99 | Kill Chain Orchestrator | RETIRED |
+| **SPHINX** | 88 | Vulnerability Validator | RETIRED |
+| **GORGON** | 92 | Precision Exploitation | RETIRED |
+| **CERBERUS** | 85 | Privilege Escalation | RETIRED |
+| **TYPHON** | 90 | Payload Encoding | RETIRED |
+| **GRIFFIN** | 95 | Secret Harvesting | RETIRED |
+| **SIMURGH** | 100 | Zero-Day Research | RETIRED |
+| **HYDRA** | 85 | Multi-Vector Attacks | RETIRED |
+| **ARACHNE** | 87 | Exploit Chaining | RETIRED |
 
 _The per-tool checklists below document the **retired** design (historical only):_
 
@@ -564,27 +569,25 @@ _The per-tool checklists below document the **retired** design (historical only)
 - [ ] `vulnora export <file>` - Export findings
 
 ### Interactive Mode Features
-- [x] Start new operation (4 presets)
-- [x] View status (operators, findings, OPSEC)
-- [x] Spawn operator (8 archetypes)
-- [x] Add target
-- [x] Create mission
-- [x] Chat with AI
-- [x] Generate report
-- [x] Stop operation
-- [x] Settings management
+- [x] Create New Project, Resume Project and Settings
+- [x] Validated original URL/IP/hostname and explicit READY confirmation
+- [x] Saved projects, drafts, complete logs and reports
+- [x] Granular operation/tool-batch checkpoints and unsafe replay protection
+- [x] Safe pause/resume and Ctrl+C save/release
+- [x] Auto, Stealth and Aggressive with effective bounded request controls
+- [x] Authenticated installed Codex/Claude and installed Ollama fallback
+- [x] Enter-gated report display and complete evidence exports
 - [ ] Mission templates
 - [ ] Batch operations
 - [ ] Scripting support
 
 ### UI Features
-- [x] Colored output (chalk)
-- [x] ASCII banner (figlet)
-- [x] Gradient text
-- [x] Progress spinners (ora)
-- [x] Interactive prompts (inquirer)
-- [x] Table display (cli-table3)
-- [x] Box formatting (boxen)
+- [x] Shared source-derived VoidAccess colors and adapted Vulnora circle logo
+- [x] Fixed Starting animation and exactly four real initialization rows
+- [x] Rounded magenta status panels, reference padding and status hierarchy
+- [x] One keyboard/render owner, differential redraw and terminal restoration
+- [x] Arrow menus, editable/masked prompts and scrollable full technical logs
+- [x] Responsive READY/completion hints and pageable project metadata
 
 ---
 
@@ -601,7 +604,7 @@ _The per-tool checklists below document the **retired** design (historical only)
 - [x] `GET /api/health` - Server health
 - [x] `GET /api/llm/status` - LLM connection status
 
-### Pliny Specials Endpoints — ❌ RETIRED (removed 2026-06)
+### Pliny Specials Endpoints — RETIRED (removed 2026-06)
 The `/api/pliny/*` "adversarial engine" routes were **removed**. They were static payload-catalog
 lookups with no measured uplift to the benchmark and were never on the hunt path. The live offensive
 surface is the mission-control API (`/api/mission/*`), the arsenal (`/api/tools/*`), and the recon
@@ -658,67 +661,11 @@ catalog lookups, not engines. The MCP server exposes the real, tool-backed surfa
 
 ---
 
-## 15. Web UI Dashboard
+## 15. Terminal Session Views
 
-### Navigation
-- [x] Sidebar navigation
-- [x] Section collapse/expand
-- [x] Mobile responsive toggle
-- [x] Active section highlighting
-- [x] Badge indicators
-
-### Dashboard Page
-- [x] Kill chain visualization
-- [x] Operator swarm status
-- [x] Live intel feed
-- [x] Statistics cards
-- [x] OPSEC monitor
-- [x] Quick actions
-
-### Pages Implemented
-- [x] Dashboard - Overview
-- [x] Operators - Agent management
-- [x] Missions - Mission control
-- [x] Evidence - Findings vault
-- [x] Arsenal - Tool registry
-- [x] Terminal - Command execution
-- [x] Benchmarks - Performance testing
-- [x] Config Library - OPSEC presets
-- [x] CTF Range - Practice targets
-- [x] Settings - Configuration
-- [x] About - Project info
-
-### Visual Features
-- [x] Dark cyberpunk theme
-- [x] Neon color scheme
-- [x] Animated elements
-- [x] Grid background
-- [x] Progress bars
-- [x] Status indicators
-- [x] Code syntax highlighting
-
-### Interactive Features
-- [x] Real-time updates
-- [x] Filter controls
-- [x] Modal dialogs
-- [x] Toast notifications
-- [x] Keyboard shortcuts
-- [x] Copy to clipboard
-- [x] View source on GitHub links
-- [ ] Drag and drop
-- [ ] Export functionality
-- [ ] Dark/light theme toggle
-
-### Arsenal Features
-- [x] Tool cards with stats
-- [x] Category filtering
-- [x] Search functionality
-- [x] Tool info modals
-- [x] Code viewer tab
-- [x] Stats tab
-- [x] Run demo buttons
-- [x] Copy code functionality
-- [x] View full source links
+The browser dashboard has been removed. The CLI provides project creation, the
+resume picker, Settings, live scan logs, safe pause and persistent report viewing.
+The backend API and MCP interfaces remain available to existing integrations.
 
 ---
 
@@ -814,7 +761,8 @@ catalog lookups, not engines. The MCP server exposes the real, tool-backed surfa
 - [x] Store/retrieve API keys
 - [x] Key validation
 - [x] Multi-provider support
-- [x] Environment variable precedence
+- [x] Saved explicit choices take precedence over inherited startup defaults
+- [x] Credential redaction and OS-protected configuration files
 - [ ] Key rotation
 - [ ] Key expiry warnings
 - [ ] Secure key storage (keychain)

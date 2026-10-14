@@ -434,3 +434,17 @@ offering a resumable menu. A completed project opens its results without startin
 - Panel/narrow-view milestone Windows validation: all 67 suites, 716 passed/18
   platform skips, 11 preflight checks, build/typecheck and focused lint pass.
   Installed-release/Linux/terminal checks remain separate evidence gates.
+- Committed UI release 4c77748 passes clean-install Linux build/lint (0 errors),
+  all 67 suites with 729 passed/5 skips and 11 preflight checks. Directory:
+  /home/tempest/.vulnora/validation/4c77748.jfpr8i. The release is installed under
+  /home/tempest/.vulnora/releases/4c777482cd3f84fc4b2c9d20cba4c7a3191e6ec5.
+- Its real kernel PTY check passes at 80x30 and 24x12, including provider startup,
+  model hold/release, READY without scan, interrupted edit persistence and terminal
+  restoration. Transcript: /home/tempest/.vulnora/validation/ui-preview-8dusgt3d/terminal-transcript.ansi.
+  Legacy package/CLI/environment hashes still match their pre-installation snapshot.
+- Documentation audit found obsolete default REPL/preset, dashboard and cloud
+  fallback descriptions in FEATURES.md/WHITEPAPER.md. Those current-surface sections
+  now describe the actual projects, source-derived theme, local fallback and secure
+  settings. Retained library/research documentation is explicitly scoped separately.
+  Physical Windows Terminal live scan/report and final requirement-by-requirement
+  audit remain outstanding; this is not a full-goal completion claim.
