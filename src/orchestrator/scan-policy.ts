@@ -86,7 +86,13 @@ export class ScanPolicy {
   async runNetwork<T>(host: string, runner: () => Promise<T>, signal?: AbortSignal, exclusive = true): Promise<T> {
     if (!this.behavior) return runner();
     const release = await this.acquire(host, signal, exclusive);
-    try { signal?.throwIfAborted(); return await runner(); } finally { release(); }
+    try {
+      signal?.throwIfAborted();
+      const result = runner();
+      const state = this.state(host);
+      state.nextStart = Math.max(state.nextStart, Date.now() + this.limits(host).intervalMs);
+      return await result;
+    } finally { release(); }
   }
 
   commandArgs(command: string, args: string[], host: string): string[] {

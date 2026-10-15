@@ -25,6 +25,15 @@ function policy(mode: 'auto' | 'stealth' | 'aggressive' = 'auto') {
 }
 
 describe('effective scanning behavior', () => {
+  it('keeps request spacing when the first native client has synchronous startup overhead', async () => {
+    const scan = policy('aggressive'); const starts: number[] = [];
+    await Promise.all([35, 0, 0].map(setupMs => scan.runNetwork('fixture.test', async () => {
+      if (setupMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, setupMs);
+      starts.push(Date.now()); await delay(80);
+    }, undefined, false)));
+    expect(starts).toHaveLength(3);
+    expect(starts.slice(1).every((at, index) => at - starts[index] >= 40)).toBe(true);
+  });
   it('paces real requests across operators and holds concurrency until response bodies finish', async () => {
     const starts: number[] = []; let active = 0; let maximum = 0;
     const fetch = globalThis.fetch;

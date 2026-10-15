@@ -90,6 +90,7 @@ describe('durable interactive project flow', () => {
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await f.wait('Esc Pause');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
     const text = () => view().lines.map(stripVTControlCharacters).join('\n');
     const stagePosition = view().lines.findIndex(line => line.includes('Stage: Recon'));

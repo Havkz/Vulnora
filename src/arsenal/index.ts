@@ -10,11 +10,10 @@ import { DEFAULT_WEB_WORDLIST } from './catalog.js';
 import { EventEmitter } from 'eventemitter3';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { createHash, randomUUID } from 'crypto';
-import { execFile } from 'child_process';
+import { execFile, spawn } from 'child_process';
 import { access, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { promisify } from 'util';
 import * as net from 'net';
 import * as dns from 'dns';
 import * as tls from 'tls';
@@ -23,7 +22,6 @@ import * as https from 'https';
 import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
 import { ToolOrchestrator, TOOL_BINARIES, normalizeToolCall, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
 
-const execFileAsync = promisify(execFile);
 import type {
   CustomTool,
   ToolContext,
@@ -3328,23 +3326,47 @@ async function executeSubprocess(command: string, args: string[], timeout: numbe
     onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode });
     return result;
   };
-  try {
-    const { stdout, stderr } = await execFileAsync(command, args, {
-      timeout,
-      maxBuffer: maxOutput,
-      signal,
-    });
-    return finish({ stdout, stderr, exitCode: 0 });
-  } catch (error: unknown) {
-    const err = error as { stdout?: string; stderr?: string; code?: number; killed?: boolean; name?: string };
-    if (signal?.aborted || err.name === 'AbortError') {
-      return finish({ stdout: err.stdout || '', stderr: `Process aborted: ${String(signal?.reason || 'policy stop')}`, exitCode: -2 });
-    }
-    if (err.killed) {
-      return finish({ stdout: err.stdout || '', stderr: 'Process killed (timeout)', exitCode: -1 });
-    }
-    return finish({ stdout: err.stdout || '', stderr: err.stderr || String(error), exitCode: err.code || 1 });
+  if (!Number.isFinite(timeout) || timeout < 0 || !Number.isFinite(maxOutput) || maxOutput < 0) {
+    return finish({ stdout: '', stderr: 'Invalid subprocess timeout or output limit', exitCode: 1 });
   }
+  return new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve => {
+    let child;
+    try {
+      child = spawn(command, args, { detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) { resolve({ stdout: '', stderr: String(error), exitCode: 1 }); return; }
+    const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+    const sizes = { stdout: 0, stderr: 0 };
+    let failure = ''; let timedOut = false; let overflow = false; let aborted = false;
+    const terminate = () => {
+      if (!child.pid) return;
+      if (process.platform === 'win32') {
+        execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, timeout: 2000, killSignal: 'SIGKILL' }, () => child.kill('SIGKILL'));
+      } else {
+        try { process.kill(-child.pid, 'SIGKILL'); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') { failure = String(error); child.kill('SIGKILL'); } }
+      }
+    };
+    const capture = (stream: 'stdout' | 'stderr', data: Buffer) => {
+      const room = Math.max(0, maxOutput - sizes[stream]);
+      if (room) output[stream].push(data.subarray(0, room));
+      sizes[stream] += data.length;
+      if (sizes[stream] > maxOutput && !overflow) { overflow = true; terminate(); }
+    };
+    child.stdout.on('data', (data: Buffer) => capture('stdout', data));
+    child.stderr.on('data', (data: Buffer) => capture('stderr', data));
+    child.on('error', error => { failure = error.message; });
+    const timer = timeout > 0 ? setTimeout(() => { timedOut = true; terminate(); }, timeout) : undefined;
+    const abort = () => { aborted = true; terminate(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+    child.once('close', (code, terminationSignal) => {
+      clearTimeout(timer); signal?.removeEventListener('abort', abort);
+      const diagnostic = aborted ? `Process aborted: ${String(signal?.reason || 'policy stop')}`
+        : timedOut ? 'Process killed (timeout)' : overflow ? 'Process output exceeded capture limit' : failure || (terminationSignal ? `Process terminated by ${terminationSignal}` : '');
+      resolve({ stdout: Buffer.concat(output.stdout).toString(), stderr: [Buffer.concat(output.stderr).toString(), diagnostic].filter(Boolean).join('\n'),
+        exitCode: aborted ? -2 : timedOut || overflow ? -1 : failure ? 1 : code ?? 1 });
+    });
+  }).then(finish);
 }
 
 /**
