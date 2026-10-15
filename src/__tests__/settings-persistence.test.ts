@@ -60,13 +60,11 @@ describe('interactive setting persistence', () => {
     expect(displayed).not.toContain('synthetic-replaced-provider-key');
     if (process.platform === 'win32') {
       const script = `$acl = [IO.File]::GetAccessControl($env:VULNORA_TEST_SETTINGS_FILE);
-        [string]::Join('|', $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value)`;
-      const access = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+        [string]::Join('|', @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value) + @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]).IdentityReference.Value))`;
+      const [identity, ...access] = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand',
         Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true,
         env: { ...process.env, VULNORA_TEST_SETTINGS_FILE: restored.getConfigPath() } }).trim().split('|');
-      expect(access).toHaveLength(3);
-      expect(access).toEqual(expect.arrayContaining(['S-1-5-18', 'S-1-5-32-544']));
-      expect(access.filter((sid: string) => sid !== 'S-1-5-18' && sid !== 'S-1-5-32-544')[0]).toMatch(/^S-1-5-21-/);
+      expect(access.sort()).toEqual([...new Set([identity, 'S-1-5-18', 'S-1-5-32-544'])].sort());
     } else {
       expect((await stat(directory)).mode & 0o777).toBe(0o700);
       expect((await stat(restored.getConfigPath())).mode & 0o777).toBe(0o600);
