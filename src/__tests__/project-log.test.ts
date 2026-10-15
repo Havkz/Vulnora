@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { stripVTControlCharacters } from 'node:util';
-import { formatProjectLog, projectActivity } from '../ui/project-log.js';
+import { formatProjectLog, formatSavedProjectLog, projectActivity } from '../ui/project-log.js';
 import { createTheme } from '../ui/theme.js';
 import type { ProjectLogEvent } from '../projects/session.js';
 
 describe('readable project logs', () => {
+  it('keeps complete protocol events and technical metadata accessible in saved logs', () => {
+    const event = { timestamp: 1, category: 'provider:progress', data: { type: 'item.completed', text: '{"tool_calls":[]}', operatorId: 'fixture-operator' } };
+    expect(formatProjectLog(event)).toBe('');
+    expect(formatSavedProjectLog(event)).toContain('item.completed');
+    expect(formatSavedProjectLog(event)).toContain('fixture-operator');
+    const detail = 'Complete observation\n'.repeat(200);
+    expect(formatSavedProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail, taskName: 'Recorded task' } })).toContain(detail);
+  });
   it('renders recorded tool arguments with distinct colors and without internal JSON metadata', () => {
     const colors = createTheme(2);
     const event: ProjectLogEvent = { timestamp: 1, category: 'scan:progress', data: {

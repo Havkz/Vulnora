@@ -6,11 +6,11 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { formatProjectLog, phaseLabel, projectActivity } from './project-log.js';
+import { formatProjectLog, formatSavedProjectLog, phaseLabel, projectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
-import { redactString } from '../redact.js';
+import { redactSecrets, redactString } from '../redact.js';
 
 type Configuration = typeof settings;
 export interface InteractiveServices {
@@ -183,7 +183,7 @@ export class InteractiveApp {
       if (choice === 0) await this.scan();
       else if (choice === 1) {
         const history = await this.services.store.readLogs(project.id);
-        await this.document('Saved project logs', history.events.map(event => formatProjectLog(event as ProjectLogEvent, true)).join('\n\n'));
+        await this.document('Saved project logs', history.events.map(event => formatSavedProjectLog(event as ProjectLogEvent)).join('\n\n'));
       }
     }
   }
@@ -206,7 +206,12 @@ export class InteractiveApp {
       const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
       const key = JSON.stringify([data.operatorId, data.taskId, data.toolName]);
       if (data.kind === 'tool_call') {
-        const calls = pending.get(key) || []; calls.push(index); pending.set(key, calls);
+        const calls = pending.get(key) || [];
+        const previous = calls.at(-1);
+        if (previous !== undefined && (logs[previous].data as Record<string, unknown>).detail === data.detail) {
+          resultEvents.add(index); return undefined;
+        }
+        calls.push(index); pending.set(key, calls);
       } else if (data.kind === 'tool_result') {
         const call = pending.get(key)?.shift();
         if (call !== undefined) { results.set(call, event); resultEvents.add(index); return call; }
@@ -215,6 +220,7 @@ export class InteractiveApp {
     };
     logs.forEach((_event, index) => linkResult(index));
     let activity = 'Working'; let activitySince = Date.now();
+    let recoveryDetails = '';
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
       logs.push(event);
@@ -229,6 +235,13 @@ export class InteractiveApp {
     };
     const onError = (error: Error) => {
       this.issue = redactString(error.message);
+      recoveryDetails = this.issue;
+      const last = logs.at(-1);
+      const data = last?.category === 'recovery:blocked' && last.data && typeof last.data === 'object' ? last.data as Record<string, unknown> : {};
+      if (typeof data.toolName === 'string') {
+        recoveryDetails += `\n\nInterrupted tool: ${data.toolName}\nRecorded arguments:\n${JSON.stringify(redactSecrets(data.parameters), null, 2)}`;
+      }
+      recoveryDetails += '\n\nThe saved checkpoint is retained. Automatic replay was stopped. Esc returns to the main menu; Ctrl+X saves and quits.';
       if ((logs.at(-1)?.data as { error?: string } | undefined)?.error !== this.issue) {
         onLog({ timestamp: Date.now(), category: 'project:error', data: { error: this.issue } });
       } else this.surface.refresh();
@@ -239,12 +252,13 @@ export class InteractiveApp {
       const dense = this.surface.rows < 18;
       const mission = session.command.mission.getActiveMission() || session.command.mission.getAllMissions().at(-1);
       const completed = session.project.status === 'completed';
-      const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}`,
+      const blocked = !!this.issue && !session.command.isRunning();
+      const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
         dense ? `${session.project.status} · ${session.project.progress}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
         session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
       const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),
         ...(completed ? wrapAnsi('Press Enter to view results', this.surface.panelColumns, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line)) : [])];
-      const headroom = Math.max(1, this.surface.panelRows - bottom.length - (dense ? 1 : 3));
+      const headroom = Math.max(1, this.surface.panelRows - bottom.length - (completed ? 0 : 1) - (dense ? 1 : 3));
       const fullHeading = header.flatMap(line => wrapTerminalText(line, this.surface.panelColumns));
       const heading = fullHeading.length <= headroom ? fullHeading :
         (headroom >= 3 ? header : [header[0], `${active.provider} · ${active.model}`]).slice(0, headroom)
@@ -269,12 +283,14 @@ export class InteractiveApp {
           if (line.event === anchor.event && line.character <= anchor.character) offset = index;
         });
       }
-      const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(`${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
+      const pausedLabel = this.surface.columns < 40 ? 'Paused · Enter Details' : 'Recovery paused · Enter Details · Esc Back';
+      const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(blocked ? pausedLabel : `${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
       const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - status.length - (dense ? 0 : 2));
       offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
-      footer: this.surface.columns < 60 ? `Esc Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
+      footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
+        : this.surface.columns < 60 ? `Esc Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
         : `Esc Pause  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
     };
     try {
@@ -283,9 +299,14 @@ export class InteractiveApp {
       for (;;) {
         const { key } = await this.surface.nextKey();
         if (key.ctrl && key.name === 't') { this.transcript = !this.transcript; processed = 0; wrapped = []; tail = true; }
+        if (key.name === 'return' && this.issue && !session.command.isRunning()) {
+          await this.document('Recovery paused', recoveryDetails);
+          this.surface.show(render); continue;
+        }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }
         if (key.name === 'escape') {
           if (session.project.status === 'completed') return;
+          if (this.issue && !session.command.isRunning()) return;
           this.surface.show(() => ({ lines: [this.surface.colors.active('Saving progress and stopping active work…')], footer: 'Ctrl+X Save & Quit' }));
           await session.pause();
           for (;;) {

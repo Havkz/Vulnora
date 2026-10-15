@@ -9,6 +9,7 @@ const project = await store.create('Crash recovery', origin);
 await acquireProjectLease(directory, project.id);
 let announced = false;
 const command = new VulnoraCommand({ name: project.name, llm: { provider: 'mock', model: 'fixture' },
+  ...(mode === 'discovery' ? { scanningBehavior: 'auto' } : {}),
   operators: { defaultConfig: { cooldownMs: 0 } },
   hooks: { onStateCheckpoint: async () => {
     const checkpoint = command.exportCheckpoint();
@@ -47,7 +48,9 @@ if (mode === 'decomposed') {
 }
 for (const name of mode === 'decomposed' ? [] : mode === 'write' ? ['second'] : ['first', 'second']) {
   const task = command.mission.createTask({ missionId: mission.id, name, description: `Read ${origin}`, phase: KillChainPhase.RECON, operatorType: 'recon' });
-  task.executionPlan = { toolName: 'http_request', parameters: { url: `${origin}/${name}`, ...(mode === 'write' ? { method: 'POST', body: 'fixture-only-write' } : {}) } };
+  task.executionPlan = mode === 'discovery' && name === 'second'
+    ? { toolName: 'api_endpoint_discovery', parameters: { url: origin, wordlist: 'rest' } }
+    : { toolName: 'http_request', parameters: { url: `${origin}/${name}`, ...(mode === 'write' ? { method: 'POST', body: 'fixture-only-write' } : {}) } };
 }
 command.start();
 await command.tick();

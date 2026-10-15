@@ -122,12 +122,13 @@ describe('whole scanner checkpoints', () => {
     await expect(command.arsenal.execute('http_request', { parameters: { url: 'http://127.0.0.1/other' } })).rejects.toBeInstanceOf(CheckpointWriteError);
   });
 
-  it('drains a real in-flight HTTP request before returning a resumable pause', async () => {
+  it.each(['http_request', 'api_endpoint_discovery'])('drains an in-flight %s before returning a resumable pause', async toolName => {
     let received!: () => void;
     const started = new Promise<void>(resolve => { received = resolve; });
     const origin = await listen(createServer(() => received()));
     const command = scanner();
     const { task } = prepare(command, origin);
+    task.executionPlan = { toolName, parameters: { url: origin } };
     command.start();
     await tick(command);
     await started;
@@ -138,16 +139,23 @@ describe('whole scanner checkpoints', () => {
     expect(command.isRunning()).toBe(false);
     expect(command.cell.getAllOperators().every(operator => operator.state.currentTask === null)).toBe(true);
     const saved = command.exportCheckpoint();
-    expect(saved.mission.tasks[0].checkpoint?.activeCall?.name).toBe('http_request');
+    expect(saved.mission.tasks[0].checkpoint?.activeCall?.name).toBe(toolName);
     expect(() => validateEngineCheckpoint(saved)).not.toThrow();
   });
 
-  it.each(['queue', 'decomposed'])('recovers a %s task after killing a real scanner process without repeating the completed request', async mode => {
+  it.each(['queue', 'decomposed', 'discovery'])('recovers a %s task after killing a real scanner process without repeating the completed request', async mode => {
     const requests = { first: 0, second: 0 };
     let resume = false;
     const origin = await listen(createServer((request, response) => {
       if (request.url === '/first') { requests.first++; response.end('First result persisted'); }
-      else if (request.url === '/second') { requests.second++; if (resume) response.end('Second result resumed'); }
+      else if (request.url === '/second' || mode === 'discovery') {
+        expect(request.method).toBe('GET');
+        requests.second++;
+        if (resume && mode === 'discovery') {
+          response.writeHead(request.url === '/api/config' ? 200 : 404, { 'Content-Type': 'application/json' });
+          response.end(request.url === '/api/config' ? '{"fixture":true}' : '{"notFound":true}');
+        } else if (resume) response.end('Second result resumed');
+      }
       else { response.writeHead(404); response.end(); }
     }));
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-crash-'));
@@ -172,18 +180,28 @@ describe('whole scanner checkpoints', () => {
     const release = await acquireProjectLease(directory, id);
     await release();
     const project = await new ProjectStore(directory).load(id);
-    if (mode === 'decomposed') {
+    if (mode === 'discovery') {
+      expect((project.checkpoint as EngineCheckpoint).mission.tasks.find(task => task.name === 'second')?.checkpoint?.activeCall?.name).toBe('api_endpoint_discovery');
+    } else if (mode === 'decomposed') {
       const tree = (project.checkpoint as EngineCheckpoint).mission.tasks[0].decomposition;
       expect(tree?.tasks[0]).toMatchObject({ status: 'completed', result: { success: true } });
       expect(tree?.tasks[1].checkpoint?.activeCall?.name).toBe('http_request');
     }
     const restored = scanner();
     restored.restoreCheckpoint(project.checkpoint);
+    const reservedBefore = restored.arsenal.getOrchestrator().getBudget('127.0.0.1').used.total_request_budget;
+    const receivedBefore = requests.first + requests.second;
     resume = true;
     await tick(restored);
-    await vi.waitFor(() => expect(restored.mission.getTaskQueue().getForMission(restored.mission.getAllMissions()[0].id).every(task => task.status === 'completed')).toBe(true), { timeout: 5000 });
-    expect(requests).toEqual({ first: 1, second: 2 });
-    expect(restored.arsenal.getOrchestrator().getBudget('127.0.0.1').used.http_request_budget).toBe(3);
+    await vi.waitFor(() => expect(restored.mission.getTaskQueue().getForMission(restored.mission.getAllMissions()[0].id).every(task => task.status === 'completed')).toBe(true), { timeout: mode === 'discovery' ? 15_000 : 5000 });
+    expect(requests).toEqual({ first: 1, second: mode === 'discovery' ? 26 : 2 });
+    const used = restored.arsenal.getOrchestrator().getBudget('127.0.0.1').used;
+    expect(used.http_request_budget).toBe(mode === 'discovery' ? 1 : 3);
+    expect(used.total_request_budget).toBe(reservedBefore + requests.first + requests.second - receivedBefore);
+    if (mode === 'discovery') {
+      expect(restored.arsenal.getOrchestrator().getEvidence().some(record => record.toolName === 'api_endpoint_discovery'
+        && record.result.success && record.rawOutput.includes('/api/config'))).toBe(true);
+    }
     expect(restored.arsenal.getOrchestrator().getEvidence().some(record => record.parsedOutput?.responseBody === 'First result persisted')).toBe(true);
   }, 20_000);
 

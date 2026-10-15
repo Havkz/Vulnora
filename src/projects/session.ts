@@ -38,7 +38,8 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.on('abort:recommended', reason => this.record('abort:recommended', { reason }));
     this.command.on('recovery:blocked', ({ task, error }) => {
       this.project.status = 'paused';
-      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message });
+      const call = task.checkpoint?.activeCall || (task.executionPlan ? { name: task.executionPlan.toolName, arguments: task.executionPlan.parameters } : undefined);
+      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message, toolName: call?.name, parameters: call?.arguments });
       this.emit('error', error);
     });
     this.command.llm.on('request:fallback', event => this.record('provider:fallback', event));

@@ -44,6 +44,10 @@ scan stage and shows one `Ran` block per tool call, followed by three gray outpu
 lines and a blank line. Ctrl+T reveals the full output in white. Commands are dark
 blue, flags red, and quoted strings green; result dots show success or failure.
 Stage completion remains in the log. The complete event journal is retained.
+Interrupted API and directory discovery can repeat their GET-only probes while
+retaining completed work and request budgets. Requests with uncertain write effects
+remain paused; Enter opens recovery details and Esc returns to the main menu.
+The saved-log viewer includes full event metadata as well as command output.
 
 Create a project, enter a URL, hostname, IPv4 or IPv6 address, then confirm
 **READY — Press Enter to start**. The original target remains visible. Entering a

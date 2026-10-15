@@ -12,6 +12,7 @@ import { visibleWidth } from '../ui/theme.js';
 import { ProjectStore } from '../projects/store.js';
 import { ProjectSession } from '../projects/session.js';
 import { KillChainPhase, type LLMConfig } from '../types/index.js';
+import { UnsafeResumeError } from '../agent/checkpoint.js';
 
 const directories: string[] = [];
 const surfaces: TerminalSurface[] = [];
@@ -45,6 +46,43 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it.each([[80, 30], [24, 12], [16, 8]])('shows paused recovery at %s × %s and opens details without replaying a write', async (columns, rows) => {
+    const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
+    f.input.write('\rBlocked fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
+    await f.wait('Esc Pause');
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing fixture mission');
+    const task = session.command.mission.createTask({ missionId: mission.id, name: 'Interrupted write', description: 'Inspect recorded write',
+      phase: mission.currentPhase, operatorType: 'recon' });
+    const execute = vi.spyOn(session.command.arsenal, 'execute');
+    const call = { id: 'write', name: 'http_request', arguments: {
+      method: 'POST', url: 'https://fixture.test/write', headers: { Authorization: 'private-review-fixture-value' },
+    } };
+    task.executionPlan = { toolName: call.name, parameters: call.arguments };
+    const error = new UnsafeResumeError(call);
+    session.command.pause(); session.command.emit('recovery:blocked', { task, error });
+    const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
+    f.output.columns = columns; f.output.rows = rows; f.output.emit('resize');
+    expect(view().lines.length).toBeLessThanOrEqual(rows - 2);
+    expect(view().lines.every(line => visibleWidth(line) < columns)).toBe(true);
+    expect(view().lines.map(stripVTControlCharacters).join('\n')).toContain(columns < 40 ? 'Paused' : 'Recovery paused');
+    expect(view().lines.map(stripVTControlCharacters).join('\n')).not.toContain('Working ·');
+    expect(view().footer).toContain('Enter');
+    f.output.columns = 80; f.output.rows = 30; f.output.emit('resize');
+    expect(view().footer).toContain('Enter Recovery details');
+    f.input.write('\r'); await f.wait('Interrupted tool: http_request');
+    expect(stripVTControlCharacters(f.transcript())).toContain('POST');
+    expect(f.transcript()).not.toContain('private-review-fixture-value');
+    f.input.write('\x1b');
+    await expect.poll(() => view().footer).toContain('Enter Recovery details');
+    f.input.write('\x1b');
+    await expect.poll(() => view().lines.map(stripVTControlCharacters).join('\n')).toContain('Create New Project');
+    expect(execute).not.toHaveBeenCalled();
+    expect((await f.store.load(session.project.id)).checkpoint).toBeDefined();
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
   it('pins the current stage, pairs concurrent command results, and separates command blocks', async () => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rStage fixture\r'); await f.wait('Target URL or IP:');
@@ -57,6 +95,10 @@ describe('durable interactive project flow', () => {
     for (const operatorId of ['one', 'two']) session.command.emit('scan:progress', {
       id: 'call-' + operatorId, timestamp: Date.now(), kind: 'tool_call', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
       detail: `http_request {"url":"https://fixture.test/${operatorId}"}`,
+    });
+    session.command.emit('scan:progress', {
+      id: 'resumed-call', timestamp: Date.now(), kind: 'tool_call', operatorId: 'one', callsign: 'one', archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
+      detail: 'http_request {"url":"https://fixture.test/one"}',
     });
     for (const operatorId of ['two', 'one']) session.command.emit('scan:progress', {
       id: 'result-' + operatorId, timestamp: Date.now(), kind: 'tool_result', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
@@ -75,7 +117,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
     await f.store.flush(session.project.id);
     const journal = await f.store.readLogs(session.project.id);
-    expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(4);
+    expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(5);
   });
 
   it.each(['running', 'paused'])('saves and exits with Ctrl+X from a %s project', async status => {

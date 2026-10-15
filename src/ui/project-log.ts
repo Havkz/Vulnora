@@ -9,6 +9,15 @@ export function phaseLabel(phase?: string): string {
   return phase ? names[phase] || phase.replace(/_/g, ' ') : 'Preparing';
 }
 
+export function formatSavedProjectLog(event: ProjectLogEvent): string {
+  const safe = redactSecrets(event) as ProjectLogEvent;
+  const data = fields(safe);
+  const { detail, ...metadata } = data;
+  return terminalText(`${new Date(safe.timestamp).toLocaleTimeString('de-DE', { hour12: false })} ${safe.category}\n`
+    + (typeof detail === 'string' ? `${detail}\n${JSON.stringify(metadata, null, 2)}`
+      : typeof safe.data === 'string' ? safe.data : JSON.stringify(safe.data, null, 2)));
+}
+
 function fields(event: ProjectLogEvent): Record<string, unknown> {
   return event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
 }
@@ -70,6 +79,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
   if (event.category === 'mission:phase_changed') return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} completed\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
   if (event.category === 'project:completed') return { title: `${typeof data.phase === 'string' ? `${phaseLabel(data.phase)} completed\n` : ''}Scan completed` };
   if (event.category === 'provider:fallback') return { title: `Fallback · ${data.fromProvider} → ${data.toProvider}`, body: String(data.reason || data.error || '') };
+  if (event.category === 'recovery:blocked') return { title: `Recovery paused · ${data.taskName || 'operation'}`, body: String(data.error || '') };
   if (event.category === 'orchestration:event') {
     return /^(executed|failed|repeated)$/i.test(String(data.action)) ? undefined
       : { title: `${data.action || 'Evidence'} · ${data.toolName || 'tool'}`, body: `${data.reason || ''}${data.target ? ` · ${data.target}` : ''}` };

@@ -164,5 +164,11 @@ describe('granular agent recovery', () => {
     expect(canReplayInterruptedCall({ ...call('one'), arguments: { method: ['GET'] } })).toBe(false);
     expect(canReplayInterruptedCall({ ...call('one'), arguments: { method: 'GET', body: 'write' } })).toBe(false);
     expect(canReplayInterruptedCall(call('one', 'HEAD'))).toBe(true);
+    expect(canReplayInterruptedCall({ ...call('one'), name: 'http_methods_test' })).toBe(false);
+    expect(canReplayInterruptedCall({ ...call('one'), name: 'nmap_scan', arguments: { flags: '--script vuln' } })).toBe(false);
+  });
+
+  it.each(['api_endpoint_discovery', 'dir_bruteforce'])('allows interrupted GET-only %s probes to resume from their saved call', name => {
+    expect(canReplayInterruptedCall({ id: 'probe', name, arguments: { url: target.address, wordlist: 'common' } })).toBe(true);
   });
 });
