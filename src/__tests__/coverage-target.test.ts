@@ -17,8 +17,11 @@ describe('coverage recovery target handling', () => {
       budget: { remaining: { tool_call_budget: 10, total_request_budget: 100 } as TargetBudgets }, includeValidation: false })?.toolName).toBe('api_endpoint_discovery');
   });
   it('keeps truncated wordlist coverage incomplete and does not reschedule an exhausted discovery budget', () => {
-    const record = { id: 'partial', target: 'https://fixture.test/', toolName: 'ffuf_fuzz', toolCategory: 'content_discovery',
-      executionStatus: 'executed', resultType: 'negative', result: { success: true, metadata: { wordlistTruncated: true } } } as EvidenceRecord;
+    const record: EvidenceRecord = { id: 'partial', target: 'https://fixture.test/', toolName: 'ffuf_fuzz', toolCategory: 'content_discovery',
+      normalizedSignature: 'partial', equivalentSignature: 'partial', timestamp: 1, requestParameters: {}, rawOutput: 'Limited discovery',
+      status: 'success', confidence: 1, sourceAgent: 'Fixture', findingIds: [], budgetCostEstimated: 3, budgetCostSource: 'orchestrator_estimated',
+      networkContext: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
+      executionStatus: 'executed', resultType: 'negative', result: { success: true, metadata: { wordlistTruncated: true } } };
     const snapshot = evaluateCoverage('https://fixture.test/', [record]);
     expect(snapshot.entries.content_discovery.status).toBe('incomplete'); snapshot.retryable = ['content_discovery', 'api_discovery'];
     expect(planCoverageRecovery({ snapshot, records: [record], availableTools: new Set(['api_endpoint_discovery', 'ffuf_fuzz']), attempts: {},
