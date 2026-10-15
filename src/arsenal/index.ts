@@ -357,6 +357,7 @@ export interface ProcessEvent {
   output?: string;
   success?: boolean;
   exitCode?: number;
+  timeoutMs?: number;
 }
 
 export interface ToolExecution {
@@ -3295,7 +3296,7 @@ export async function runSubprocess(
 async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const onProcess = fetchContext.getStore()?.onProcess;
   const id = randomUUID();
-  onProcess?.({ id, type: 'started', command, args });
+  onProcess?.({ id, type: 'started', command, args, timeoutMs: timeout });
   const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
     onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode });
     return result;

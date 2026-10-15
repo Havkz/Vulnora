@@ -555,6 +555,14 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    * Setup event forwarding from subsystems
    */
   private setupEventForwarding(): void {
+    this.arsenal.on('tool:process', event => {
+      const taskId = [...this.dispatchOperators].find(([, operator]) => operator.callsign === event.operator)?.[0];
+      if (!taskId) return;
+      this.dispatchLastProgress.set(taskId, Date.now());
+      if (event.type === 'started' && event.timeoutMs) {
+        this.processDeadlines.set(event.id, { taskId, until: Date.now() + event.timeoutMs + 1000 });
+      } else if (event.type === 'completed') this.processDeadlines.delete(event.id);
+    });
     this.arsenal.on('tool:orchestration', event => {
       this.emit('orchestration:event', event);
     });
@@ -1045,6 +1053,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
   /** Last observable THINK/TOOL/RESULT/task event for each in-flight dispatch. */
   private dispatchLastProgress: Map<string, number> = new Map();
+  private processDeadlines = new Map<string, { taskId: string; until: number }>();
 
   /** The operator each in-flight dispatch was assigned to, keyed by task id — so a
    * timed-out dispatch can reset the exact wedged operator back to idle. */
@@ -1222,6 +1231,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
           + (firstError ? ` — ${firstError}` : '');
         this.paused = true;
         this.emit('command:paused');
+        this.emit('recovery:blocked', { task: infrastructureFailures[0], error: new Error(this.stallReason) });
         return;
       }
       if (await this.ensureCoverageBeforeAdvance(mission, taskQueue)) return;
@@ -1435,6 +1445,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    * activeDispatches, dispatchStartTimes, and dispatchOperators in lockstep).
    */
   private clearDispatch(taskId: string): void {
+    for (const [id, process] of this.processDeadlines) if (process.taskId === taskId) this.processDeadlines.delete(id);
     this.activeDispatches.delete(taskId);
     this.dispatchStartTimes.delete(taskId);
     this.dispatchLastProgress.delete(taskId);
@@ -1470,6 +1481,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
     // Snapshot ids first — we mutate the maps inside the loop.
     for (const taskId of [...this.activeDispatches]) {
+      // A bounded child owns its timeout; leave one scheduler tick for it to settle.
+      if ([...this.processDeadlines.values()].some(process => process.taskId === taskId && now < process.until)) continue;
       const startedAt = this.dispatchStartTimes.get(taskId);
       const lastProgressAt = this.dispatchLastProgress.get(taskId) ?? startedAt;
       const operator = this.dispatchOperators.get(taskId);

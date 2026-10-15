@@ -10,6 +10,7 @@ import { KillChainPhase } from '../types/index.js';
 import { validateEngineCheckpoint, type EngineCheckpoint } from '../projects/engine-checkpoint.js';
 import { ProjectStore } from '../projects/store.js';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
+import { runSubprocess } from '../arsenal/index.js';
 import { acquireProjectLease } from '../projects/lease.js';
 
 const commands: VulnoraCommand[] = [];
@@ -54,6 +55,27 @@ async function listen(server: Server): Promise<string> {
 }
 
 describe('whole scanner checkpoints', () => {
+  it('lets a real bounded child finish after the inactivity window without stalling the mission', async () => {
+    vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
+    const command = scanner();
+    vi.spyOn(command.llm, 'getProvider').mockReturnValue('deterministic');
+    const { task } = prepare(command);
+    command.arsenal.register({ name: 'fixture_process', description: 'Local bounded child', category: 'util', parameters: [],
+      handler: async () => {
+        const result = await runSubprocess(process.execPath, ['-e', 'setTimeout(()=>process.stdout.write("Completed fixture"),200)'], { timeout: 2000 });
+        return { success: result.exitCode === 0, output: result.stdout };
+      } });
+    task.executionPlan = { toolName: 'fixture_process', parameters: {} };
+    let processStarted = false;
+    command.arsenal.on('tool:process', event => { if (event.type === 'started') processStarted = true; });
+    await tick(command);
+    await vi.waitFor(() => expect(processStarted).toBe(true));
+    await new Promise(resolve => setTimeout(resolve, 80));
+    await tick(command);
+    expect(task.status).not.toBe('failed');
+    await vi.waitFor(() => expect(task.status).toBe('completed'), { timeout: 5000 });
+    expect(task.result?.output).toContain('Completed fixture');
+  });
   it('retains phases, queues, IDs, results, scope, evidence, budgets, and operator settings', async () => {
     const origin = await listen(createServer((_request, response) => response.end('Fixture evidence')));
     const command = scanner();
