@@ -3578,7 +3578,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       const wordlist = await usableWebWordlist(context.parameters.wordlist as string | undefined);
       const mc = context.parameters.mc as string || '200,301,302,403';
 
-      const args = ['-u', url, '-w', wordlist, '-mc', mc, '-o', '/dev/stdout', '-of', 'json', '-s'];
+      const args = ['-u', url, '-w', wordlist, '-mc', mc, '-json', '-s'];
       const result = await runSubprocess('ffuf', args, { timeout: 300000, signal: context.abortSignal });
 
       if (result.exitCode !== 0) {
@@ -3592,12 +3592,11 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       }
 
       try {
-        const data = JSON.parse(result.stdout);
-        const results = data.results || [];
+        const results = result.stdout.split(/\r?\n/).filter(line => line.trim()).map(line => JSON.parse(line));
         return {
           success: true,
-          output: `ffuf scan of ${url}:\nFound ${results.length} results:\n${results.slice(0, 50).map((r: { input?: { FUZZ?: string }; status?: number; length?: number }) =>
-            `  ${r.input?.FUZZ || '?'} -> ${r.status} (${r.length} bytes)`
+          output: `ffuf scan of ${url}:\nFound ${results.length} results:\n${results.slice(0, 50).map((r: { url?: string; input?: { FUZZ?: string }; status?: number; length?: number }) =>
+            `  ${r.url || r.input?.FUZZ || '?'} -> ${r.status} (${r.length} bytes)`
           ).join('\n')}`,
           findings: results.length > 0 ? [{
             title: 'Directories/Files Discovered (ffuf)',

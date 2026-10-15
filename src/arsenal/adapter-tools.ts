@@ -155,7 +155,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     build: (target, params) => {
       const wordlist = str(params.wordlist) ?? DEFAULT_WEB_WORDLIST;
       const mc = str(params.mc) ?? '200,301,302,403';
-      return ['-u', target, '-w', wordlist, '-mc', mc, '-o', '/dev/stdout', '-of', 'json', '-s'];
+      return ['-u', target, '-w', wordlist, '-mc', mc, '-json', '-s'];
     },
   },
   sqlmap: {
