@@ -215,6 +215,7 @@ import { parseTargetHeaderConfig, targetHeadersForUrl, redactConfiguredSecrets }
 const fetchContext = new AsyncLocalStorage<{
   scope: ArsenalScope | null; signal?: AbortSignal; orchestrator?: ToolOrchestrator; beforeRequest?: () => Promise<void>; host?: string;
   onProcess?: (event: ProcessEvent) => void;
+  preparedWordlist?: ToolContext['preparedWordlist'];
 }>();
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
@@ -676,11 +677,19 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
         tool,
         context,
         () => fetchContext.run({ scope: this.scope, signal: context.abortSignal, orchestrator: this.orchestrator,
-          beforeRequest: context.beforeHttpRequest, host: normalizeToolCall(toolName, context).host,
+          beforeRequest: context.beforeHttpRequest, host: normalizeToolCall(toolName, context).host, preparedWordlist: context.preparedWordlist,
           onProcess: event => { processCount++; this.emit('tool:process', redactConfiguredSecrets({ ...event, toolName, operator: context.operator })); } },
           async () => {
             const result = await this.runToolHandler(toolName, context, tool.handler);
-            return processCount ? { ...result, metadata: { ...result.metadata, executionTraced: true } } : result;
+            const list = context.preparedWordlist;
+            if (!list && !processCount) return result;
+            const limited = list && list.entries.length < list.totalEntries;
+            if (limited) this.orchestrator.markIncompleteArea(`${normalizeToolCall(toolName, context).host}: content discovery limited by request budget (${list.entries.length}/${list.totalEntries} wordlist entries)`);
+            return { ...result,
+              output: limited ? `[Discovery limited by request budget: ${list.entries.length}/${list.totalEntries} wordlist entries]\n${result.output || ''}` : result.output,
+              metadata: { ...result.metadata, ...(processCount ? { executionTraced: true } : {}),
+                ...(list ? { wordlistSource: list.source, wordlistEntries: list.entries.length, wordlistTotalEntries: list.totalEntries, wordlistTruncated: limited } : {}) },
+            };
           })
       ));
       const durationMs = Date.now() - startTime;
@@ -3285,12 +3294,30 @@ export async function runSubprocess(
   const signal = signals.length ? AbortSignal.any(signals) : undefined;
   const context = fetchContext.getStore();
   const policy = context?.orchestrator?.scanPolicy;
-  if (policy?.behavior && context?.host) {
-    const argv = policy.commandArgs(command, args, context.host);
-    return policy.runNetwork(context.host,
-      () => executeSubprocess(command, argv, timeout, maxOutput, signal), signal);
+  let temporary: string | undefined;
+  try {
+    let argv = [...args];
+    const list = context?.preparedWordlist;
+    if (list && ['ffuf', 'gobuster', 'feroxbuster'].includes(command)) {
+      const at = argv.findIndex(arg => arg === '-w' || arg === '--wordlist');
+      if (at < 0 || !list.entries.length) throw new Error('Discovery has no admitted wordlist entries.');
+      temporary = await mkdtemp(join(tmpdir(), 'vulnora-discovery-'));
+      const wordlist = join(temporary, 'paths.txt');
+      await writeFile(wordlist, list.entries.join('\n') + '\n', { mode: 0o600 });
+      argv[at + 1] = wordlist;
+      if (command === 'ffuf') argv.push('-ac=false', '-recursion=false', '-r=false');
+      if (command === 'gobuster') argv.push('--retry=false', '--follow-redirect=false');
+      if (command === 'feroxbuster') argv.push('--no-recursion', '--dont-extract-links');
+    }
+    if (policy?.behavior && context?.host) {
+      argv = policy.commandArgs(command, argv, context.host);
+      return await policy.runNetwork(context.host,
+        () => executeSubprocess(command, argv, timeout, maxOutput, signal), signal);
+    }
+    return await executeSubprocess(command, argv, timeout, maxOutput, signal);
+  } finally {
+    if (temporary) await rm(temporary, { recursive: true, force: true });
   }
-  return executeSubprocess(command, args, timeout, maxOutput, signal);
 }
 
 async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {

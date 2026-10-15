@@ -5,10 +5,26 @@ import type { EvidenceRecord, TargetBudgets } from '../orchestrator/tool-orchest
 function plan(target: string, tool: string) {
   return planCoverageRecovery({ snapshot: evaluateCoverage(target, []), records: [], availableTools: new Set([tool]),
     attempts: {}, network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
-    budget: { remaining: { tool_call_budget: 10, total_request_budget: 10 } as TargetBudgets }, includeValidation: true });
+    budget: { remaining: { tool_call_budget: 10, total_request_budget: 100 } as TargetBudgets }, includeValidation: true });
 }
 
 describe('coverage recovery target handling', () => {
+  it('covers bounded API discovery before admitting the larger content wordlist', () => {
+    const target = 'http://fixture.test:8081/base';
+    const snapshot = evaluateCoverage(target, []); snapshot.retryable = ['api_discovery', 'content_discovery'];
+    expect(planCoverageRecovery({ snapshot, records: [], availableTools: new Set(['api_endpoint_discovery', 'ffuf_fuzz']), attempts: {},
+      network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
+      budget: { remaining: { tool_call_budget: 10, total_request_budget: 100 } as TargetBudgets }, includeValidation: false })?.toolName).toBe('api_endpoint_discovery');
+  });
+  it('keeps truncated wordlist coverage incomplete and does not reschedule an exhausted discovery budget', () => {
+    const record = { id: 'partial', target: 'https://fixture.test/', toolName: 'ffuf_fuzz', toolCategory: 'content_discovery',
+      executionStatus: 'executed', resultType: 'negative', result: { success: true, metadata: { wordlistTruncated: true } } } as EvidenceRecord;
+    const snapshot = evaluateCoverage('https://fixture.test/', [record]);
+    expect(snapshot.entries.content_discovery.status).toBe('incomplete'); snapshot.retryable = ['content_discovery', 'api_discovery'];
+    expect(planCoverageRecovery({ snapshot, records: [record], availableTools: new Set(['api_endpoint_discovery', 'ffuf_fuzz']), attempts: {},
+      network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
+      budget: { remaining: { tool_call_budget: 10, total_request_budget: 100, content_discovery_budget: 0 } as TargetBudgets }, includeValidation: false })).toBeUndefined();
+  });
   it.each(['http_request', 'header_analysis', 'technology_detect', 'feroxbuster_tool', 'api_endpoint_discovery', 'http_methods_test'])(
     'preserves scheme, custom port, path and query for %s', tool => {
       const url = 'http://fixture.test:8081/base?mode=read';

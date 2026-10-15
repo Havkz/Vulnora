@@ -5,7 +5,8 @@ import { redactConfiguredSecrets } from '../arsenal/target-headers.js';
 import { createHash } from 'crypto';
 import { execFile } from 'child_process';
 import { resolve4 } from 'dns/promises';
-import { stat, statfs } from 'fs/promises';
+import { stat, statfs, readFile } from 'fs/promises';
+import { DEFAULT_WEB_WORDLIST } from '../arsenal/catalog.js';
 import { promisify } from 'util';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 import { evidenceStoreFromEnvironment, type EvidenceStore } from './evidence-store.js';
@@ -359,6 +360,7 @@ export class ToolOrchestrator {
   private readonly events: OrchestratorEvent[] = [];
   private readonly conflicts: EvidenceConflict[] = [];
   private readonly inFlight = new Map<string, Promise<ToolResult>>();
+  private readonly admissions = new Map<string, Promise<ToolResult>>();
   private readonly budgets = new Map<string, { limits: TargetBudgets; used: TargetBudgets }>();
   private readonly network = new Map<string, NetworkContext & { recent: Array<{ at: number; type: string; path?: string; fingerprint?: string; category?: string; latencyMs?: number }>; blockedAt?: number; healthChecks: number }>();
   private readonly metrics: OrchestratorMetrics = { actualNetworkRequests: 0, redundantRequestsAvoided: 0, cacheHits: 0, toolFailures: 0, wafEvents: 0, rateLimitEvents: 0, blockedCalls: 0, contradictions: 0, incompleteAreas: [], budgetCostEstimated: 0, budgetCostActual: 0, budgetCostSources: { tool_reported: 0, adapter_measured: 0, orchestrator_estimated: 0 } };
@@ -428,7 +430,7 @@ export class ToolOrchestrator {
   }
 
   restoreCheckpoint(state: ReturnType<ToolOrchestrator['exportCheckpoint']>): void {
-    if (this.activeExecutions.size || this.inFlight.size) throw new Error('Cannot restore over active tool executions.');
+    if (this.activeExecutions.size || this.inFlight.size || this.admissions.size) throw new Error('Cannot restore over active tool executions.');
     const saved = structuredClone(state);
     if (saved.scanPolicy) this.scanPolicy.restoreCheckpoint(saved.scanPolicy);
     this.records.splice(0, this.records.length, ...saved.records);
@@ -737,6 +739,24 @@ export class ToolOrchestrator {
   }
 
   async execute(tool: CustomTool, context: ToolContext, runner: () => Promise<ToolResult>): Promise<ToolResult> {
+    if (context.purpose === 'reporting' || context.repeatReason) return this.executeAdmitted(tool, context, runner);
+    const call = normalizeToolCall(tool.name, context);
+    const pending = this.admissions.get(call.normalizedSignature);
+    if (pending) {
+      this.metrics.cacheHits++; this.metrics.redundantRequestsAvoided++;
+      this.emit('USED', 'in-flight shared evidence', call);
+      const result = await pending;
+      const shared = { ...result, metadata: { ...result.metadata, cacheHit: true, orchestrationStatus: 'duplicate_skipped', networkRequests: 0 } };
+      this.store(call, context, shared, 0, 'duplicate_skipped');
+      return shared;
+    }
+    // Claim the request before asynchronous preflight or wordlist preparation.
+    const execution = this.executeAdmitted(tool, context, runner);
+    this.admissions.set(call.normalizedSignature, execution);
+    try { return await execution; } finally { this.admissions.delete(call.normalizedSignature); }
+  }
+
+  private async executeAdmitted(tool: CustomTool, context: ToolContext, runner: () => Promise<ToolResult>): Promise<ToolResult> {
     let call = normalizeToolCall(tool.name, context);
     if (context.purpose === 'reporting' && toolCategory(tool.name, context.parameters) !== 'offline') {
       this.metrics.blockedCalls++; this.emit('BLOCKED', 'reporting is evidence-store only', call);
@@ -814,7 +834,23 @@ export class ToolOrchestrator {
       this.store(call, context, shared, 0, 'duplicate_skipped');
       return shared;
     }
-    const cost = this.estimatedRequests(call);
+    let cost = this.estimatedRequests(call);
+    if (/^(?:ffuf_fuzz|ffuf_tool|gobuster_tool|feroxbuster_tool)$/.test(tool.name)) {
+      const source = typeof context.parameters.wordlist === 'string' && context.parameters.wordlist.trim() && context.parameters.wordlist !== 'common'
+        ? context.parameters.wordlist : DEFAULT_WEB_WORDLIST;
+      try {
+        const words = [...new Set((await readFile(source, 'utf8')).split(/\r?\n/).map(word => word.trim()).filter(word => word && !word.startsWith('#')))];
+        const remaining = this.getBudget(call.host).remaining;
+        const overhead = /ffuf/.test(tool.name) ? 0 : 10;
+        const limit = Math.max(0, Math.min(remaining.total_request_budget, remaining.content_discovery_budget) - overhead);
+        const entries = words.slice(0, limit);
+        cost = Math.max(1, entries.length) + overhead;
+        context.preparedWordlist = { source, entries, totalEntries: words.length, reservedRequests: cost };
+      } catch {
+        const result: ToolResult = { success: false, error: `ORCHESTRATOR configuration_error: discovery wordlist cannot be read: ${source}`, metadata: { orchestrationStatus: 'configuration_error', networkRequests: 0 } };
+        this.store(call, context, result, 0); return result;
+      }
+    }
     const reservation = this.reserveBudget(call, cost);
     if (reservation.failure) { this.store(call, context, reservation.failure, 0, 'budget_exceeded', reservation.estimated); return reservation.failure; }
     // Retain charged budgets even if the process dies during the network operation.

@@ -50,6 +50,11 @@ Website missions omit empty installation and command-and-control phases. Plannin
 agents receive refreshed shared observations before each decision; vulnerability
 coverage is scheduled independently of remaining reconnaissance gaps.
 The complete event journal is retained. Progress displays one decimal place.
+Directory discovery reserves its wordlist work before starting a process. FFUF,
+Gobuster and Feroxbuster receive only entries admitted by the remaining request
+budget; temporary lists are removed afterwards. Truncated searches remain explicit
+coverage gaps. API discovery runs before larger directory lists consume that budget.
+Identical concurrent calls share one execution, including asynchronous preflight.
 Interrupted API and directory discovery can repeat their GET-only probes while
 retaining completed work and request budgets. Requests with uncertain write effects
 remain paused; Enter opens recovery details and Esc returns to the main menu.

@@ -451,6 +451,8 @@ export interface ToolContext {
   abortSignal?: AbortSignal;
   /** Internal durable accounting hook, installed by the orchestrator. */
   beforeHttpRequest?: () => Promise<void>;
+  /** Internal discovery work admitted against the target's remaining request budget. */
+  preparedWordlist?: { source: string; entries: string[]; totalEntries: number; reservedRequests: number };
   parameters: Record<string, unknown>;
 }
 

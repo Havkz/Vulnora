@@ -67,8 +67,10 @@ function belongs(record: EvidenceRecord, capability: CoverageCapability): boolea
 
 function classify(records: EvidenceRecord[]): CoverageStatus {
   if (!records.length) return 'not_started';
-  if (records.some(record => record.executionStatus === 'executed' && record.resultType === 'positive')) return 'completed';
-  if (records.some(record => record.executionStatus === 'executed' && ['negative', 'empty', 'inconclusive'].includes(record.resultType))) return 'completed_negative';
+  const complete = records.filter(record => !record.result?.metadata?.wordlistTruncated);
+  if (complete.some(record => record.executionStatus === 'executed' && record.resultType === 'positive')) return 'completed';
+  if (complete.some(record => record.executionStatus === 'executed' && ['negative', 'empty', 'inconclusive'].includes(record.resultType))) return 'completed_negative';
+  if (records.some(record => record.executionStatus === 'executed' && record.result?.metadata?.wordlistTruncated)) return 'incomplete';
   const last = records.at(-1)!;
   if (last.executionStatus === 'blocked' || (last.errorType && terminalErrors.has(last.errorType))) return 'failed_terminal';
   if (last.executionStatus === 'deferred') return last.errorType === 'waf_blocked' ? 'failed_terminal' : 'failed_retryable';
@@ -150,14 +152,15 @@ export function planCoverageRecovery(params: {
   if (open('service_detection') && count('service_detection') < 2 && availableTools.has('nmap_scan')) {
     return { capability: 'service_detection', toolName: 'nmap_scan', parameters: { target, ports: webPorts, flags: '-sV --version-light' }, repeatReason: 'materially_different_configuration', description: 'Service detection on evidenced web ports', requiredCapability: 'port_discovery', missingEvidence: 'Open-port evidence', retryAfterCapability: 'port_discovery' };
   }
-  if (open('content_discovery') && count('content_discovery') < 3) {
+  const contentBudget = budget.remaining.content_discovery_budget ?? Infinity;
+  if (open('api_discovery') && count('api_discovery') < 1 && contentBudget >= 42 && budget.remaining.total_request_budget >= 42 && availableTools.has('api_endpoint_discovery')) return { capability: 'api_discovery', toolName: 'api_endpoint_discovery', parameters: { url, wordlist: 'common' }, description: 'Bounded API discovery' };
+  if (open('content_discovery') && count('content_discovery') < 3 && contentBudget > 0) {
     if (count('content_discovery') === 0 && availableTools.has('ffuf_fuzz')) {
       const fuzz = new URL(url); fuzz.pathname = fuzz.pathname.replace(/\/?$/, '/FUZZ');
       return { capability: 'content_discovery', toolName: 'ffuf_fuzz', parameters: { url: fuzz.href, wordlist: DEFAULT_WEB_WORDLIST, mc: '200,204,301,302,307,401,403' }, description: 'Bounded FFUF content discovery' };
     }
     for (const toolName of ['feroxbuster_tool', 'gobuster_tool', 'dir_bruteforce']) if (availableTools.has(toolName)) return { capability: 'content_discovery', toolName, parameters: toolName === 'dir_bruteforce' ? { url, wordlist: 'common' } : { url, wordlist: DEFAULT_WEB_WORDLIST }, repeatReason: 'materially_different_configuration', description: `Content discovery fallback via ${toolName}` };
   }
-  if (open('api_discovery') && count('api_discovery') < 1 && availableTools.has('api_endpoint_discovery')) return { capability: 'api_discovery', toolName: 'api_endpoint_discovery', parameters: { url, wordlist: 'common' }, description: 'Bounded API discovery' };
   if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: url, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };
   if (params.includeValidation && open('targeted_validation') && count('targeted_validation') < 1 && availableTools.has('http_methods_test')) return { capability: 'targeted_validation', toolName: 'http_methods_test', parameters: { url }, description: 'Low-impact targeted HTTP validation' };
   return undefined;
