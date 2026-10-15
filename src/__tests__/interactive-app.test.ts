@@ -52,6 +52,7 @@ describe('durable interactive project flow', () => {
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await f.wait('Esc Pause');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing fixture mission');
     const task = session.command.mission.createTask({ missionId: mission.id, name: 'Interrupted write', description: 'Inspect recorded write',
       phase: mission.currentPhase, operatorType: 'recon' });
