@@ -3,6 +3,24 @@ import { Arsenal, runSubprocess, type ProcessEvent } from '../arsenal/index.js';
 import { readFile } from 'node:fs/promises';
 
 describe('actual command execution journal', () => {
+  it('starts the deadline before notifying a slow process listener', async () => {
+    const arsenal = new Arsenal();
+    const timeout = process.platform === 'win32' ? 3500 : 800;
+    let notifiedAt = 0;
+    arsenal.on('tool:process', event => {
+      if (event.type !== 'started') return;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, timeout + 400);
+      notifiedAt = Date.now();
+    });
+    arsenal.register({ name: 'fixture_deadline', category: 'util', description: 'Local deadline fixture', parameters: [],
+      handler: async () => {
+        const result = await runSubprocess(process.execPath, ['-e', 'setTimeout(()=>{},12000)'], { timeout });
+        return { success: result.exitCode === 0, output: result.stderr };
+      } });
+    const result = await arsenal.execute('fixture_deadline', { parameters: {} });
+    expect(Date.now() - notifiedAt).toBeLessThan(process.platform === 'win32' ? 3000 : 500);
+    expect(result.output).toContain('Process killed (timeout)');
+  }, 10000);
   it.each(['deadline', 'abort'])('enforces %s even when a tool ignores SIGTERM and holds descendant output pipes', async mode => {
     const child = "process.on('SIGTERM',()=>{}); setTimeout(()=>process.exit(0),8000)";
     const parent = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e',${JSON.stringify(child)}],{stdio:'inherit'}); console.log('PIDS',process.pid,child.pid); process.on('SIGTERM',()=>{}); setTimeout(()=>process.exit(0),8000)`;
@@ -11,7 +29,7 @@ describe('actual command execution journal', () => {
     const timer = mode === 'abort' ? setTimeout(() => controller.abort(new Error('fixture pause')), 1000) : undefined;
     const result = await runSubprocess(process.execPath, ['-e', parent], { timeout: mode === 'abort' ? 5000 : 1000, signal: controller.signal });
     clearTimeout(timer);
-    expect(Date.now() - started).toBeLessThan(3000); expect(result.exitCode).toBe(mode === 'abort' ? -2 : -1);
+    expect(Date.now() - started).toBeLessThan(process.platform === 'win32' ? 4500 : 3000); expect(result.exitCode).toBe(mode === 'abort' ? -2 : -1);
     const pids = result.stdout.match(/PIDS (\d+) (\d+)/); expect(pids).not.toBeNull();
     for (const pid of pids?.slice(1) || []) {
       await expect.poll(async () => {

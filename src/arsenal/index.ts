@@ -3321,7 +3321,6 @@ export async function runSubprocess(
 async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const onProcess = fetchContext.getStore()?.onProcess;
   const id = randomUUID();
-  onProcess?.({ id, type: 'started', command, args, timeoutMs: timeout });
   const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
     onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode });
     return result;
@@ -3366,6 +3365,8 @@ async function executeSubprocess(command: string, args: string[], timeout: numbe
       resolve({ stdout: Buffer.concat(output.stdout).toString(), stderr: [Buffer.concat(output.stderr).toString(), diagnostic].filter(Boolean).join('\n'),
         exitCode: aborted ? -2 : timedOut || overflow ? -1 : failure ? 1 : code ?? 1 });
     });
+    // Rendering and journal listeners must not delay the child's deadline.
+    onProcess?.({ id, type: 'started', command, args, timeoutMs: timeout });
   }).then(finish);
 }
 
