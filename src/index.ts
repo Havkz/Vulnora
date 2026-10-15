@@ -588,7 +588,18 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     });
 
     this.mission.on('mission:phase_changed', ({ mission, oldPhase, newPhase }) => {
-      this.emit('mission:phase_changed', { missionId: mission.id, phase: newPhase, previousPhase: oldPhase });
+      const tasks = this.mission.getTaskQueue().getForMission(mission.id).filter(task => task.phase === oldPhase);
+      const required = oldPhase === KillChainPhase.RECON ? RECON_COVERAGE : oldPhase === KillChainPhase.WEAPONIZE ? VALIDATION_COVERAGE : [];
+      const missing = [...new Set(this.targetEnv.getAllTargets().flatMap(target => {
+        const coverage = evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence());
+        return required.filter(capability => !['completed', 'completed_negative', 'not_applicable'].includes(coverage.entries[capability].status));
+      }))];
+      const previousOutcome = missing.length || tasks.some(task => task.status === 'failed'
+        || (task.status === 'skipped' && !['no_validated_targets', 'not_exploitable'].includes(task.result?.skipReason || ''))) ? 'incomplete'
+        : tasks.some(task => task.status === 'completed') ? 'completed' : 'not_applicable';
+      const reason = [missing.length ? `Coverage gaps: ${missing.join(', ')}` : '',
+        ...tasks.filter(task => task.status === 'skipped').map(task => task.result?.error)].filter(Boolean).join('; ');
+      this.emit('mission:phase_changed', { missionId: mission.id, phase: newPhase, previousPhase: oldPhase, previousOutcome, reason });
       this.hooks.onMissionPhaseChange?.(mission.id, newPhase);
     });
 
@@ -653,7 +664,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       const detail = result.success
         ? (result.output || 'Tool completed')
         : (result.error || result.output || `${name} failed without a diagnostic response`);
-      this.recordProgress('tool_result', operator, task, detail, { toolName: name, success: result.success, source });
+      this.recordProgress('tool_result', operator, task, detail, { toolName: name, success: result.success, source,
+        executionTraced: result.metadata?.executionTraced, cacheHit: result.metadata?.cacheHit && !result.metadata?.offlineAnalysis });
     });
 
     operator.on('finding:discovered', ({ finding }) => {
@@ -745,7 +757,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     operator: OperatorAgent,
     task: Task | undefined,
     detail: string,
-    extra: Partial<Pick<ScanProgressEvent, 'toolName' | 'success' | 'source'>> = {}
+    extra: Partial<Pick<ScanProgressEvent, 'toolName' | 'success' | 'source' | 'executionTraced' | 'cacheHit'>> = {}
   ): void {
     const fullDetail = redactString(redactConfiguredSecrets(String(detail || '')));
     const event: ScanProgressEvent = {
@@ -974,6 +986,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       name: `${this.name} — Auto Mission`,
       description: `Automated mission for ${targetNames}`,
       objectives: ['Enumerate attack surface', 'Identify vulnerabilities', 'Validate findings'],
+      phases: targets.length && targets.every(target => ['web_application', 'api'].includes(target.type))
+        ? [KillChainPhase.RECON, KillChainPhase.WEAPONIZE, KillChainPhase.DELIVER, KillChainPhase.ACTIONS] : undefined,
     });
     this.mission.startMission(mission.id);
   }
@@ -1100,7 +1114,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         this.coverageRecoveryAttempts.get(this.coverageKey(mission.id, target.address, capability)) || 0,
       ])) as Partial<Record<CoverageCapability, number>>;
       const action = planCoverageRecovery({
-        snapshot,
+        snapshot: { ...snapshot, retryable: open },
         records: this.arsenal.getOrchestrator().getEvidence(),
         availableTools,
         attempts,

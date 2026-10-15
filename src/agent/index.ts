@@ -226,14 +226,6 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     };
     const toolDefs = selectRelevantTools(availableToolDefs, task, profile, securityContext, !!target?.address);
     const evidenceTarget = target ? normalizeToolCall('http_request', { parameters: { url: target.address } }).host : undefined;
-    const storedEvidence = task.operatorType === 'analyst'
-      ? [...new Map(this.arsenal.getOrchestrator().getEvidence()
-        .filter(record => !evidenceTarget || normalizeToolCall('http_request', { parameters: { url: record.target } }).host === evidenceTarget)
-        .map(record => [record.normalizedSignature, record])).values()]
-        .slice(-profile.findingLimit)
-        .map(record => `Evidence ${record.id}: ${record.toolName} status=${record.errorType || record.executionStatus}; ${String(record.result.error || record.rawOutput).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}`)
-        .join('\n')
-      : '';
     const coverageGaps = task.operatorType === 'analyst'
       ? this.arsenal.getOrchestrator().getMetrics().incompleteAreas.join('; ')
       : '';
@@ -255,10 +247,25 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           sourceContext: [coverageGaps ? `Coverage gaps: ${coverageGaps}` : '',
             this.arsenal.getOrchestrator().scanPolicy?.behavior && evidenceTarget
               ? `Scanner limits (enforced, scope cannot change): ${JSON.stringify(this.arsenal.getOrchestrator().getNetworkContext(evidenceTarget).scanning)}. Prioritize relevant checks using existing findings; avoid redundant or unavailable checks.` : '',
-            storedEvidence, sourceContext, sharedContext].filter(Boolean).join('\n'),
+            sourceContext, sharedContext].filter(Boolean).join('\n'),
         }),
       },
     ];
+    const refreshEvidence = () => {
+      const active = this.arsenal.getOrchestrator().getActiveCalls?.()
+        .filter(call => !evidenceTarget || call.host === evidenceTarget).slice(0, profile.maxTools) || [];
+      const records = [...new Map(this.arsenal.getOrchestrator().getEvidence()
+        .filter(record => !evidenceTarget || normalizeToolCall('http_request', { parameters: { url: record.target } }).host === evidenceTarget)
+        .map(record => [record.normalizedSignature, record])).values()].slice(-profile.findingLimit);
+      const content = 'SHARED SCAN STATE\n' + records.map(record =>
+        `Evidence ${record.id}: ${record.toolName} ${JSON.stringify(record.requestParameters).slice(0, profile.evidenceChars)} status=${record.errorType || record.executionStatus}; ${String(record.result.error || record.rawOutput).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}`)
+        .join('\n') + active.map(call => `\nIn progress: ${call.toolName} ${JSON.stringify(call.parameters).slice(0, profile.evidenceChars)}`).join('')
+        + '\nUse these observations as existing results. Other operators own in-progress checks. Select the next unresolved test for this task; return RESULT when its objective is covered.';
+      const previous = messages.find(message => message.role === 'user' && message.content.startsWith('SHARED SCAN STATE\n'));
+      if (previous) previous.content = content;
+      else if (records.length || active.length) messages.splice(2, 0, { role: 'user', content });
+    };
+    refreshEvidence();
 
     const publish = async (nextPhase: AgentCheckpoint['phase'], result?: AgentResult): Promise<void> => {
       phase = nextPhase;
@@ -348,6 +355,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       iteration = i;
       try {
         // Ask the LLM what to do next
+        refreshEvidence();
         const callableToolDefs = toolDefs.filter(definition => {
           const limit = maxToolCallsPerTask(definition.name);
           return limit === undefined || (toolCallCounts.get(definition.name) || 0) < limit;

@@ -40,10 +40,16 @@ visual/acceptance gates.
 The main menu contains **Create New Project**, **Resume Project**, and **Settings**.
 Use arrows and Enter to select; Esc returns and Ctrl+X or Ctrl+C saves and quits.
 Startup expands provider checks into timed substeps. The live view pins the current
-scan stage and shows one `Ran` block per tool call, followed by three gray output
+scan stage and shows one `Ran` block per actual subprocess, followed by three gray output
 lines and a blank line. Ctrl+T reveals the full output in white. Commands are dark
-blue, flags red, and quoted strings green; result dots show success or failure.
-Stage completion remains in the log. The complete event journal is retained.
+blue, flags red, and quoted strings green. Commands use the executable and arguments
+actually passed to the process, including enforced rate limits. Native checks appear
+as analyses rather than invented shell commands. Cached results do not repeat command
+blocks. Stage outcomes distinguish completed, incomplete and inapplicable work.
+Website missions omit empty installation and command-and-control phases. Planning
+agents receive refreshed shared observations before each decision; vulnerability
+coverage is scheduled independently of remaining reconnaissance gaps.
+The complete event journal is retained. Progress displays one decimal place.
 Interrupted API and directory discovery can repeat their GET-only probes while
 retaining completed work and request budgets. Requests with uncertain write effects
 remain paused; Enter opens recovery details and Esc returns to the main menu.
@@ -61,7 +67,8 @@ saved target strings, reports and detailed logs remain complete.
 Resume Project shows saved status, progress, target and timestamps. Name/target
 drafts also survive interruption. During a scan, PgUp/PgDn scroll the complete log
 history and End returns to live output. Esc stops scheduling and drains or cancels
-active work before opening the pause menu. Settings are available from both menus.
+active work before opening the pause menu. Its `Beenden` option saves and exits.
+Settings are available from both menus.
 
 Completion waits for **Press Enter to view results**. Findings, classifications,
 evidence, explanations and recommendations use the existing report path. Reports

@@ -36,6 +36,27 @@ async function fixture() {
 }
 
 describe('real evidence-only fallback', () => {
+  it('supplies and refreshes shared tool observations for a scanning agent before each plan', async () => {
+    const f = await fixture();
+    await f.arsenal.execute('header_analysis', { parameters: { url: f.target.address } });
+    const llm = new LLMBackbone({ provider: 'mock', model: 'fixture' });
+    const plans: string[] = [];
+    vi.spyOn(llm, 'chatWithTools').mockImplementation(async messages => {
+      plans.push(messages.map(message => message.content).join('\n'));
+      return plans.length === 1 ? { content: 'Inspect a different endpoint', model: 'fixture', toolCalls: [
+        { id: 'different', name: 'header_analysis', arguments: { url: f.target.address + '&endpoint=second' } },
+      ], usage: { promptTokens: 40, completionTokens: 10, totalTokens: 50 } } : { content: 'RESULT\nStatus: inconclusive', model: 'fixture', usage: { promptTokens: 40, completionTokens: 10, totalTokens: 50 } };
+    });
+    await new AgentLoop(llm, f.arsenal, { tools: ['header_analysis'] }).run(f.task, '', f.target);
+    expect(plans).toHaveLength(2);
+    expect(plans[0]).toContain('SHARED SCAN STATE\n');
+    expect(plans[0]).toContain(f.target.address);
+    expect(plans[0]).toContain("default-src 'self'");
+    expect(plans[0]).not.toContain('endpoint=second');
+    expect(plans[1]).toContain('endpoint=second');
+    expect(plans[1].match(/SHARED SCAN STATE/g)).toHaveLength(1);
+    expect(f.requests).toHaveLength(2);
+  });
   it('runs a real scoped HEAD check without AI requests, preserves evidence and makes the limitations explicit', async () => {
     const f = await fixture(); const llm = new LLMBackbone({ provider: 'deterministic', model: 'evidence-only' });
     const planning = vi.spyOn(llm, 'chatWithTools'); const summary = vi.spyOn(llm, 'chat');

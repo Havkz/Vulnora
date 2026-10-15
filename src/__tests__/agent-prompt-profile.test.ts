@@ -37,6 +37,14 @@ const arsenal = [
 ].map(name => definition(name));
 
 describe('agent prompt profiles', () => {
+  it.each(['recon', 'scanner'] as const)('requires task coverage rather than one generic observation for %s', operatorType => {
+    const assessment = { ...task('Assess website vulnerabilities'), operatorType };
+    const prompt = buildMissionPrompt({ task: assessment, target: target(), tools: arsenal,
+      profile: AGENT_PROMPT_PROFILES.small_model_30b, security: { stopConditions: ['validated result', 'missing scope'] } });
+    expect(prompt).toContain('Stop conditions: task objective covered, missing scope');
+    expect(prompt).toContain('One HTTP response or technology fingerprint does not complete a vulnerability assessment.');
+    expect(prompt).not.toContain('Success condition: One reproducible');
+  });
   it('prioritizes planned recovery without exceeding the cap or offering equivalent tools', () => {
     const planned = { ...task(), operatorType: 'recon', executionPlan: { toolName: 'gobuster_tool', parameters: {} } } as Task;
     const selected = selectRelevantTools(arsenal, planned, AGENT_PROMPT_PROFILES.small_model_30b);

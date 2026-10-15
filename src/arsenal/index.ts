@@ -213,6 +213,7 @@ import { parseTargetHeaderConfig, targetHeadersForUrl, redactConfiguredSecrets }
 
 const fetchContext = new AsyncLocalStorage<{
   scope: ArsenalScope | null; signal?: AbortSignal; orchestrator?: ToolOrchestrator; beforeRequest?: () => Promise<void>; host?: string;
+  onProcess?: (event: ProcessEvent) => void;
 }>();
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
@@ -344,6 +345,17 @@ export interface ArsenalEvents {
   'tool:executed': { tool: CustomTool; result: ToolResult; durationMs: number };
   'tool:error': { tool: CustomTool; error: Error };
   'tool:orchestration': OrchestratorEvent;
+  'tool:process': ProcessEvent & { toolName: string; operator?: string };
+}
+
+export interface ProcessEvent {
+  id: string;
+  type: 'started' | 'completed';
+  command: string;
+  args: string[];
+  output?: string;
+  success?: boolean;
+  exitCode?: number;
 }
 
 export interface ToolExecution {
@@ -655,14 +667,19 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     this.executions.push(execution);
 
     const startTime = Date.now();
+    let processCount = 0;
 
     try {
       const result = redactConfiguredSecrets(await this.orchestrator.execute(
         tool,
         context,
         () => fetchContext.run({ scope: this.scope, signal: context.abortSignal, orchestrator: this.orchestrator,
-          beforeRequest: context.beforeHttpRequest, host: normalizeToolCall(toolName, context).host },
-          () => this.runToolHandler(toolName, context, tool.handler))
+          beforeRequest: context.beforeHttpRequest, host: normalizeToolCall(toolName, context).host,
+          onProcess: event => { processCount++; this.emit('tool:process', redactConfiguredSecrets({ ...event, toolName, operator: context.operator })); } },
+          async () => {
+            const result = await this.runToolHandler(toolName, context, tool.handler);
+            return processCount ? { ...result, metadata: { ...result.metadata, executionTraced: true } } : result;
+          })
       ));
       const durationMs = Date.now() - startTime;
 
@@ -3275,23 +3292,29 @@ export async function runSubprocess(
 }
 
 async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-
+  const onProcess = fetchContext.getStore()?.onProcess;
+  const id = randomUUID();
+  onProcess?.({ id, type: 'started', command, args });
+  const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
+    onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode });
+    return result;
+  };
   try {
     const { stdout, stderr } = await execFileAsync(command, args, {
       timeout,
       maxBuffer: maxOutput,
       signal,
     });
-    return { stdout, stderr, exitCode: 0 };
+    return finish({ stdout, stderr, exitCode: 0 });
   } catch (error: unknown) {
     const err = error as { stdout?: string; stderr?: string; code?: number; killed?: boolean; name?: string };
     if (signal?.aborted || err.name === 'AbortError') {
-      return { stdout: err.stdout || '', stderr: `Process aborted: ${String(signal?.reason || 'policy stop')}`, exitCode: -2 };
+      return finish({ stdout: err.stdout || '', stderr: `Process aborted: ${String(signal?.reason || 'policy stop')}`, exitCode: -2 });
     }
     if (err.killed) {
-      return { stdout: err.stdout || '', stderr: 'Process killed (timeout)', exitCode: -1 };
+      return finish({ stdout: err.stdout || '', stderr: 'Process killed (timeout)', exitCode: -1 });
     }
-    return { stdout: err.stdout || '', stderr: err.stderr || String(error), exitCode: err.code || 1 };
+    return finish({ stdout: err.stdout || '', stderr: err.stderr || String(error), exitCode: err.code || 1 });
   }
 }
 

@@ -16,17 +16,16 @@ describe('readable project logs', () => {
   it('renders recorded tool arguments with distinct colors and without internal JSON metadata', () => {
     const colors = createTheme(2);
     const event: ProjectLogEvent = { timestamp: 1, category: 'scan:progress', data: {
-      id: 'internal-id', kind: 'tool_call', callsign: 'Recon-1', toolName: 'http_request',
-      detail: 'http_request {"url":"https://fixture.test/robots.txt","method":"GET"}',
+      id: 'internal-id', command: 'curl', args: ['--url', 'https://fixture.test/robots.txt', '-X', 'GET'],
     } };
+    event.category = 'execution:started';
     const text = formatProjectLog(event, false, colors);
-    expect(text).toContain(colors.command('http_request'));
+    expect(text).toContain(colors.command('curl'));
     expect(text).toContain(colors.error('--url'));
     expect(text).toContain(colors.muted('https://fixture.test/robots.txt'));
-    expect(stripVTControlCharacters(text)).toContain('● Ran http_request --url');
+    expect(stripVTControlCharacters(text)).toContain('Ran curl --url');
     expect(text.endsWith('\n')).toBe(true);
     expect(text).not.toContain('internal-id'); expect(text).not.toContain('"kind"');
-    expect(projectActivity(event)).toBe('Working · http_request');
   });
 
   it('previews three output lines and retains the entire command output in transcript mode', () => {
@@ -67,21 +66,37 @@ describe('readable project logs', () => {
     expect(text).not.toContain('\u001b'); expect(text).not.toContain('secret-fixture-value');
   });
 
-  it('colors only flags and quoted strings, and uses result-colored dots with gray or white output', () => {
+  it('colors only commands, flags and quoted strings with gray or white output and no dots', () => {
     const colors = createTheme(2);
     const call = { timestamp: 1, category: 'scan:progress', data: { kind: 'tool_call', toolName: 'curl', detail: 'curl -u user --retry=2 -H "Accept: application/json" \'https://fixture.test\'' } };
     const result = (success: boolean) => ({ timestamp: 2, category: 'scan:progress', data: { kind: 'tool_result', success, detail: 'First\nSecond' } });
     const brief = formatProjectLog(call, false, colors, 80, result(true));
-    expect(brief).toContain(colors.success('●') + ' ' + colors.foreground('Ran') + ' ' + colors.command('curl'));
+    expect(brief).toContain(colors.foreground('Ran') + ' ' + colors.command('curl'));
+    expect(brief).not.toContain('●');
     expect(brief).toContain(colors.error('-u')); expect(brief).toContain(colors.muted('user'));
     expect(brief).toContain(colors.error('--retry') + colors.muted('=2'));
     expect(brief).toContain(colors.success('"Accept: application/json"'));
     expect(brief).toContain(colors.success("'https://fixture.test'"));
     expect(brief).toContain('    ' + colors.muted('First'));
     const full = formatProjectLog(call, true, colors, 80, result(false));
-    expect(full).toContain(colors.error('●'));
+    expect(full).not.toContain('●');
     expect(full).toContain('    ' + colors.bright('First'));
     expect(full).not.toContain(colors.error('First'));
+  });
+
+  it('does not invent shell commands for native tools or replay cached commands', () => {
+    expect(formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { kind: 'tool_call', toolName: 'technology_detect', detail: 'technology_detect {"url":"https://fixture.test"}' } })).toBe('');
+    expect(formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { kind: 'tool_result', toolName: 'technology_detect', detail: 'Native analysis' } })).toContain('Analyzed · technology detect');
+    expect(formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { kind: 'tool_result', executionTraced: true, detail: 'Already shown under actual argv' } })).toBe('');
+    expect(formatProjectLog({ timestamp: 1, category: 'orchestration:event', data: { action: 'SKIPPED', reason: 'duplicate', toolName: 'technology_detect' } })).toBe('');
+    expect(formatSavedProjectLog({ timestamp: 1, category: 'orchestration:event', data: { action: 'SKIPPED', reason: 'duplicate' } })).toContain('duplicate');
+  });
+
+  it('labels incomplete and inapplicable phases truthfully', () => {
+    const event = (previousOutcome: string) => ({ timestamp: 1, category: 'mission:phase_changed', data: { previousPhase: 'delivery', phase: 'actions_on_objectives', previousOutcome, reason: 'No validated finding exists.' } });
+    expect(formatProjectLog(event('not_applicable'))).toContain('Impact validation not applicable');
+    expect(formatProjectLog(event('incomplete'))).toContain('Impact validation incomplete');
+    expect(formatProjectLog(event('not_applicable'))).not.toContain('completed');
   });
 
   it('names completed and newly active scan stages explicitly', () => {

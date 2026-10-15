@@ -164,13 +164,13 @@ export class InteractiveApp {
     if (errors.length || drafts.errors.length) await this.notice('Preserved project files requiring inspection', [...errors, ...drafts.errors].join('\n'));
     const entries: (ProjectRecord | ProjectDraft)[] = [...projects, ...drafts.drafts].sort((a, b) => b.lastActivity - a.lastActivity);
     if (!entries.length) { await this.notice('Resume Project', 'No saved projects. Create New Project to begin.'); return; }
-    const selected = await this.surface.menu('Resume Project', entries.map(project => `${project.name} · ${'status' in project ? `${project.status} · ${project.progress}%` : 'Target pending'}`), index => {
+    const selected = await this.surface.menu('Resume Project', entries.map(project => `${project.name} · ${'status' in project ? `${project.status} · ${project.progress.toFixed(1)}%` : 'Target pending'}`), index => {
       const project = entries[index];
       return [`Project: ${project.name}`, `Target: ${'target' in project ? project.target.input : project.targetInput || '(not entered)'}`,
         `Created: ${new Date(project.createdAt).toLocaleString()}`,
         `Last activity: ${new Date(project.lastActivity).toLocaleString()}`,
         `Status: ${'status' in project ? project.status : 'Target pending'}`,
-        `Progress: ${'progress' in project ? project.progress : 0}%`];
+        `Progress: ${('progress' in project ? project.progress : 0).toFixed(1)}%`];
     });
     if (selected === undefined) return;
     const project = entries[selected];
@@ -202,17 +202,18 @@ export class InteractiveApp {
     const pending = new Map<string, number[]>();
     const linkResult = (index: number): number | undefined => {
       const event = logs[index];
-      if (event.category !== 'scan:progress') return;
+      if (event.category !== 'scan:progress' && !event.category.startsWith('execution:')) return;
       const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
-      const key = JSON.stringify([data.operatorId, data.taskId, data.toolName]);
-      if (data.kind === 'tool_call') {
+      if (data.kind === 'tool_call' && String(data.detail).includes(' {')) return;
+      const key = event.category.startsWith('execution:') ? String(data.id) : JSON.stringify([data.operatorId, data.taskId, data.toolName]);
+      if (data.kind === 'tool_call' || event.category === 'execution:started') {
         const calls = pending.get(key) || [];
         const previous = calls.at(-1);
         if (previous !== undefined && (logs[previous].data as Record<string, unknown>).detail === data.detail) {
           resultEvents.add(index); return undefined;
         }
         calls.push(index); pending.set(key, calls);
-      } else if (data.kind === 'tool_result') {
+      } else if (data.kind === 'tool_result' || event.category === 'execution:completed') {
         const call = pending.get(key)?.shift();
         if (call !== undefined) { results.set(call, event); resultEvents.add(index); return call; }
       }
@@ -254,7 +255,7 @@ export class InteractiveApp {
       const completed = session.project.status === 'completed';
       const blocked = !!this.issue && !session.command.isRunning();
       const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
-        dense ? `${session.project.status} · ${session.project.progress}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress}%`,
+        dense ? `${session.project.status} · ${session.project.progress.toFixed(1)}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress.toFixed(1)}%`,
         session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
       const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),
         ...(completed ? wrapAnsi('Press Enter to view results', this.surface.panelColumns, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line)) : [])];
@@ -310,9 +311,10 @@ export class InteractiveApp {
           this.surface.show(() => ({ lines: [this.surface.colors.active('Saving progress and stopping active work…')], footer: 'Ctrl+X Save & Quit' }));
           await session.pause();
           for (;;) {
-            const choice = await this.surface.menu('Paused', ['Resume', 'Settings']);
+            const choice = await this.surface.menu('Paused', ['Resume', 'Settings', 'Beenden']);
             if (choice === undefined) return;
             if (choice === 0) { this.surface.show(render); await session.start(); break; }
+            if (choice === 2) throw new TerminalInterrupted();
             await this.settings();
           }
         }

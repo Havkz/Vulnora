@@ -366,7 +366,7 @@ export class ToolOrchestrator {
   private readonly hostTails = new Map<string, Promise<void>>();
   private readonly lastHostRequest = new Map<string, number>();
   private readonly dependencyStatus = new Map<string, { available: boolean; path?: string; version?: string; checkedAt: number }>();
-  private readonly activeExecutions = new Map<string, { host: string; controller: AbortController; supportsAbort: boolean }>();
+  private readonly activeExecutions = new Map<string, { host: string; controller: AbortController; supportsAbort: boolean; toolName: string; parameters: Record<string, unknown> }>();
   private readonly cacheTtlMs: number;
   private readonly preflightTtlMs: number;
   private readonly onEvent?: (event: OrchestratorEvent) => void;
@@ -396,6 +396,9 @@ export class ToolOrchestrator {
   private readonly defaultBudgets: TargetBudgets;
 
   getEvidence(): EvidenceRecord[] { return this.records.map(record => ({ ...record, requestParameters: { ...record.requestParameters } })); }
+  getActiveCalls(): { host: string; toolName: string; parameters: unknown }[] {
+    return [...this.activeExecutions.values()].map(({ host, toolName, parameters }) => ({ host, toolName, parameters: redactSecrets(redactConfiguredSecrets(parameters)) }));
+  }
   getConflicts(): EvidenceConflict[] { return this.conflicts.map(conflict => ({ ...conflict, recordIds: [...conflict.recordIds] })); }
   getEvents(): OrchestratorEvent[] { return this.events.map(event => ({ ...event })); }
   getMetrics(): OrchestratorMetrics { return { ...this.metrics, incompleteAreas: [...this.metrics.incompleteAreas], budgetCostSources: { ...this.metrics.budgetCostSources } }; }
@@ -834,7 +837,7 @@ export class ToolOrchestrator {
       context.abortSignal?.throwIfAborted();
       httpRequests++;
     };
-    this.activeExecutions.set(call.normalizedSignature, { host: call.host, controller, supportsAbort: tool.supportsAbort === true });
+    this.activeExecutions.set(call.normalizedSignature, { host: call.host, controller, supportsAbort: tool.supportsAbort === true, toolName: tool.name, parameters: { ...context.parameters } });
     const execution = (async () => {
       try {
         const wildcard = /(?:subdomain_enum|subfinder|amass)/i.test(tool.name) ? await this.detectWildcard(call.host) : undefined;

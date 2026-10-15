@@ -38,6 +38,19 @@ function httpResult(status = 200, body = '<title>Home</title>'): ToolResult {
 }
 
 describe('central tool orchestrator', () => {
+  it('exposes running work for planning without leaking credentials or retaining completed reservations', async () => {
+    const orchestrator = new ToolOrchestrator();
+    let release!: () => void; let started!: () => void;
+    const admitted = new Promise<void>(resolve => { started = resolve; });
+    const pending = orchestrator.execute(tool('http_request'), context({ url: 'https://target.test/work', headers: { Authorization: 'private-planning-fixture' } }), async () => {
+      started(); await new Promise<void>(resolve => { release = resolve; }); return httpResult();
+    });
+    await admitted;
+    expect(orchestrator.getActiveCalls()).toEqual([expect.objectContaining({ host: 'target.test', toolName: 'http_request' })]);
+    expect(JSON.stringify(orchestrator.getActiveCalls())).not.toContain('private-planning-fixture');
+    release(); await pending;
+    expect(orchestrator.getActiveCalls()).toEqual([]);
+  });
   it('shares one DNS execution between two agents', async () => {
     const orchestrator = new ToolOrchestrator();
     let executions = 0;

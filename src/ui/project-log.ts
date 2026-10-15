@@ -4,7 +4,7 @@ import { terminalText, wrapTerminalText } from './terminal.js';
 import type { TerminalTheme } from './theme.js';
 
 export function phaseLabel(phase?: string): string {
-  const names: Record<string, string> = { reconnaissance: 'Recon', weaponization: 'Scanning', delivery: 'Validation',
+  const names: Record<string, string> = { reconnaissance: 'Recon', weaponization: 'Scanning', delivery: 'Impact validation',
     exploitation: 'Exploitation', installation: 'Verification', command_and_control: 'Connection checks', actions_on_objectives: 'Reporting' };
   return phase ? names[phase] || phase.replace(/_/g, ' ') : 'Preparing';
 }
@@ -29,6 +29,8 @@ export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
 
 export function projectActivity(event: ProjectLogEvent): string | undefined {
   const data = fields(event);
+  if (event.category === 'execution:started') return `Working · ${data.command}`;
+  if (event.category === 'execution:completed') return 'Working';
   if (event.category === 'provider:progress' && data.type === 'turn.started') return `Thinking · ${data.agent || data.provider || 'AI'}`;
   if (event.category === 'scan:progress') {
     if (data.kind === 'thinking') return `Thinking · ${data.callsign || 'AI'}`;
@@ -41,6 +43,10 @@ export function projectActivity(event: ProjectLogEvent): string | undefined {
 }
 
 function toolInvocation(data: Record<string, unknown>): string {
+  if (typeof data.command === 'string' && Array.isArray(data.args)) {
+    const quote = (value: unknown) => /^[\w@%+=:,./-]+$/.test(String(value)) ? String(value) : "'" + String(value).replace(/'/g, "'\\''") + "'";
+    return [quote(data.command), ...data.args.map(quote)].join(' ');
+  }
   const detail = String(data.detail || '');
   const name = String(data.toolName || detail.split(' ')[0] || 'tool');
   let parameters: Record<string, unknown> = {};
@@ -66,9 +72,13 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
   const data = fields(event);
   const detail = typeof data.detail === 'string' ? data.detail : '';
   const operator = data.callsign ? ` · ${data.callsign}` : '';
+  if (event.category === 'execution:started' || event.category === 'execution:completed') {
+    return { title: 'Ran', command: toolInvocation(data), body: typeof data.output === 'string' ? data.output : undefined };
+  }
   if (event.category === 'scan:progress') {
-    if (data.kind === 'tool_call') return { title: 'Ran', command: toolInvocation(data) };
-    if (data.kind === 'tool_result') return { title: 'Ran', command: String(data.toolName || 'tool'), body: detail };
+    if (data.kind === 'tool_call') return detail.includes(' {') ? undefined : { title: 'Ran', command: toolInvocation(data) };
+    if (data.kind === 'tool_result') return data.executionTraced || data.cacheHit ? undefined
+      : { title: `Analyzed · ${String(data.toolName || 'observation').replace(/_/g, ' ')}`, body: detail };
     if (data.kind === 'thinking' || data.kind === 'task_started') return undefined;
     if (data.kind === 'task_failed') return { title: `${detail === 'aborted: project pause' ? 'Paused' : 'Failed'}${operator} · ${data.taskName || 'task'}`, body: detail };
     if (data.kind === 'task_completed') {
@@ -76,11 +86,15 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
     }
   }
   if (event.category === 'provider:progress' || event.category === 'provider:availability') return undefined;
-  if (event.category === 'mission:phase_changed') return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} completed\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
+  if (event.category === 'mission:phase_changed') {
+    const outcome = data.previousOutcome === 'not_applicable' ? 'not applicable' : data.previousOutcome === 'incomplete' ? 'incomplete' : 'completed';
+    return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} ${outcome}${data.reason ? ` · ${data.reason}` : ''}\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
+  }
   if (event.category === 'project:completed') return { title: `${typeof data.phase === 'string' ? `${phaseLabel(data.phase)} completed\n` : ''}Scan completed` };
   if (event.category === 'provider:fallback') return { title: `Fallback · ${data.fromProvider} → ${data.toProvider}`, body: String(data.reason || data.error || '') };
   if (event.category === 'recovery:blocked') return { title: `Recovery paused · ${data.taskName || 'operation'}`, body: String(data.error || '') };
   if (event.category === 'orchestration:event') {
+    if (/^(SKIPPED|USED)$/.test(String(data.action)) && /duplicate|equivalent|cached|shared evidence/.test(String(data.reason))) return undefined;
     return /^(executed|failed|repeated)$/i.test(String(data.action)) ? undefined
       : { title: `${data.action || 'Evidence'} · ${data.toolName || 'tool'}`, body: `${data.reason || ''}${data.target ? ` · ${data.target}` : ''}` };
   }
@@ -110,16 +124,20 @@ export function formatProjectLog(event: ProjectLogEvent, transcript = false, col
       return colors.muted(token);
     }).join('');
     const response = result ? redactSecrets(result) as ProjectLogEvent : safe;
-    const success = fields(response).success;
-    const dot = colors ? success === false ? colors.error('●') : success === true ? colors.success('●') : colors.muted('●') : '●';
-    lines[0] = `${dot} ${colors ? colors.foreground('Ran') : 'Ran'} ${command}`;
-    if (result && typeof fields(response).detail === 'string') content.body = String(fields(response).detail);
+    const failure = fields(response).success === false;
+    const label = colors ? (failure ? colors.error : colors.foreground)('Ran') : 'Ran';
+    const exit = failure && typeof fields(response).exitCode === 'number' ? ` · exit ${fields(response).exitCode}` : '';
+    lines[0] = `${label} ${command}${colors ? colors.error(exit) : exit}`;
+    if (result) {
+      const data = fields(response);
+      if (typeof data.output === 'string' || typeof data.detail === 'string') content.body = String(data.output ?? data.detail);
+    }
   }
   if (content.body) {
     const body = outputPreview(terminalText(content.body), transcript, columns);
     const style = colors ? transcript ? colors.bright : colors.muted : (text: string) => text;
     lines.push(...body.split('\n').map(line => '    ' + style(line)));
   }
-  if (content.command) lines.push('');
+  if (content.command || content.body) lines.push('');
   return lines.join('\n');
 }

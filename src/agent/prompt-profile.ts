@@ -232,6 +232,7 @@ export function buildMissionPrompt(args: {
   ])];
   const source = compactSource(args.sourceContext, profile.sourceChars);
   const evidence = compactKnownEvidence(target, profile);
+  const assessment = task.operatorType === 'recon' || task.operatorType === 'scanner';
   const contradiction = requestsHighImpact(task) && onlyNonExploitEvidence(target)
     ? 'Current evidence is limited to observed email/security configuration issues. It does not support RCE, data access, or authentication bypass. Do not claim exploitation. Select one allowed testable path or report not_exploitable/inconclusive.'
     : 'Treat observed and suspected items as leads only. Claim exploitation only from reproducible evidence marked exploitable.';
@@ -252,12 +253,15 @@ export function buildMissionPrompt(args: {
     `Limits: ${supplied.intensity || (hasReceipt ? 'receipt-defined intensity only' : 'non-intrusive and read-only only')}`,
     `Forbidden: ${forbidden.join(', ')}`,
     `Rate limit: ${supplied.rateLimit || 'Use tool defaults; stop on throttling or instability.'}`,
-    `Stop conditions: ${(supplied.stopConditions || ['validated result', 'missing scope', 'no testable path', 'two steps without new relevant evidence']).join(', ')}`,
+    `Stop conditions: ${(supplied.stopConditions || ['validated result', 'missing scope', 'no testable path', 'two steps without new relevant evidence']).map(condition => assessment && condition === 'validated result' ? 'task objective covered' : condition).join(', ')}`,
     '',
     'MISSION',
     `Objective: ${oneLine(task.description, profile.name === 'small_model_30b' ? 320 : 600)}`,
-    task.operatorType === 'analyst' ? 'Success condition: An evidence-backed report with explicit limitations and coverage gaps.' : 'Success condition: One reproducible, in-scope result supported by a real tool response.',
-    'Stop condition: Validated, not exploitable, inconclusive, blocked, or two steps without new relevant evidence.',
+    task.operatorType === 'analyst' ? 'Success condition: An evidence-backed report with explicit limitations and coverage gaps.'
+      : assessment ? 'Success condition: Cover the applicable checks in the task objective using shared and newly collected evidence. One HTTP response or technology fingerprint does not complete a vulnerability assessment.'
+        : 'Success condition: One reproducible, in-scope result supported by a real tool response.',
+    assessment ? 'Stop condition: Task objective covered, no remaining testable path, blocked, or two steps without new relevant evidence. State every untested area explicitly.'
+      : 'Stop condition: Validated, not exploitable, inconclusive, blocked, or two steps without new relevant evidence.',
     '',
     'KNOWN EVIDENCE',
     ...evidence,
@@ -284,7 +288,8 @@ export function buildMissionPrompt(args: {
     '5. Evaluate only the real tool result.',
     '6. Never invent results or impact.',
     '7. Do not repeat equivalent tests.',
-    '8. Stop on a validated result, missing scope, or no testable path.',
+    assessment ? '8. Continue with the next uncovered part of the objective; stop when covered, scope is missing, or no testable path remains.'
+      : '8. Stop on a validated result, missing scope, or no testable path.',
     '',
     'OUTPUT',
     'RESULT',

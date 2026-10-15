@@ -31,6 +31,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     } catch (error) { this.command.opsec.cleanup(); throw error; }
 
     this.command.on('scan:progress', event => this.record('scan:progress', event));
+    this.command.arsenal.on('tool:process', event => this.record(`execution:${event.type}`, event));
     this.command.on('orchestration:event', event => this.record('orchestration:event', event));
     this.command.on('detection:triggered', event => this.record('detection:triggered', event));
     this.command.on('approval:decision', event => this.record('approval:decision', event));

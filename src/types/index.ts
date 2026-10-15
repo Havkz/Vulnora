@@ -588,6 +588,8 @@ export interface Appendix {
 // =============================================================================
 
 export interface ScanProgressEvent {
+  executionTraced?: boolean;
+  cacheHit?: boolean;
   id: string;
   timestamp: number;
   kind: 'task_started' | 'thinking' | 'tool_call' | 'tool_result' | 'task_completed' | 'task_failed';
@@ -615,7 +617,7 @@ export interface CommandEvents {
   'credential:harvested': { credential: Credential; operatorId: string };
   'target:owned': { target: Target; operatorId: string };
   'detection:triggered': DetectionEvent;
-  'mission:phase_changed': { missionId: string; phase: KillChainPhase; previousPhase?: KillChainPhase };
+  'mission:phase_changed': { missionId: string; phase: KillChainPhase; previousPhase?: KillChainPhase; previousOutcome?: 'completed' | 'incomplete' | 'not_applicable'; reason?: string };
   'scan:progress': ScanProgressEvent;
   'orchestration:event': {
     action: string;

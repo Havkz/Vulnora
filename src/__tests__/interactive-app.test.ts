@@ -95,30 +95,46 @@ describe('durable interactive project flow', () => {
     const stagePosition = view().lines.findIndex(line => line.includes('Stage: Recon'));
     for (const operatorId of ['one', 'two']) session.command.emit('scan:progress', {
       id: 'call-' + operatorId, timestamp: Date.now(), kind: 'tool_call', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
-      detail: `http_request {"url":"https://fixture.test/${operatorId}"}`,
+        detail: `curl --url https://fixture.test/${operatorId}`,
     });
     session.command.emit('scan:progress', {
       id: 'resumed-call', timestamp: Date.now(), kind: 'tool_call', operatorId: 'one', callsign: 'one', archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
-      detail: 'http_request {"url":"https://fixture.test/one"}',
+      detail: 'curl --url https://fixture.test/one',
     });
     for (const operatorId of ['two', 'one']) session.command.emit('scan:progress', {
       id: 'result-' + operatorId, timestamp: Date.now(), kind: 'tool_result', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
       detail: operatorId + ' OUTPUT', success: operatorId === 'one',
     });
-    expect(text().match(/● Ran http_request/g)).toHaveLength(2);
+    expect(text().match(/Ran curl/g)).toHaveLength(2);
     const content = view().lines.map(stripVTControlCharacters).map(line => line.replace(/^│/, '').replace(/│$/, '').trim()).join('\n');
-    expect(content).toMatch(/--url https:\/\/fixture.test\/one\none OUTPUT\n\n● Ran/);
-    expect(view().lines.join('\n')).toContain(f.surface.colors.success('●'));
-    expect(view().lines.join('\n')).toContain(f.surface.colors.error('●'));
+    expect(content).toMatch(/--url https:\/\/fixture.test\/one\none OUTPUT\n\nRan/);
+    expect(view().lines.join('\n')).not.toContain('●');
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
     session.command.mission.advancePhase(mission.id);
     expect(mission.currentPhase).toBe(KillChainPhase.WEAPONIZE);
     expect(view().lines.findIndex(line => line.includes('Stage: Scanning'))).toBe(stagePosition);
-    expect(text()).toContain('Recon completed');
+    expect(text()).toContain('Recon incomplete');
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
     await f.store.flush(session.project.id);
     const journal = await f.store.readLogs(session.project.id);
     expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(5);
+  });
+
+  it('rounds displayed progress and saves the project when choosing Beenden in the pause menu', async () => {
+    const f = await fixture(); const result = f.start();
+    f.input.write('\rQuit menu fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
+    await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    session.project.progress = 100 / 7;
+    f.output.emit('resize'); await f.wait('14.3%');
+    expect(f.transcript()).not.toContain('14.285714');
+    f.input.write('\x1b'); await f.wait('Beenden');
+    f.input.write('\x1b[B\x1b[B\r');
+    expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect(session.command.isRunning()).toBe(false);
+    const saved = await f.store.load(session.project.id);
+    expect(saved.status).toBe('paused'); expect(saved.checkpoint).toBeDefined();
   });
 
   it.each(['running', 'paused'])('saves and exits with Ctrl+X from a %s project', async status => {
@@ -175,7 +191,7 @@ describe('durable interactive project flow', () => {
     };
     f.input.write('\x1b[B\r');
     await expect.poll(plain).toContain('Resume Project');
-    f.input.write('\x1b[F'); await expect.poll(plain).toContain('Progress: 0%'); bounded();
+    f.input.write('\x1b[F'); await expect.poll(() => content().join('')).toContain('Progress: 0.0%'); bounded();
     f.input.write('\r'); await expect.poll(plain).toContain('READY'); bounded();
     f.input.write('\x1b[F'); await expect.poll(() => content().join('')).toContain('TARGET_END'); bounded();
     expect(content().join(' ')).toContain('Press Enter to start');
@@ -341,7 +357,7 @@ describe('durable interactive project flow', () => {
   it('keeps every multiline technical log detail available to the view and journal', () => {
     const detail = 'First evidence line\n' + 'All technical evidence retained\n'.repeat(1000) + 'Final evidence line';
     const formatted = formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { detail } }, true);
-    expect(formatted.split('\n').slice(1).map(line => line.replace(/^ {4}/, '')).join('\n')).toBe(detail);
+    expect(formatted.split('\n').slice(1, -1).map(line => line.replace(/^ {4}/, '')).join('\n')).toBe(detail);
     expect(formatted).toContain('Final evidence line');
   });
 });
