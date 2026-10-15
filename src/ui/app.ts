@@ -199,22 +199,16 @@ export class InteractiveApp {
     let reflowAnchor: typeof wrapped[number] | undefined;
     const results = new Map<number, ProjectLogEvent>();
     const resultEvents = new Set<number>();
-    const pending = new Map<string, number[]>();
+    const pending = new Map<string, number>();
     const linkResult = (index: number): number | undefined => {
       const event = logs[index];
-      if (event.category !== 'scan:progress' && !event.category.startsWith('execution:')) return;
+      if (!event.category.startsWith('execution:')) return;
       const data = event.data && typeof event.data === 'object' ? event.data as Record<string, unknown> : {};
-      if (data.kind === 'tool_call' && String(data.detail).includes(' {')) return;
-      const key = event.category.startsWith('execution:') ? String(data.id) : JSON.stringify([data.operatorId, data.taskId, data.toolName]);
-      if (data.kind === 'tool_call' || event.category === 'execution:started') {
-        const calls = pending.get(key) || [];
-        const previous = calls.at(-1);
-        if (previous !== undefined && (logs[previous].data as Record<string, unknown>).detail === data.detail) {
-          resultEvents.add(index); return undefined;
-        }
-        calls.push(index); pending.set(key, calls);
-      } else if (data.kind === 'tool_result' || event.category === 'execution:completed') {
-        const call = pending.get(key)?.shift();
+      const key = String(data.id);
+      if (event.category === 'execution:started') {
+        pending.set(key, index);
+      } else if (event.category === 'execution:completed') {
+        const call = pending.get(key); pending.delete(key);
         if (call !== undefined) { results.set(call, event); resultEvents.add(index); return call; }
       }
       return undefined;

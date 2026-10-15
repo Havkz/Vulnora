@@ -1,5 +1,7 @@
 import type { MissionFamily } from '../resources/index.js';
 
+export const DEFAULT_WEB_WORDLIST = '/usr/share/dirb/wordlists/common.txt';
+
 export type ToolCategory =
   | 'core'
   | 'osint'

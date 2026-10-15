@@ -47,18 +47,7 @@ function toolInvocation(data: Record<string, unknown>): string {
     const quote = (value: unknown) => /^[\w@%+=:,./-]+$/.test(String(value)) ? String(value) : "'" + String(value).replace(/'/g, "'\\''") + "'";
     return [quote(data.command), ...data.args.map(quote)].join(' ');
   }
-  const detail = String(data.detail || '');
-  const name = String(data.toolName || detail.split(' ')[0] || 'tool');
-  let parameters: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(detail.slice(detail.indexOf(' ') + 1));
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) parameters = parsed as Record<string, unknown>;
-  } catch { return detail || name; }
-  const args = Object.entries(parameters).map(([key, value]) => {
-    const text = typeof value === 'string' ? terminalText(value).replace(/\n/g, ' ') : JSON.stringify(value);
-    return `--${key} ${typeof text === 'string' && /\s/.test(text) ? JSON.stringify(text) : text}`;
-  });
-  return [name, ...args].join(' ');
+  return '';
 }
 
 function outputPreview(text: string, transcript: boolean, columns: number): string {
@@ -76,7 +65,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
     return { title: 'Ran', command: toolInvocation(data), body: typeof data.output === 'string' ? data.output : undefined };
   }
   if (event.category === 'scan:progress') {
-    if (data.kind === 'tool_call') return detail.includes(' {') ? undefined : { title: 'Ran', command: toolInvocation(data) };
+    if (data.kind === 'tool_call') return undefined;
     if (data.kind === 'tool_result') return data.executionTraced || data.cacheHit ? undefined
       : { title: `Analyzed · ${String(data.toolName || 'observation').replace(/_/g, ' ')}`, body: detail };
     if (data.kind === 'thinking' || data.kind === 'task_started') return undefined;

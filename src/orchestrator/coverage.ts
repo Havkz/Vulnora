@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { DEFAULT_WEB_WORDLIST } from '../arsenal/catalog.js';
 import type { EvidenceRecord, NetworkContext, TargetBudgets } from './tool-orchestrator.js';
 
 export type CoverageCapability =
@@ -152,9 +153,9 @@ export function planCoverageRecovery(params: {
   if (open('content_discovery') && count('content_discovery') < 3) {
     if (count('content_discovery') === 0 && availableTools.has('ffuf_fuzz')) {
       const fuzz = new URL(url); fuzz.pathname = fuzz.pathname.replace(/\/?$/, '/FUZZ');
-      return { capability: 'content_discovery', toolName: 'ffuf_fuzz', parameters: { url: fuzz.href, wordlist: '/usr/share/wordlists/dirb/common.txt', mc: '200,204,301,302,307,401,403' }, description: 'Bounded FFUF content discovery' };
+      return { capability: 'content_discovery', toolName: 'ffuf_fuzz', parameters: { url: fuzz.href, wordlist: DEFAULT_WEB_WORDLIST, mc: '200,204,301,302,307,401,403' }, description: 'Bounded FFUF content discovery' };
     }
-    for (const toolName of ['feroxbuster_tool', 'gobuster_tool', 'dir_bruteforce']) if (availableTools.has(toolName)) return { capability: 'content_discovery', toolName, parameters: toolName === 'dir_bruteforce' ? { url, wordlist: 'common' } : { url, wordlist: '/usr/share/wordlists/dirb/common.txt' }, repeatReason: 'materially_different_configuration', description: `Content discovery fallback via ${toolName}` };
+    for (const toolName of ['feroxbuster_tool', 'gobuster_tool', 'dir_bruteforce']) if (availableTools.has(toolName)) return { capability: 'content_discovery', toolName, parameters: toolName === 'dir_bruteforce' ? { url, wordlist: 'common' } : { url, wordlist: DEFAULT_WEB_WORDLIST }, repeatReason: 'materially_different_configuration', description: `Content discovery fallback via ${toolName}` };
   }
   if (open('api_discovery') && count('api_discovery') < 1 && availableTools.has('api_endpoint_discovery')) return { capability: 'api_discovery', toolName: 'api_endpoint_discovery', parameters: { url, wordlist: 'common' }, description: 'Bounded API discovery' };
   if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: url, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };

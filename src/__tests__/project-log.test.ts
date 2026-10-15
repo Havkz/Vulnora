@@ -68,15 +68,15 @@ describe('readable project logs', () => {
 
   it('colors only commands, flags and quoted strings with gray or white output and no dots', () => {
     const colors = createTheme(2);
-    const call = { timestamp: 1, category: 'scan:progress', data: { kind: 'tool_call', toolName: 'curl', detail: 'curl -u user --retry=2 -H "Accept: application/json" \'https://fixture.test\'' } };
+    const call = { timestamp: 1, category: 'execution:started', data: { command: 'curl', args: ['-u', 'user', '--retry=2', '-H', 'Accept: application/json', 'https://fixture.test'] } };
     const result = (success: boolean) => ({ timestamp: 2, category: 'scan:progress', data: { kind: 'tool_result', success, detail: 'First\nSecond' } });
     const brief = formatProjectLog(call, false, colors, 80, result(true));
     expect(brief).toContain(colors.foreground('Ran') + ' ' + colors.command('curl'));
     expect(brief).not.toContain('●');
     expect(brief).toContain(colors.error('-u')); expect(brief).toContain(colors.muted('user'));
     expect(brief).toContain(colors.error('--retry') + colors.muted('=2'));
-    expect(brief).toContain(colors.success('"Accept: application/json"'));
-    expect(brief).toContain(colors.success("'https://fixture.test'"));
+    expect(brief).toContain(colors.success("'Accept: application/json'"));
+    expect(brief).toContain(colors.muted('https://fixture.test'));
     expect(brief).toContain('    ' + colors.muted('First'));
     const full = formatProjectLog(call, true, colors, 80, result(false));
     expect(full).not.toContain('●');

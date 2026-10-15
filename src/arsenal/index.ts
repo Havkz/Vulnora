@@ -6,6 +6,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { commandPath } from '../command-path.js';
+import { DEFAULT_WEB_WORDLIST } from './catalog.js';
 import { EventEmitter } from 'eventemitter3';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { createHash, randomUUID } from 'crypto';
@@ -82,7 +83,7 @@ function requestTimeoutSignal(milliseconds: number): AbortSignal {
 }
 
 async function usableWebWordlist(requested?: string): Promise<string> {
-  const fallback = '/usr/share/wordlists/dirb/common.txt';
+  const fallback = DEFAULT_WEB_WORDLIST;
   const candidate = requested?.trim() || fallback;
   try {
     await access(candidate);
@@ -3566,7 +3567,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
     category: 'web',
     parameters: [
       { name: 'url', type: 'string', description: 'URL with FUZZ keyword (e.g., http://target/FUZZ)', required: true },
-      { name: 'wordlist', type: 'string', description: 'Path to wordlist', required: false, default: '/usr/share/wordlists/dirb/common.txt' },
+      { name: 'wordlist', type: 'string', description: 'Path to wordlist', required: false, default: DEFAULT_WEB_WORDLIST },
       { name: 'mc', type: 'string', description: 'Match HTTP status codes', required: false, default: '200,301,302,403' },
     ],
     handler: async (context) => {

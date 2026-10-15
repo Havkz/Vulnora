@@ -24,6 +24,7 @@
  */
 
 import type { ToolAdapter } from './catalog.js';
+import { DEFAULT_WEB_WORDLIST } from './catalog.js';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 import { parseToolOutput } from './parsers.js';
 
@@ -152,7 +153,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     targetParam: 'url',
     defaultTimeoutMs: 300_000,
     build: (target, params) => {
-      const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
+      const wordlist = str(params.wordlist) ?? DEFAULT_WEB_WORDLIST;
       const mc = str(params.mc) ?? '200,301,302,403';
       return ['-u', target, '-w', wordlist, '-mc', mc, '-o', '/dev/stdout', '-of', 'json', '-s'];
     },
@@ -172,7 +173,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     defaultTimeoutMs: 300_000,
     build: (target, params) => {
       const mode = str(params.mode) ?? 'dir';
-      const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
+      const wordlist = str(params.wordlist) ?? DEFAULT_WEB_WORDLIST;
       return [mode, '-u', target, '-w', wordlist, '--timeout', '60s', '-q'];
     },
   },
@@ -180,7 +181,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     targetParam: 'url',
     defaultTimeoutMs: 300_000,
     build: (target, params) => {
-      const wordlist = str(params.wordlist) ?? '/usr/share/wordlists/dirb/common.txt';
+      const wordlist = str(params.wordlist) ?? DEFAULT_WEB_WORDLIST;
       return ['-u', target, '-w', wordlist, '--silent'];
     },
   },

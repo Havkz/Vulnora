@@ -46,7 +46,9 @@ describe('effective scanning behavior', () => {
 
   it('uses conservative real Stealth pacing without changing request identity', async () => {
     const starts: number[] = []; const agents: string[] = [];
-    const url = await server((request, response) => { starts.push(Date.now()); agents.push(request.headers['user-agent'] || ''); response.end('ok'); });
+    const fetch = globalThis.fetch;
+    vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => { starts.push(Date.now()); return fetch(input, init); });
+    const url = await server((request, response) => { agents.push(request.headers['user-agent'] || ''); response.end('ok'); });
     const scan = policy('stealth');
     await Promise.all([0, 1, 2].map(() => scan.fetch(url, { headers: { 'user-agent': 'Vulnora-test' } }, async () => {})));
     expect(starts[1] - starts[0]).toBeGreaterThanOrEqual(950);

@@ -93,17 +93,16 @@ describe('durable interactive project flow', () => {
     const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
     const text = () => view().lines.map(stripVTControlCharacters).join('\n');
     const stagePosition = view().lines.findIndex(line => line.includes('Stage: Recon'));
-    for (const operatorId of ['one', 'two']) session.command.emit('scan:progress', {
-      id: 'call-' + operatorId, timestamp: Date.now(), kind: 'tool_call', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
-        detail: `curl --url https://fixture.test/${operatorId}`,
+    for (const operatorId of ['one', 'two']) session.command.arsenal.emit('tool:process', {
+      id: operatorId, type: 'started', command: 'curl', args: ['--url', `https://fixture.test/${operatorId}`], toolName: 'http_request',
     });
     session.command.emit('scan:progress', {
       id: 'resumed-call', timestamp: Date.now(), kind: 'tool_call', operatorId: 'one', callsign: 'one', archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
       detail: 'curl --url https://fixture.test/one',
     });
-    for (const operatorId of ['two', 'one']) session.command.emit('scan:progress', {
-      id: 'result-' + operatorId, timestamp: Date.now(), kind: 'tool_result', operatorId, callsign: operatorId, archetype: 'recon', taskId: 'pair-fixture', toolName: 'http_request',
-      detail: operatorId + ' OUTPUT', success: operatorId === 'one',
+    for (const operatorId of ['two', 'one']) session.command.arsenal.emit('tool:process', {
+      id: operatorId, type: 'completed', command: 'curl', args: ['--url', `https://fixture.test/${operatorId}`], toolName: 'http_request',
+      output: operatorId + ' OUTPUT', success: operatorId === 'one',
     });
     expect(text().match(/Ran curl/g)).toHaveLength(2);
     const content = view().lines.map(stripVTControlCharacters).map(line => line.replace(/^│/, '').replace(/│$/, '').trim()).join('\n');
@@ -117,7 +116,8 @@ describe('durable interactive project flow', () => {
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
     await f.store.flush(session.project.id);
     const journal = await f.store.readLogs(session.project.id);
-    expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(5);
+    expect(journal.events.filter(event => (event as { category?: string }).category?.startsWith('execution:'))).toHaveLength(4);
+    expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(1);
   });
 
   it('rounds displayed progress and saves the project when choosing Beenden in the pause menu', async () => {

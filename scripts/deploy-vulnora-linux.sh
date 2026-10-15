@@ -12,6 +12,14 @@ cd "$release"
 tar -xf "$archive" --no-same-owner
 npm ci --ignore-scripts --no-audit --no-fund
 npm run build
+node --input-type=module - <<'JS'
+import { access, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { DEFAULT_WEB_WORDLIST } from './dist/arsenal/catalog.js';
+await access(DEFAULT_WEB_WORDLIST, constants.R_OK);
+if (!(await readFile(DEFAULT_WEB_WORDLIST, 'utf8')).trim()) throw new Error('Website discovery wordlist is empty. Reinstall dirb.');
+console.log(`Discovery wordlist readable: ${DEFAULT_WEB_WORDLIST}`);
+JS
 node scripts/arsenal-doctor.mjs --offline --strict
 # Linux legacy data wins; existing Vulnora files are never overwritten.
 node --input-type=module - "$windows_data" <<'JS'
