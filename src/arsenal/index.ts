@@ -641,6 +641,11 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
     if (toolName === 'nmap_scan' && context.purpose !== 'reporting') {
       context = { ...context, parameters: { ...context.parameters, flags: context.parameters.flags || '-sV -T4' } };
+      if (this.scope && !context.parameters.ports) {
+        const ports = String(context.parameters.flags).match(/(?:^|\s)-p(?:\s+|=)?(-|[\d,-]+)(?=\s|$)/)?.[1];
+        if (ports) context.parameters.ports = ports === '-' ? '1-65535' : ports;
+      }
+      if (this.scope) context.parameters.flags = sanitizeExternalFlags('nmap', String(context.parameters.flags), true).join(' ') || '-T3';
       const call = normalizeToolCall(toolName, context);
       if (call.toolCategory === 'service_detection' && !this.orchestrator.getOpenPorts(call.host).length) {
         const webPort = normalizeToolCall('http_request', { parameters: { url: context.target?.address || context.parameters.target } }).port;
@@ -3425,7 +3430,7 @@ const DANGEROUS_FLAGS_WITH_VALUES: Record<'curl' | 'nmap', Set<string>> = {
   ]),
 };
 
-export function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): string[] {
+export function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string, scoped = false): string[] {
   const bad = DANGEROUS_EXTERNAL_FLAGS[tool];
   const toks = (raw || '').split(/\s+/).filter(Boolean);
   const out: string[] = [];
@@ -3439,6 +3444,23 @@ export function sanitizeExternalFlags(tool: 'curl' | 'nmap', raw?: string): stri
     if (bad.test(name) || attachedDangerousCurlValue) {
       const consumesNext = DANGEROUS_FLAGS_WITH_VALUES[tool].has(name.toLowerCase());
       if (consumesNext && !token.includes('=') && !attachedDangerousCurlValue && toks[i + 1] !== undefined) i++;
+      continue;
+    }
+    if (scoped) {
+      // Scoped flags cannot replace the separately checked target, method or body.
+      const switches = tool === 'curl'
+        ? /^(?:-(?:sS?|S|i|k|v|4|6)|--(?:silent|show-error|include|insecure|compressed|http1\.[01]|http2|http2-prior-knowledge|http3|ipv4|ipv6|tlsv1\.[0-3]|verbose))$/
+        : /^(?:-s[STUVCAWMNFXOL]|-Pn|-n|-R|-6|-A|-F|-r|-v{1,2}|-d\d*|-T[0-5]|--(?:open|reason|version-light|version-all|version-trace|osscan-limit|osscan-guess|disable-arp-ping|send-ip|traceroute))$/;
+      if (switches.test(token)) { out.push(token); continue; }
+      const takesValue = tool === 'curl'
+        ? /^(?:-m|--(?:max-time|connect-timeout|tls-max|speed-limit|speed-time))$/
+        : /^--(?:top-ports|version-intensity|max-retries|host-timeout|scan-delay|max-scan-delay|max-parallelism|min-parallelism|max-rate|min-rate|initial-rtt-timeout|min-rtt-timeout|max-rtt-timeout)$/;
+      const attached = tool === 'curl' ? token.match(/^-m(\d+(?:\.\d+)?)$/)?.[1] : undefined;
+      if (!takesValue.test(name) && !attached) continue;
+      const value = attached || (token.includes('=') ? token.slice(token.indexOf('=') + 1) : toks[++i]);
+      const numeric = tool === 'curl' ? /^\d+(?:\.\d+)?$/ : /^\d+(?:\.\d+)?(?:ms|s|m|h)?$/;
+      if (tool === 'nmap' && name === '--top-ports' && (!value || !/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535)) continue;
+      if (value && numeric.test(value)) out.push(attached ? '-m' : name, value);
       continue;
     }
     out.push(toks[i]);
@@ -3563,7 +3585,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         return { success: false, error: 'nmap is not installed. Install it with: apt install nmap' };
       }
       const target = (context.parameters.target as string).replace(/^\[([a-f\d:]+)\]$/i, '$1');
-      const requestedFlags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4'); // drop -oN/--script/-iL injection
+      const requestedFlags = sanitizeExternalFlags('nmap', context.parameters.flags as string || '-sV -T4', Boolean(fetchContext.getStore()?.scope));
       const ports = context.parameters.ports as string | undefined;
       const flags = normalizeNmapRuntimeFlags(requestedFlags, ports, target);
 
@@ -3698,7 +3720,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       { name: 'method', type: 'string', description: 'HTTP method', required: false, default: 'GET' },
       { name: 'data', type: 'string', description: 'Request body data', required: false },
       { name: 'headers', type: 'string', description: 'Headers as "Key: Value" (comma separated)', required: false },
-      { name: 'flags', type: 'string', description: 'Additional curl flags', required: false },
+      { name: 'flags', type: 'string', description: 'Transport/output flags, e.g. -k --compressed --http1.1. Use the URL, method, data and headers parameters for the request.', required: false },
     ],
     handler: async (context) => {
       if (!(await isToolAvailable('curl'))) {
@@ -3725,6 +3747,9 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       }
       if (headers) {
         const headerLines = parseCurlHeaderLines(headers);
+        if (headerLines.some(header => header.indexOf(':') <= 0 || /[\r\n]/.test(header))) {
+          return { success: false, error: 'curl_request: headers must be Name: Value fields.' };
+        }
         if (configuredHeaders) {
           const explicitHeaders = new Headers();
           for (const header of headerLines) {
@@ -3738,7 +3763,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
         }
       }
       if (flags) {
-        const sanitized = sanitizeExternalFlags('curl', flags); // drop -o/-K/-T/-x file-read/write injection
+        const sanitized = sanitizeExternalFlags('curl', flags, Boolean(fetchContext.getStore()?.scope));
         args.push(...(configuredHeaders ? withoutCurlRedirectFlags(sanitized) : sanitized));
       }
       enforceCurlMinimumTimeout(args, 120);

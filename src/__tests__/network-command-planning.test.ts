@@ -40,6 +40,18 @@ describe('network command prerequisites', () => {
     expect(arsenal.getOrchestrator().getBudget('fixture.test').used.port_probe_budget).toBe(2);
   });
 
+  it('normalizes a scoped inline port selector before stage selection and accounting', async () => {
+    const { arsenal, calls } = fixture(true);
+    arsenal.setScope({ allowedHosts: ['fixture.test'], exactHosts: true, allowPrivate: false, allowLoopback: false });
+    const result = await arsenal.execute('nmap_scan', { parameters: { target: 'fixture.test', flags: '-sV -p 80,443' } });
+    expect(result.success, result.error).toBe(true);
+    expect(calls).toEqual([
+      { target: 'fixture.test', ports: '80,443', flags: '-sT -Pn --open' },
+      { target: 'fixture.test', ports: '80', flags: '-sV' },
+    ]);
+    expect(arsenal.getOrchestrator().getBudget('fixture.test').used.port_probe_budget).toBe(3);
+  });
+
   it('does not run prerequisites outside scope or during reporting', async () => {
     const { arsenal, calls } = fixture(true);
     arsenal.setScope({ allowedHosts: ['127.0.0.1'], exactHosts: true, allowPrivate: false, allowLoopback: false });
@@ -47,5 +59,19 @@ describe('network command prerequisites', () => {
     expect(denied.metadata?.orchestrationStatus).toBe('scope_denied');
     const report = await arsenal.execute('nmap_scan', { parameters: { target: '127.0.0.1', flags: '-sV' }, purpose: 'reporting' });
     expect(report.success).toBe(false); expect(calls).toHaveLength(0);
+  });
+
+  it('charges a top-port request for its actual selection and gates a full scan', async () => {
+    const { arsenal, calls } = fixture(true);
+    arsenal.setScope({ allowedHosts: ['fixture.test'], exactHosts: true, allowPrivate: false, allowLoopback: false });
+    const result = await arsenal.execute('nmap_scan', { parameters: { target: 'fixture.test', flags: '--top-ports=1200 -sT' } });
+    expect(result.success, result.error).toBe(true);
+    expect(arsenal.getOrchestrator().getBudget('fixture.test').used.port_probe_budget).toBe(1200);
+    const full = await arsenal.execute('nmap_scan', { parameters: { target: 'fixture.test', flags: '--top-ports 65535 -sT' } });
+    expect(full.success).toBe(false); expect(full.error).toContain('authorization receipt');
+    expect(calls).toHaveLength(1);
+    const smaller = await arsenal.execute('nmap_scan', { parameters: { target: 'fixture.test', flags: '--top-ports 20 -sT' } });
+    expect(smaller.success, smaller.error).toBe(true); expect(calls).toHaveLength(2);
+    expect(arsenal.getOrchestrator().getBudget('fixture.test').used.port_probe_budget).toBe(1220);
   });
 });

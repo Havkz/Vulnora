@@ -58,6 +58,9 @@ Gobuster and Feroxbuster receive only entries admitted by the remaining request
 budget; temporary lists are removed afterwards. Truncated searches remain explicit
 coverage gaps. API discovery runs before larger directory lists consume that budget.
 Identical concurrent calls share one execution, including asynchronous preflight.
+Scoped curl/Nmap flags cannot replace the approved destination or add targets.
+Set curl methods, bodies and headers through their named parameters. Nmap inline
+port selections are normalized before stage planning and budget accounting.
 Interrupted API and directory discovery can repeat their GET-only probes while
 retaining completed work and request budgets. Requests with uncertain write effects
 remain paused; Enter opens recovery details and Esc returns to the main menu.

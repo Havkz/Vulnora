@@ -233,7 +233,8 @@ function classifyPortTool(toolName: string, parameters: Record<string, unknown>)
   if (!/^(?:port_scan|nmap_scan|nmap_tool|naabu_tool)$/.test(toolName)) return null;
   const ports = portSet(parameters.ports);
   const flags = String(parameters.flags || '');
-  if (ports.length >= 60_000 || /(?:^|\s)-p-?(?:\s|$)|1-65535/.test(`${flags} ${String(parameters.ports || '')}`)) return 'full_port_scan';
+  const topPorts = Number(flags.match(/(?:^|\s)--top-ports(?:\s+|=)(\d+)(?=\s|$)/)?.[1] || 0);
+  if (ports.length >= 60_000 || topPorts >= 60_000 || /(?:^|\s)-p-(?:\s|$)|1-65535/.test(`${flags} ${String(parameters.ports || '')}`)) return 'full_port_scan';
   if (/(?:^|\s)-sV(?:\s|$)|version/i.test(flags)) return 'service_detection';
   return 'port_discovery';
 }
@@ -261,8 +262,10 @@ export function normalizeToolCall(toolName: string, context: ToolContext): Norma
   const url = normalizeUrl(rawTarget, method);
   const category = toolCategory(toolName, parameters, context);
   const ports = portSet(parameters.ports);
+  const topPorts = String(parameters.flags || '').match(/(?:^|\s)--top-ports(?:\s+|=)(\d+)(?=\s|$)/)?.[1];
   const scanDepth = category === 'full_port_scan' ? 'full'
     : category === 'service_detection' ? 'service'
+      : category === 'port_discovery' && topPorts ? `top_${topPorts}`
       : ports.length ? `${ports.length}_ports` : String(parameters.depth || parameters.wordlist || 'standard');
   const irrelevant = new Set(['timeout', 'max_time', 'retries']);
   const relevantParameters = Object.fromEntries(Object.entries(parameters)
@@ -508,7 +511,10 @@ export class ToolOrchestrator {
     if (call.toolName === 'api_endpoint_discovery') return 42;
     if (/(?:subdomain_enum|subfinder|amass)/i.test(call.toolName)) return /extended/i.test(String(call.relevantParameters.wordlist || '')) ? 62 : 22;
     if (/^(?:xss_scan|sqli_scan)$/.test(call.toolName)) return call.toolName === 'xss_scan' ? 6 : 8;
-    if (call.toolCategory === 'port_discovery' || call.toolCategory === 'service_detection' || call.toolCategory === 'full_port_scan') return Math.max(1, portSet(call.relevantParameters.ports).length || (call.toolCategory === 'full_port_scan' ? 65535 : 1000));
+    if (call.toolCategory === 'port_discovery' || call.toolCategory === 'service_detection' || call.toolCategory === 'full_port_scan') {
+      const topPorts = Number(String(call.relevantParameters.flags || '').match(/(?:^|\s)--top-ports(?:\s+|=)(\d+)(?=\s|$)/)?.[1] || 0);
+      return Math.max(1, portSet(call.relevantParameters.ports).length || topPorts || (call.toolCategory === 'full_port_scan' ? 65535 : 1000));
+    }
     return 1;
   }
 

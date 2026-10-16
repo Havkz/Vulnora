@@ -14,6 +14,16 @@ import {
 } from '../arsenal/index.js';
 
 describe('external tool argument sanitization', () => {
+  it('keeps scoped curl transport flags without accepting replacement destinations, methods or bodies', () => {
+    expect(sanitizeExternalFlags('curl', '-sS --compressed --max-time=20 --connect-to a:b:c:d --connect-t=a:b:c:d --url http://other.test -X DELETE --data-raw changed -sSL --next http://other.test -m90', true))
+      .toEqual(['-sS', '--compressed', '--max-time', '20', '-m', '90']);
+  });
+
+  it('keeps scoped Nmap tuning without accepting extra hosts, random targets or argument files', () => {
+    expect(sanitizeExternalFlags('nmap', '-sV -sC -T4 --version-intensity 2 --top-ports=1000 -iR 20 192.0.2.1 --resume=/tmp/scan -p22,443', true))
+      .toEqual(['-sV', '-sC', '-T4', '--version-intensity', '2', '--top-ports', '1000']);
+    expect(sanitizeExternalFlags('nmap', '--top-ports 999999 --top-ports=1.5 --top-ports 0 --top-ports 20', true)).toEqual(['--top-ports', '20']);
+  });
   it('removes dangerous curl flags and their values even when the value is a dash', () => {
     expect(sanitizeExternalFlags('curl', '-sS -D - -o /tmp/out --max-time 20 -i'))
       .toEqual(['-sS', '--max-time', '20', '-i']);
