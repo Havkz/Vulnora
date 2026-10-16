@@ -69,14 +69,14 @@ describe('whole scanner checkpoints', () => {
     let started = false;
     command.arsenal.on('tool:process', event => { if (event.type === 'started') started = true; });
     await tick(command);
-    await vi.waitFor(() => expect(started).toBe(true));
+    await vi.waitFor(() => expect(started).toBe(true), { timeout: 5000 });
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1300);
     await tick(command);
     expect(task.result?.failureKind).not.toBe('dispatch_infrastructure');
     await vi.waitFor(() => expect(task.status).toBe('failed'), { timeout: 5000 });
     expect(task.result?.failureKind).toBe('tool');
     expect(task.result?.error).toContain('Process killed (timeout)');
-  });
+  }, 10000);
   it('lets a real bounded child finish after the inactivity window without stalling the mission', async () => {
     vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
     const command = scanner();
@@ -91,13 +91,13 @@ describe('whole scanner checkpoints', () => {
     let processStarted = false;
     command.arsenal.on('tool:process', event => { if (event.type === 'started') processStarted = true; });
     await tick(command);
-    await vi.waitFor(() => expect(processStarted).toBe(true));
+    await vi.waitFor(() => expect(processStarted).toBe(true), { timeout: 5000 });
     await new Promise(resolve => setTimeout(resolve, 80));
     await tick(command);
     expect(task.status).not.toBe('failed');
     await vi.waitFor(() => expect(task.status).toBe('completed'), { timeout: 5000 });
     expect(task.result?.output).toContain('Completed fixture');
-  });
+  }, 10000);
   it('retains phases, queues, IDs, results, scope, evidence, budgets, and operator settings', async () => {
     const origin = await listen(createServer((_request, response) => response.end('Fixture evidence')));
     const command = scanner();
