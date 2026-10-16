@@ -55,6 +55,28 @@ async function listen(server: Server): Promise<string> {
 }
 
 describe('whole scanner checkpoints', () => {
+  it('lets an overdue child timer run after an event-loop stall instead of aborting it as a dispatch failure', async () => {
+    vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
+    const command = scanner();
+    vi.spyOn(command.llm, 'getProvider').mockReturnValue('deterministic');
+    const { task } = prepare(command);
+    command.arsenal.register({ name: 'fixture_stalled_timer', description: 'Local timeout fixture', category: 'util', parameters: [],
+      handler: async () => {
+        const result = await runSubprocess(process.execPath, ['-e', 'setTimeout(()=>{},8000)'], { timeout: 100 });
+        return { success: result.exitCode === 0, error: result.stderr };
+      } });
+    task.executionPlan = { toolName: 'fixture_stalled_timer', parameters: {} };
+    let started = false;
+    command.arsenal.on('tool:process', event => { if (event.type === 'started') started = true; });
+    await tick(command);
+    await vi.waitFor(() => expect(started).toBe(true));
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1300);
+    await tick(command);
+    expect(task.result?.failureKind).not.toBe('dispatch_infrastructure');
+    await vi.waitFor(() => expect(task.status).toBe('failed'), { timeout: 5000 });
+    expect(task.result?.failureKind).toBe('tool');
+    expect(task.result?.error).toContain('Process killed (timeout)');
+  });
   it('lets a real bounded child finish after the inactivity window without stalling the mission', async () => {
     vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
     const command = scanner();

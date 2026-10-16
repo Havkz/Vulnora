@@ -1053,7 +1053,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
   /** Last observable THINK/TOOL/RESULT/task event for each in-flight dispatch. */
   private dispatchLastProgress: Map<string, number> = new Map();
-  private processDeadlines = new Map<string, { taskId: string; until: number }>();
+  private processDeadlines = new Map<string, { taskId: string; until: number; settling?: boolean }>();
 
   /** The operator each in-flight dispatch was assigned to, keyed by task id — so a
    * timed-out dispatch can reset the exact wedged operator back to idle. */
@@ -1481,8 +1481,14 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
     // Snapshot ids first — we mutate the maps inside the loop.
     for (const taskId of [...this.activeDispatches]) {
-      // A bounded child owns its timeout; leave one scheduler tick for it to settle.
-      if ([...this.processDeadlines.values()].some(process => process.taskId === taskId && now < process.until)) continue;
+      const children = [...this.processDeadlines.values()].filter(process => process.taskId === taskId);
+      if (children.some(process => now < process.until)) continue;
+      // A stalled event loop can run this tick before an overdue child timer; allow
+      // that timer and the bounded 2s Windows tree cleanup to run before reaping once.
+      if (children.some(process => !process.settling)) {
+        for (const process of children) { process.settling = true; process.until = now + 3000; }
+        continue;
+      }
       const startedAt = this.dispatchStartTimes.get(taskId);
       const lastProgressAt = this.dispatchLastProgress.get(taskId) ?? startedAt;
       const operator = this.dispatchOperators.get(taskId);

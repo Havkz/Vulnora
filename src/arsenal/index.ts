@@ -3612,9 +3612,6 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       if (tags) args.push('-tags', tags);
 
       const result = await runSubprocess('nuclei', args, { timeout: 300000, signal: context.abortSignal });
-      if (result.exitCode !== 0) {
-        return { success: false, error: `nuclei failed (exit ${result.exitCode}): ${result.stderr.trim() || 'no diagnostic output'}` };
-      }
 
       // Parse JSON lines output
       const findings: Array<{ title: string; severity: 'info' | 'low' | 'medium' | 'high' | 'critical'; details: string }> = [];
@@ -3624,7 +3621,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
           findings.push({
             title: entry.info?.name || entry['template-id'] || 'Unknown',
             severity: entry.info?.severity || 'info',
-            details: `${entry.info?.name || 'Finding'} at ${entry.host || target}: ${entry.info?.description || entry.matched || ''}`,
+            details: `${entry.info?.name || 'Finding'} at ${entry['matched-at'] || entry.host || target}: ${entry.info?.description || entry.matched || ''}`,
           });
         } catch {
           // Skip non-JSON lines
@@ -3632,10 +3629,12 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       }
 
       return {
-        success: true,
+        success: result.exitCode === 0,
+        ...(result.exitCode !== 0 ? { error: `nuclei failed (exit ${result.exitCode}): ${result.stderr.trim() || 'no diagnostic output'}`, metadata: { partial: true } } : {}),
         output: findings.length > 0
-          ? `Nuclei scan of ${target}:\nFound ${findings.length} vulnerabilities:\n${findings.map(f => `  [${f.severity.toUpperCase()}] ${f.title}`).join('\n')}`
-          : `Nuclei scan of ${target}: No vulnerabilities found at severity level: ${severity}`,
+          ? `Nuclei scan of ${target}${result.exitCode !== 0 ? ' (incomplete)' : ''}:\nFound ${findings.length} vulnerabilities:\n${findings.map(f => `  [${f.severity.toUpperCase()}] ${f.title}`).join('\n')}`
+          : result.exitCode === 0 ? `Nuclei scan of ${target}: No vulnerabilities found at severity level: ${severity}`
+            : `Nuclei scan of ${target}: incomplete; no conclusive negative result.`,
         findings: findings.length > 0 ? findings : undefined,
       };
     },
