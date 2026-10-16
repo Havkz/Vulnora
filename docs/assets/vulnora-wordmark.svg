@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="144" viewBox="0 0 760 144" role="img" aria-labelledby="title desc">
+  <title id="title">Vulnora</title>
+  <desc id="desc">A browser window with a padlock beside the Vulnora wordmark, in blue on a transparent background.</desc>
+  <g fill="none" stroke="#398AC7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="74" y="31" width="100" height="82" rx="8"/>
+    <path d="M74 52h100M87 42h1m9 0h1m9 0h1"/>
+    <rect x="110" y="75" width="28" height="24" rx="4"/>
+    <path d="M116 75v-7a8 8 0 0 1 16 0v7m-8 10v5"/>
+  </g>
+  <text x="201" y="94" fill="#398AC7" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="59" font-weight="650" letter-spacing="6">VULNORA</text>
+  <path d="M74 131h612" stroke="#398AC7" stroke-opacity=".35"/>
+</svg>

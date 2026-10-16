@@ -1,26 +1,50 @@
-# Vulnora
+<div align="center">
 
-Persistent AI-assisted website and API security testing in the terminal.
+<img src="docs/assets/vulnora-wordmark.svg" alt="Vulnora — browser and padlock wordmark" width="560">
 
-Vulnora combines the existing scanner, shared evidence and reports with a
-VoidAccess-inspired CLI, saved projects, bounded adaptive scan modes, authenticated
-Codex/Claude CLI providers and an installed Ollama fallback.
+**AI-assisted website and API pentesting, built for the terminal.**
 
-## Run from this private repository
+[![Status: active development](https://img.shields.io/badge/status-active_development-398AC7?style=flat&labelColor=263341)](#development-status)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-398AC7?style=flat&labelColor=263341)](package.json)
+[![Node.js 22.12+](https://img.shields.io/badge/Node.js-22.12%2B-398AC7?style=flat&labelColor=263341)](package.json)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-398AC7?style=flat&labelColor=263341)](LICENSE)
 
-Requires Node.js **22.12.0 or newer**, npm, Git and an ANSI-compatible terminal.
-External scanner commands are provided by the Linux/Kali arsenal environment.
+[Features](#features) · [Getting started](#getting-started) · [Architecture](#architecture) · [Development](#development)
+
+</div>
+
+## Overview
+
+Vulnora is a TypeScript CLI for organizing authorized website and API security assessments. It connects reconnaissance and scanning tools with AI-assisted planning, shared evidence, persistent projects and Markdown reports.
+
+The focus is a recoverable workflow: define a target, confirm the scan, inspect live output and return to saved work. AI providers help plan and interpret checks; the execution layer enforces scope and resource budgets.
+
+## Features
+
+- **Website and API assessment** — DNS, HTTP, TLS, content discovery and vulnerability checks, with integrations for tools such as Nmap, Nuclei, ffuf, curl and testssl.sh.
+- **Persistent projects** — saved targets, task checkpoints, evidence and complete event journals; recover interrupted work where safe replay is supported.
+- **Terminal workspace** — guided project creation, explicit start confirmation, current-stage display, command output, settings and full-output view with `Ctrl+T`.
+- **Flexible AI providers** — installed Codex and Claude CLIs reuse their supported login workflows; an installed Ollama model can serve as fallback. Supported deterministic checks remain available without AI.
+- **Bounded execution** — shared observations, duplicate-call reuse, scope checks and request budgets; Auto, Stealth and Aggressive modes control load and backoff.
+- **Saved reports** — findings, evidence and recommendations remain with the project and export to Markdown; completed projects reopen without starting a new scan.
+
+## Getting started
+
+**Requirements:** Node.js **22.12+**, npm, Git and an ANSI-compatible terminal. External scanner tools must be installed separately; availability depends on the operating system. AI assistance requires a configured provider or an installed Ollama model.
 
 ```bash
-gh repo clone Havkz/Vulnora
+git clone https://github.com/Havkz/Vulnora.git
 cd Vulnora
 npm ci
 npm run build
 npm start
 ```
 
-The package executable is `vulnora`. On Windows, install a committed WSL release
-and the shell command from the checkout:
+Repository access is required while the project is private. This installs the application, not the external scanner binaries. See the [tool installation matrix](docs/INSTALL_MATRIX.md) for dependencies and supported platforms.
+
+### Windows with a dedicated Kali arsenal
+
+The Windows installer deploys a committed release into WSL and installs the `vulnora` command for PowerShell and CMD. It reuses an existing compatible arsenal distribution; a fresh distribution requires a staged, checksum-verified Kali rootfs. Follow the [Windows setup guide](docs/WINDOWS_ARSENAL.md) first.
 
 ```powershell
 pwsh -NoProfile -File scripts/setup-windows-arsenal.ps1
@@ -28,174 +52,49 @@ pwsh -NoProfile -File scripts/install-windows-alias.ps1
 vulnora
 ```
 
-Setup reuses the existing Kali arsenal and provider authentication. New commits
-can be installed by rerunning setup; normal launches keep the installed release.
-The command has been checked in fresh PowerShell 7, Windows PowerShell and CMD
-sessions. See the [Windows installation guide](docs/WINDOWS_ARSENAL.md) and
-[milestone ledger](docs/VULNORA_MILESTONE.md) for runtime evidence and remaining
-visual/acceptance gates.
+### First assessment
 
-## Projects and navigation
+1. Choose **Create New Project**, name it and enter an authorized URL or hostname.
+2. Review the target and press Enter at **READY** to begin.
+3. Inspect live output; use **Resume Project** to reopen saved work and results.
 
-The main menu contains **Create New Project**, **Resume Project**, and **Settings**.
-Use arrows and Enter to select; Esc returns and Ctrl+X or Ctrl+C saves and quits.
-Startup expands provider checks into timed substeps. The live view pins the current
-scan stage and shows one `Ran` block per actual subprocess, followed by three gray output
-lines and a blank line. Ctrl+T reveals the full output in white. Commands are dark
-blue, flags red, and quoted strings green. Commands use the executable and arguments
-actually passed to the process, including enforced rate limits. Native checks appear
-as analyses rather than invented shell commands. Cached results do not repeat command
-blocks. Stage outcomes distinguish completed, incomplete and inapplicable work.
-DNS queries use installed `dig` and appear as actual command blocks. Service scans
-automatically discover ports first when no open-port evidence exists, then inspect
-only observed open ports; closed ports are a valid negative result.
-Website missions omit empty installation and command-and-control phases. Planning
-agents receive refreshed shared observations before each decision; vulnerability
-coverage is scheduled independently of remaining reconnaissance gaps.
-The complete event journal is retained. Progress displays one decimal place.
-Directory discovery reserves its wordlist work before starting a process. FFUF,
-Gobuster and Feroxbuster receive only entries admitted by the remaining request
-budget; temporary lists are removed afterwards. Truncated searches remain explicit
-coverage gaps. API discovery runs before larger directory lists consume that budget.
-Identical concurrent calls share one execution, including asynchronous preflight.
-Scoped curl/Nmap flags cannot replace the approved destination or add targets.
-Set curl methods, bodies and headers through their named parameters. Nmap inline
-port selections are normalized before stage planning and budget accounting.
-Interrupted API and directory discovery can repeat their GET-only probes while
-retaining completed work and request budgets. Requests with uncertain write effects
-remain paused; Enter opens recovery details and Esc returns to the main menu.
-The saved-log viewer includes full event metadata as well as command output.
+Select providers and scanning behavior in **Settings**. The selected primary provider is tried before the configured Ollama fallback. Startup checks actual inference; no Ollama model is downloaded automatically. The selected local model is held for the session and released on graceful exit.
 
-Create a project, enter a URL, hostname, IPv4 or IPv6 address, then confirm
-**READY — Press Enter to start**. The original target remains visible. Entering a
-target alone does not begin scanning. The workflow tests websites and APIs; the
-browser dashboard and mobile/binary target picker are removed.
+Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` selects an alternative directory. Private CLI credential files remain owned by their providers and are neither copied nor modified.
 
-Use PgUp/PgDn or Home/End to inspect a long target in READY or project metadata
-in the resume picker. Small windows retain the confirmation/completion prompts;
-saved target strings, reports and detailed logs remain complete.
+## Architecture
 
-Resume Project shows saved status, progress, target and timestamps. Name/target
-drafts also survive interruption. During a scan, PgUp/PgDn scroll the complete log
-history and End returns to live output. Esc stops scheduling and drains or cancels
-active work before opening the pause menu. Its `Beenden` option saves and exits.
-Settings are available from both menus.
+**Terminal UI → Project session → Task orchestration → Tool execution**
 
-Completion waits for **Press Enter to view results**. Findings, classifications,
-evidence, explanations and recommendations use the existing report path. Reports
-are saved with the project and exported to `<project-id>.report.md`. Completed
-projects reopen saved results without starting another scan.
+The orchestrator connects AI providers with shared evidence. Project sessions persist checkpoints, logs and reports independently of terminal rendering.
 
-## Persistent recovery
+- **TypeScript / Node.js** — typed application core, subprocess management and network clients.
+- **Terminal rendering** — Chalk, ANSI output and Node.js readline; shared themes, keyboard handling and resize-aware views.
+- **Orchestration and persistence** — EventEmitter3, task queues, atomic JSON checkpoints and append-only journals.
+- **Provider and tool integrations** — authenticated CLI subprocesses, Ollama HTTP requests and external security binaries.
+- **Verification** — Vitest, ESLint and TypeScript checks; GitHub Actions runs Windows and Linux jobs.
 
-Projects and journals live under `~/.vulnora/projects/`. Set
-`VULNORA_CONFIG_DIR` to choose another application configuration directory.
-
-Atomic checkpoints retain missions, ordered tasks and decomposed child queues,
-parameters, AI context, pending tool calls, completed evidence, budgets, adaptive
-backoff and remaining cooldown. Resume skips completed work and uses completed
-tool receipts when available. Unknown state-changing requests remain held for
-inspection; interrupted read-only requests restart only when replay is safe.
-TCP exchanges and opaque external scanner processes do not resume mid-packet.
-
-Ctrl+C flushes checkpoints and logs, releases the project lease, stops owned work
-and restores terminal state. Abrupt process termination cannot guarantee cleanup
-or model unloading; completed checkpoints remain available for recovery.
-
-Legacy Tempest application data migrates into the Vulnora namespace without
-deleting the source or overwriting existing destination files. Migration records
-include hashes. Provider authentication files are neither copied nor modified.
-The original repository is retained separately; development uses the private
-[Havkz/Vulnora](https://github.com/Havkz/Vulnora) repository.
-
-## Scan modes
-
-Settings offers **Auto**, **Stealth**, and **Aggressive**. Changing a paused
-project's mode applies and saves it without resetting scope, budgets or server backoff.
-
-| Mode | Active operators | HTTP requests per host | Minimum interval | Extra safe HTTP attempts |
-| --- | ---: | ---: | ---: | ---: |
-| Auto | 3 | 2 | 250 ms | 1 |
-| Stealth | 1 | 1 | 1000 ms | 0 |
-| Aggressive | 6 | 4 | 50 ms | 2 |
-
-429/5xx, transport failures and slow responses reduce load; stable observations
-gradually restore the preset. Hard scope and resource limits remain enforced.
-Stealth uses conservative request behavior without monitoring evasion. Only
-bodyless GET/HEAD requests retry automatically. Each additional built-in HTTP
-request is durably charged before sending.
-
-The controller works without AI. A model can prioritize checks using findings
-and the enforced limits. External processes use their supported native controls
-and an exclusive host lane; some internal counts remain estimates.
-See [exact limits and boundaries](docs/SCAN_MODES.md).
-
-## Providers and Ollama fallback
-
-Configure the provider/model through **Settings → Change Default Model / Provider**.
-Vulnora detects installed Codex/Claude CLI applications, checks their official
-version/authentication commands and validates real inference. Non-interactive
-calls reuse supported existing login; private credentials remain owned by those applications.
-
-Startup discovers installed Ollama models, validates the selected model and keeps
-it loaded throughout the session. No model is downloaded automatically. Select
-the desired model in Settings when multiple models are installed.
-
-The interactive fallback chain is:
-
-1. Selected primary provider/model.
-2. Configured, validated installed Ollama model.
-3. Deterministic evidence-only checks where supported.
-
-Switches and actual provider/model identities are logged. Without AI, supported
-deterministic checks still run and reports state the analysis limitations.
-
-For Codex with an Ollama fallback, put these settings in `~/.vulnora/.env`:
-
-```dotenv
-LLM_PROVIDER=codex
-VULNORA_DEFAULT_PROVIDER=codex
-VULNORA_MODEL_FALLBACK=local
-VULNORA_LOCAL_BASE_URL=http://127.0.0.1:11434/api
-VULNORA_LOCAL_MODEL=your-installed-model
-```
-
-For a local primary, select Ollama in Settings or set `LLM_PROVIDER=local` and
-`VULNORA_DEFAULT_PROVIDER=local`. API providers remain available through Settings;
-**Change API Key** masks entry and credentials are redacted from logs.
-
-Explicit choices saved in Settings take precedence over inherited startup defaults.
-API credentials are stored in the dedicated configuration directory with owner-only
-Unix permissions; Windows access is limited to the current user, SYSTEM and administrators.
-This protects local files through operating-system permissions; the settings file is
-not an encrypted credential vault.
-
-Graceful exit unloads the held model and waits for removal from Ollama's running
-list. After a force-kill, use `ollama stop your-installed-model` if it remains
-loaded. Other installed models are left alone.
-
-## Checks and development
+## Development
 
 ```bash
-npm test
-npm run typecheck
-npm run build
-npm run lint
-npm run arsenal:doctor
-npm start -- --help
+npm run dev          # Run TypeScript sources
+npm run typecheck    # Check types
+npm run lint         # Check source quality
+npm test             # Run regression tests and preflight checks
+npm run build        # Compile to dist/
+npm run arsenal:doctor -- --offline --strict
 ```
 
-Tests cover localhost HTTP/TCP behavior, interruption, durable recovery, safe
-replay, deduplication, scope, terminal navigation/redraw, reports and provider
-lifecycle. Installed-provider and terminal checks are tracked separately in the ledger.
+Tests include local HTTP/TCP fixtures, checkpoint recovery, scope enforcement, tool-call deduplication, terminal interaction and provider lifecycle behavior. The [CI workflow](.github/workflows/ci.yml) defines the automated checks; external provider access and scanner installation require workstation validation.
 
-Optional headless commands include `status`, `test`, `models`, and `setup`.
-The library, backend API and MCP integration remain available for existing callers.
+## Development status
 
-## License and design attribution
+**Active development.** The CLI, project persistence, provider integration and reporting are implemented. Scanner coverage, timeout handling and terminal interaction continue to be refined; this is not a production-stability claim or a guarantee of complete vulnerability coverage.
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE). Vulnora uses an original browser-and-lock wordmark
-and steel-blue palette. Terminal spacing, panels and status conventions derive from the inspected
-[VoidAccess source](https://github.com/KatrielMoses/voidaccess). Its MIT notice and
-inspected revision are recorded in the milestone ledger and
-[third-party notice](THIRD_PARTY_NOTICES.md).
+Interrupted external processes restart only where safe replay is supported; they do not resume mid-packet. Forced termination may prevent cleanup or model unloading. Use the tool only on systems you own or have explicit permission to assess.
+
+For operational details, see [scan modes](docs/SCAN_MODES.md), [scope and authorization](docs/SCOPE_AND_AUTHORIZATION.md) and [target authentication headers](docs/TARGET_HEADERS.md).
+
+## License and attribution
+
+Licensed under **[AGPL-3.0-or-later](LICENSE)**. Vulnora builds on the existing Tempest codebase. Terminal layout conventions are adapted from VoidAccess; the browser-and-padlock identity and blue palette are original. See [third-party notices](THIRD_PARTY_NOTICES.md).

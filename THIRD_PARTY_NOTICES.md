@@ -4,7 +4,7 @@ Vulnora retains the original project's AGPL-3.0-or-later license and attribution
 Terminal panel layout, spacing and status conventions are adapted from
 [VoidAccess](https://github.com/KatrielMoses/voidaccess), inspected at commit
 `0dd59daad2dfe48ec5843726a672138d28a67d6e`.
-The current shield logo and steel-blue palette are original Vulnora designs.
+The browser-and-padlock logo and steel-blue palette are original Vulnora designs.
 
 ## VoidAccess
 
