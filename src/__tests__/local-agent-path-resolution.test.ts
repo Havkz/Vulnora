@@ -50,6 +50,16 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === 'win32')('resolveBin — macOS/POSIX well-known-dir resolution (issue #78)', () => {
+  it('uses the Windows launcher Codex in WSL while preserving custom commands and native Linux execution', () => {
+    vi.stubEnv('WSL_DISTRO_NAME', 'Fixture-Arsenal');
+    vi.stubEnv('VULNORA_CODEX_HOST_COMMAND', '/mnt/c/Program Files/fixture/codex.exe');
+    expect(resolveBin('codex')).toBe('/mnt/c/Program Files/fixture/codex.exe');
+    expect(resolveBin('/opt/custom/codex')).toBe('/opt/custom/codex');
+    vi.stubEnv('WSL_DISTRO_NAME', '');
+    process.env.VULNORA_AGENT_HOME = scratch(); process.env.PATH = '/usr/bin:/bin';
+    expect(resolveBin('codex')).toBe('codex');
+  });
+
   it('finds a CLI in ~/.local/bin even when PATH omits it (the reported bug)', () => {
     const home = scratch();
     const bin = putExe(join(home, '.local', 'bin'), 'faketool');

@@ -52,6 +52,17 @@ process.stdin.on('end', () => {
 }
 
 describe('authenticated local CLI transport', () => {
+  it('uses the installed Codex model by default and respects an explicit model selection', async () => {
+    const f = fixture('codex'); const events: LocalAgentProgress[] = [];
+    vi.stubEnv('VULNORA_CODEX_MODEL', 'installed-model');
+    await localAgentChat('codex', 'hello', { command: f.command, timeoutMs: 4000, model: 'codex-default', onProgress: event => events.push(event) });
+    expect(JSON.parse(readFileSync(f.invocation, 'utf8')).args).toContain('installed-model');
+    expect(events[0].model).toBe('installed-model');
+    await localAgentChat('codex', 'hello', { command: f.command, timeoutMs: 4000, model: 'explicit-model' });
+    expect(JSON.parse(readFileSync(f.invocation, 'utf8')).args).toContain('explicit-model');
+    expect(JSON.parse(readFileSync(f.invocation, 'utf8')).args).not.toContain('installed-model');
+  });
+
   it('streams Codex JSON events before completion, preserves split UTF-8 and uses native login in an isolated directory', async () => {
     const f = fixture('codex'); const events: LocalAgentProgress[] = []; let settled = false;
     const pending = localAgentChat('codex', 'literal & < >\nsecond line', {

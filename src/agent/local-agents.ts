@@ -248,6 +248,12 @@ function wellKnownBinDirs(home: string): string[] {
  * not be spawned as a bare name because .cmd/.bat launches need explicit shell handling.
  */
 export function resolveBin(bin: string): string | undefined {
+  // The Windows launcher shares the installed CLI, never its credential files.
+  if (bin === 'codex' && process.platform === 'linux' && process.env.WSL_DISTRO_NAME && process.env.VULNORA_CODEX_HOST_COMMAND) {
+    const host = process.env.VULNORA_CODEX_HOST_COMMAND;
+    if (!host.startsWith('/mnt/') || !host.endsWith('.exe')) return undefined;
+    return host;
+  }
   if (isWin32()) {
     if (bin.includes('/') || bin.includes('\\')) {
       try { return statSync(bin).isFile() ? resolve(bin) : undefined; } catch { return undefined; }
@@ -287,6 +293,10 @@ export function resolveBin(bin: string): string | undefined {
 
 /** Launch npm's Windows agent shims through Node so prompts never enter cmd.exe. */
 function agentCommand(binary: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform === 'linux' && process.env.WSL_DISTRO_NAME && binary === process.env.VULNORA_CODEX_HOST_COMMAND) {
+    return { command: binary, args: args.map((arg, index) => ['-C', '--cd', '--output-last-message'].includes(args[index - 1])
+      ? execFileSync('wslpath', ['-w', arg], { encoding: 'utf8', timeout: 5000 }).trim() : arg) };
+  }
   if (!isWin32() || !/\.(cmd|bat)$/i.test(binary)) return { command: binary, args };
   const shim = readFileSync(binary, 'utf8');
   const script = shim.match(/"%dp0%[\\/]([^"\r\n]+\.(?:cjs|mjs|js))"/i)?.[1];
@@ -485,7 +495,7 @@ export function pingLocalAgent(id: string, prompt?: string, timeoutMs?: number):
  * clean reply, hermes takes the prompt as an arg. Provider keys are stripped so each CLI uses its own
  * login (no API key needed). Throws on non-zero exit / timeout so the LLMBackbone retry/fallback fires.
  */
-export interface LocalAgentProgress { agent: string; type: string; text?: string }
+export interface LocalAgentProgress { agent: string; type: string; text?: string; model?: string }
 
 export function localAgentChat(id: string, prompt: string, opts: {
   model?: string; command?: string; timeoutMs?: number; signal?: AbortSignal;
@@ -496,7 +506,8 @@ export function localAgentChat(id: string, prompt: string, opts: {
   if (opts.signal?.aborted) return Promise.reject(opts.signal.reason ?? new Error('Agent request cancelled'));
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
-  const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model : undefined;
+  const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model
+    : id === 'codex' ? process.env.VULNORA_CODEX_MODEL?.trim() || undefined : undefined;
   const timeoutMs = opts.timeoutMs ?? envTimeoutMs('VULNORA_LOCAL_AGENT_TIMEOUT_MS', 600000);
 
   let args: string[];
@@ -570,7 +581,8 @@ export function localAgentChat(id: string, prompt: string, opts: {
       const delta = event.event?.delta;
       const content = delta?.type === 'text_delta' && typeof delta.text === 'string' ? delta.text
         : event.type === 'item.completed' && event.item?.type === 'agent_message' ? reply : undefined;
-      opts.onProgress?.({ agent: id, type: event.type, ...(content ? { text: content } : {}) });
+      const reportedModel = typeof event.model === 'string' ? event.model : model;
+      opts.onProgress?.({ agent: id, type: event.type, ...(content ? { text: content } : {}), ...(reportedModel ? { model: reportedModel } : {}) });
     };
     child.stdout?.on('data', (data: Buffer) => {
       if (failure) return;

@@ -135,10 +135,13 @@ export class ProviderSession {
       state.primary = { ready: true, detail: 'inference ready' };
     } catch (error) { this.signal.throwIfAborted(); state.primary.detail = detail(error); }
     const deterministic = { provider: 'deterministic' as const, model: 'evidence-only' };
-    this.effective = state.primary.ready
+    // A failed startup probe must not replace the user's primary for the whole session.
+    const retryPrimary = local && !['local', 'mock', 'deterministic'].includes(primary.provider);
+    this.effective = state.primary.ready || retryPrimary
       ? { ...primary, fallbackChain: [...(primary.provider !== 'local' && local ? [local] : []), deterministic] }
       : local ? { ...local, fallbackChain: [deterministic] } : deterministic;
-    state.active = { provider: this.effective.provider, model: this.effective.model };
+    const active = state.primary.ready ? primary : local || deterministic;
+    state.active = { provider: active.provider, model: active.model };
     this.readiness = state;
     report?.({ label: `Using ${state.active.provider}/${state.active.model}`, status: 'completed' });
     if (!state.primary.ready && !state.local.ready) throw new Error(this.description());

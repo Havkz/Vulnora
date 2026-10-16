@@ -87,18 +87,20 @@ describe('truthful provider initialization', () => {
     expect(held).toEqual([]); await runtime.close();
   });
 
-  it('switches to validated local inference when native CLI authentication has expired', async () => {
+  it('keeps the selected primary first while reporting validated local fallback when CLI authentication has expired', async () => {
     const { runtime } = fixture(); detection.mockResolvedValue({ id: 'codex', installed: true, ready: false });
     expect(await runtime.prepare()).toContain('authentication is not ready');
     expect(probe).toHaveBeenCalledOnce();
     expect(runtime.readiness).toMatchObject({ configured: { provider: 'codex' }, primary: { ready: false }, active: { provider: 'local' } });
-    expect(runtime.getConfig()).toMatchObject({ provider: 'local', model: 'installed:7b' }); await runtime.close();
+    expect(runtime.getConfig()).toMatchObject({ provider: 'codex', model: 'configured-primary',
+      fallbackChain: [{ provider: 'local', model: 'installed:7b' }, { provider: 'deterministic' }] }); await runtime.close();
   });
 
   it('does not claim inference readiness merely because authentication succeeds', async () => {
     const { runtime } = fixture(); probe.mockImplementation(async config => config.provider === 'codex' ? 'No usable inference' : 'VULNORA_READY');
     expect(await runtime.prepare()).toContain('did not return the inference validation token');
-    expect(runtime.getConfig().provider).toBe('local'); await runtime.close();
+    expect(runtime.readiness?.active.provider).toBe('local');
+    expect(runtime.getConfig().provider).toBe('codex'); await runtime.close();
   });
 
   it('retains evidence-only access when both providers fail and redacts diagnostics', async () => {

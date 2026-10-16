@@ -1208,14 +1208,15 @@ class CodexAdapter implements LLMProviderAdapter {
 
   async chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse> {
     const timeoutMs = this.config.timeout ?? Number(process.env.VULNORA_CODEX_TIMEOUT_MS || 600000);
+    let model = providerIdentity(this.config).model;
     const content = (await localAgentChat('codex', this.formatPrompt(messages, options), {
       command: config.get('codex').command || 'codex', model: this.config.model,
       timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600000,
-      signal: options?.signal, onProgress: options?.onProgress,
+      signal: options?.signal, onProgress: event => { model = event.model || model; options?.onProgress?.(event); },
     })).trim();
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
     return {
-      content, model: this.config.model || 'codex-default',
+      content, model,
       finishReason: toolCalls?.length ? 'tool_calls' : 'stop', toolCalls,
     };
   }
@@ -1250,13 +1251,15 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const prompt = this.formatPrompt(messages, options);
     const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
     const command = agentId === 'codex' ? config.get('codex').command : undefined;
-    const content = (await localAgentChat(agentId, prompt, { command, timeoutMs, signal: options?.signal, onProgress: options?.onProgress })).trim();
+    let model = providerIdentity(this.config).model;
+    const content = (await localAgentChat(agentId, prompt, { command, timeoutMs, signal: options?.signal,
+      onProgress: event => { model = event.model || model; options?.onProgress?.(event); } })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
     const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
     return {
       content,
-      model: `local-agent:${agentId}`,
+      model,
       finishReason: toolCalls?.length ? 'tool_calls' : 'stop',
       toolCalls,
     };
@@ -1379,6 +1382,12 @@ export function shouldAdvanceFallback(primaryProvider: LLMProvider, rung: number
   return true;
 }
 
+function providerIdentity(entry: Pick<LLMConfig, 'provider' | 'model'>): { provider: LLMProvider; model: string } {
+  const codex = entry.provider === 'codex' || (entry.provider === 'local-agent' && entry.model === 'codex');
+  return codex ? { provider: 'codex', model: !entry.model || ['codex', 'codex-default'].includes(entry.model)
+    ? process.env.VULNORA_CODEX_MODEL?.trim() || 'codex-default' : entry.model } : { provider: entry.provider, model: entry.model };
+}
+
 export class LLMBackbone extends EventEmitter<LLMEvents> {
   private adapter: LLMProviderAdapter;
   private config: LLMConfig;
@@ -1390,7 +1399,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   constructor(config: LLMConfig) {
     super();
     this.config = config;
-    this.activeProvider = { provider: config.provider, model: config.model };
+    this.activeProvider = providerIdentity(config);
     this.adapter = this.createAdapter(config);
     if (['codex', 'local-agent', 'deterministic'].includes(config.provider)) {
       this.retryAttempts = 1;
@@ -1500,7 +1509,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
 
     for (let rung = 0; rung < ladder.length; rung++) {
       const hop = ladder[rung];
-      this.activeProvider = { provider: hop.provider, model: hop.model };
+      this.activeProvider = providerIdentity(hop);
       const onFallback = rung > 0;
       const hasNext = rung < ladder.length - 1;
       const adapter = onFallback ? this.createAdapter({ ...this.config, ...hop }) : this.adapter;
@@ -1513,10 +1522,12 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           options?.signal?.throwIfAborted();
           response = await adapter.chat(msgs, { ...options, onProgress: event => {
             const safe = { ...event, ...(event.text ? { text: String(redactSecrets(event.text)) } : {}) };
-            this.emit('request:progress', { ...safe, provider: hop.provider, model: hop.model });
+            this.activeProvider = { ...providerIdentity(hop), model: event.model || providerIdentity(hop).model };
+            this.emit('request:progress', { ...safe, ...this.activeProvider });
             options?.onProgress?.(safe);
           } });
           options?.signal?.throwIfAborted();
+          this.activeProvider = { ...providerIdentity(hop), model: response.model || this.activeProvider.model };
           break;
         } catch (error) {
           options?.signal?.throwIfAborted();
@@ -1743,7 +1754,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       this.retryAttempts = ['codex', 'local-agent', 'deterministic'].includes(newConfig.provider) ? 1 : 3;
     }
     this.config = { ...this.config, ...newConfig };
-    this.activeProvider = { provider: this.config.provider, model: this.config.model };
+    this.activeProvider = providerIdentity(this.config);
     this.adapter = this.createAdapter(this.config);
   }
 

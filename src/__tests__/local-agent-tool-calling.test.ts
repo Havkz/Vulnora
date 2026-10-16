@@ -5,6 +5,7 @@
  * the parser-hardening from the PR #16 audit (over-match, ReDoS, drift-abstains, string args, Codex coverage).
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
+afterEach(() => vi.unstubAllEnvs());
 
 // Both CLI adapters use the same authenticated, bounded subprocess bridge.
 vi.mock('../agent/local-agents.js', () => ({
@@ -125,6 +126,34 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
 });
 
 describe('codex backbone surfaces toolCalls (guards the CodexAdapter half of the fix)', () => {
+  it('shows the installed CLI model, the actual fallback response model, and tries Codex again on the next request', async () => {
+    vi.stubEnv('VULNORA_CODEX_MODEL', 'installed-codex-model');
+    const backbone = new LLMBackbone({ provider: 'local-agent', model: 'codex',
+      fallbackChain: [{ provider: 'local', model: 'configured-local', baseUrl: 'http://127.0.0.1:11434/api' }] });
+    backbone.setRetryConfig(1, 0);
+    expect(backbone.getActiveProvider()).toEqual({ provider: 'codex', model: 'installed-codex-model' });
+    backbone.updateConfig({ model: 'codex' });
+    expect(backbone.getActiveProvider()).toEqual({ provider: 'codex', model: 'installed-codex-model' });
+    const original = global.fetch;
+    try {
+      global.fetch = vi.fn(async () => {
+        expect(backbone.getActiveProvider()).toEqual({ provider: 'local', model: 'configured-local' });
+        return { ok: true, json: async () => ({ model: 'actual-local-model', message: { content: 'Local result.' } }) } as Response;
+      });
+      cli.mockRejectedValueOnce(new Error('CLI unavailable'));
+      await backbone.prompt('first');
+      expect(backbone.getActiveProvider()).toEqual({ provider: 'local', model: 'actual-local-model' });
+      cli.mockImplementationOnce(async (_id, _prompt, options) => {
+        expect(backbone.getActiveProvider()).toEqual({ provider: 'codex', model: 'installed-codex-model' });
+        options?.onProgress?.({ agent: 'codex', type: 'thread.started', model: 'reported-codex-model' });
+        expect(backbone.getActiveProvider().model).toBe('reported-codex-model');
+        return 'Codex result.';
+      });
+      expect(await backbone.prompt('second')).toBe('Codex result.');
+      expect(backbone.getActiveProvider()).toEqual({ provider: 'codex', model: 'reported-codex-model' });
+    } finally { global.fetch = original; }
+  });
+
   it('passes explicit model, cancellation and timeout through the shared CLI bridge', async () => {
     cli.mockResolvedValueOnce('done');
     const controller = new AbortController();

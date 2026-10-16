@@ -13,6 +13,8 @@ describe('installed launcher', () => {
     await mkdir(join(directory, '.vulnora', 'sandbox'), { recursive: true });
     await copyFile('scripts/start-windows-vulnora.ps1', join(directory, 'start.ps1'));
     await writeFile(join(directory, 'setup-windows-arsenal.ps1'), '# Fixture installation already complete');
+    await mkdir(join(directory, '.codex'), { recursive: true });
+    await writeFile(join(directory, '.codex', 'config.toml'), 'model = "installed-host-model"\n[profiles.other]\nmodel = "other-model"\n');
     await writeFile(join(directory, '.vulnora', 'sandbox', 'runtime.json'), JSON.stringify({
       distro: 'Fixture-Arsenal', user: 'fixture', appDirectory: '/home/fixture/release',
     }));
@@ -26,7 +28,11 @@ function Invoke-RestMethod {
   if ($global:unavailable) { $global:unavailable = $false; throw 'Fixture API unavailable' }
   return @{ models = @() }
 }
-function Get-Command { return [pscustomobject]@{ Source = 'fixture-ollama.exe' } }
+function Get-Command {
+  param([string[]]$Name)
+  if ($Name[0] -eq 'codex.exe') { return [pscustomobject]@{ Source = (Join-Path $PSScriptRoot 'native cli\\codex.exe') } }
+  return [pscustomobject]@{ Source = 'fixture-ollama.exe' }
+}
 function Start-Process {
   param($FilePath, $ArgumentList, $WindowStyle, [switch]$PassThru)
   if ($env:OLLAMA_HOST -ne '127.0.0.1:11434' -or $WindowStyle -ne 'Hidden') { throw 'Unsafe service launch' }
@@ -39,6 +45,9 @@ function wsl.exe {
 }
 & (Join-Path $PSScriptRoot 'start.ps1') --help
 if ($global:started -or $global:invocation[-1] -ne '--help') { throw 'Headless arguments not preserved' }
+if ($global:invocation -notcontains 'VULNORA_CODEX_MODEL=installed-host-model' -or
+    -not ($global:invocation | Where-Object { $_ -like 'VULNORA_CODEX_HOST_COMMAND=/mnt/*/native cli/codex.exe' })) { throw 'Host Codex/model not shared as separate literal arguments' }
+if ($global:invocation -contains 'VULNORA_CODEX_MODEL=other-model') { throw 'A profile changed the selected model' }
 & (Join-Path $PSScriptRoot 'start.ps1') interactive
 if ($global:started -or $global:stopped) { throw 'Existing service was touched' }
 $global:unavailable = $true; $global:exitCode = 130
