@@ -572,10 +572,9 @@ export class ToolOrchestrator {
       && normalizeToolCall(record.toolName, { parameters: record.requestParameters }).host === call.host);
   }
 
-  private portStageGate(call: NormalizedToolCall, context: ToolContext): ToolResult | null {
-    if (!['service_detection', 'full_port_scan'].includes(call.toolCategory)) return null;
-    const prior = this.priorPortEvidence(call);
-    const discoveredOpen = new Set(prior.flatMap(record => {
+  getOpenPorts(target: string): number[] {
+    const call = normalizeToolCall('nmap_scan', { parameters: { target } });
+    return [...new Set(this.priorPortEvidence(call).flatMap(record => {
       const ports = [...record.rawOutput.matchAll(/(\d+)\/tcp\s+open/g)].map(match => Number(match[1]));
       if (record.toolCategory === 'http_fetch') {
         const normalized = normalizeToolCall(record.toolName, { parameters: record.requestParameters });
@@ -586,7 +585,13 @@ export class ToolOrchestrator {
         ports.push(normalized.port || 443);
       }
       return ports;
-    }));
+    }))];
+  }
+
+  private portStageGate(call: NormalizedToolCall, context: ToolContext): ToolResult | null {
+    if (!['service_detection', 'full_port_scan'].includes(call.toolCategory)) return null;
+    const prior = this.priorPortEvidence(call);
+    const discoveredOpen = new Set(this.getOpenPorts(call.host));
     if (call.toolCategory === 'service_detection') {
       if (!discoveredOpen.size) return { success: false, error: 'ORCHESTRATOR configuration_error: service detection requires prior open-port evidence.', metadata: { orchestrationStatus: 'configuration_error', requiredCapability: 'port_discovery', missingEvidence: 'confirmed or strongly evidenced open ports', recommendedNextAction: 'schedule a smaller port-discovery fallback', retryAfterCapability: 'port_discovery' } };
       const requested = portSet(context.parameters.ports);

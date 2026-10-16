@@ -639,6 +639,20 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       return denied;
     }
 
+    if (toolName === 'nmap_scan' && context.purpose !== 'reporting') {
+      context = { ...context, parameters: { ...context.parameters, flags: context.parameters.flags || '-sV -T4' } };
+      const call = normalizeToolCall(toolName, context);
+      if (call.toolCategory === 'service_detection' && !this.orchestrator.getOpenPorts(call.host).length) {
+        const webPort = normalizeToolCall('http_request', { parameters: { url: context.target?.address || context.parameters.target } }).port;
+        const discovery = await this.execute(toolName, { ...context, repeatReason: undefined, parameters: {
+          target: call.host, ports: context.parameters.ports || [...new Set([80, 443, 8080, 8443, ...(webPort ? [webPort] : [])])].join(','), flags: '-sT -Pn --open',
+        } });
+        if (!discovery.success) return discovery;
+        if (!this.orchestrator.getOpenPorts(call.host).length) return { ...discovery,
+          output: `${discovery.output || ''}\nNo open ports found in the discovery set; service detection is not applicable.` };
+      }
+    }
+
     // Capability approval + spicy-action warning gate: an intrusive/credential/dangerous tool is inert
     // until it has been approved (interactively "approve once, then free", or via the headless
     // pre-authorization allowlist); the hottest actions also fire a loud, audited, non-blocking
@@ -862,6 +876,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
   // =============================================================================
   {
     name: 'dns_lookup',
+    supportsAbort: true,
     description: 'Perform DNS lookup for a target',
     category: 'recon',
     parameters: [
@@ -873,6 +888,20 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       const recordType = (context.parameters.type as string || 'A').toUpperCase();
 
       try {
+        if (recordType !== 'AXFR' && await isToolAvailable('dig')) {
+          if (!/^[a-z\d_](?:[a-z\d_.-]*[a-z\d_.])?$/i.test(domain) || !/^[A-Z][A-Z0-9]*$/.test(recordType)) {
+            return { success: false, error: 'Invalid DNS name or record type.' };
+          }
+          const timeout = webRequestTimeoutMs();
+          const result = await runSubprocess('dig', ['+noall', '+comments', '+answer', `+time=${Math.ceil(timeout / 1000)}`, '+tries=1', '-q', domain, '-t', recordType], { timeout, signal: context.abortSignal });
+          const status = result.stdout.match(/status:\s*([A-Z]+)/)?.[1];
+          if (result.exitCode !== 0 || (status && !['NOERROR', 'NXDOMAIN'].includes(status))) {
+            return { success: false, error: `DNS lookup failed: ${result.stderr.trim() || result.stdout.trim() || `dig exited ${result.exitCode}`}` };
+          }
+          const answers = result.stdout.split(/\r?\n/).filter(line => line.trim() && !line.startsWith(';'));
+          return { success: true, output: answers.length ? `DNS ${recordType} lookup for ${domain}:\n${answers.join('\n')}`
+            : `DNS ${recordType} lookup for ${domain}: no records found (${status || 'NOERROR'})` };
+        }
         let records: unknown = [];
 
         switch (recordType) {

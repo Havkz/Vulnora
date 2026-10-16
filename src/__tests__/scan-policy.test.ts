@@ -10,7 +10,7 @@ import { Socket } from 'node:net';
 
 const servers: Server[] = [];
 afterEach(async () => {
-  vi.restoreAllMocks(); vi.useRealTimers();
+  vi.restoreAllMocks(); vi.useRealTimers(); vi.unstubAllEnvs();
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => {
     server.closeAllConnections(); server.close(() => resolve());
   })));
@@ -203,6 +203,7 @@ describe('effective scanning behavior', () => {
   });
 
   it('schedules per-query cancellable DNS resolvers while preserving negative DNS answers', async () => {
+    vi.stubEnv('PATH', '');
     const starts: number[] = [];
     const resolve = vi.spyOn(dns.promises.Resolver.prototype, 'resolve4').mockImplementation(async () => {
       starts.push(Date.now());

@@ -46,6 +46,9 @@ blue, flags red, and quoted strings green. Commands use the executable and argum
 actually passed to the process, including enforced rate limits. Native checks appear
 as analyses rather than invented shell commands. Cached results do not repeat command
 blocks. Stage outcomes distinguish completed, incomplete and inapplicable work.
+DNS queries use installed `dig` and appear as actual command blocks. Service scans
+automatically discover ports first when no open-port evidence exists, then inspect
+only observed open ports; closed ports are a valid negative result.
 Website missions omit empty installation and command-and-control phases. Planning
 agents receive refreshed shared observations before each decision; vulnerability
 coverage is scheduled independently of remaining reconnaissance gaps.
