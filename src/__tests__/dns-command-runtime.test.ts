@@ -36,7 +36,7 @@ it.skipIf(process.platform === 'win32' || !dig)('runs real dig against local DNS
     expect(shared.metadata?.cacheHit).toBe(true); expect(queries).toBe(1); expect(events).toHaveLength(2);
     expect(first.metadata?.executionTraced).toBe(true);
     const rendered = formatProjectLog({ timestamp: Date.now(), category: 'execution:completed', data: events[1] }, false, createTheme(3));
-    expect(rendered).toContain('\u001b[38;5;25mdig'); expect(rendered).toContain('Ran'); expect(rendered).not.toContain('Analyzed');
+    expect(rendered).toContain(createTheme(3).command('dig')); expect(rendered).toContain('Ran'); expect(rendered).not.toContain('Analyzed');
     const negative = await arsenal.execute('dns_lookup', { parameters: { domain: 'fixture.test', type: 'AAAA' } });
     expect(negative.success).toBe(true); expect(negative.output).toContain('no records found (NXDOMAIN)');
     const failed = await arsenal.execute('dns_lookup', { parameters: { domain: 'fixture.test', type: 'MX' } });
