@@ -7,8 +7,8 @@ describe('actual command execution journal', () => {
     const arsenal = new Arsenal(); const events: ProcessEvent[] = [];
     arsenal.on('tool:process', event => events.push(event));
     arsenal.register({ name: 'fixture_progress', category: 'util', description: 'Owned progress fixture', parameters: [], handler: async () => {
-      const child = "let n=0; const t=setInterval(()=>{console.log('progress',++n);if(n===6){clearInterval(t);process.exit(0)}},150)";
-      const result = await runSubprocess(process.execPath, ['-e', child], { timeout: process.platform === 'win32' ? 800 : 500, idleTimeout: true });
+      const child = "let n=0; const t=setInterval(()=>{console.log('progress',++n);if(n===20){clearInterval(t);process.exit(0)}},150)";
+      const result = await runSubprocess(process.execPath, ['-e', child], { timeout: 2000, idleTimeout: true });
       return { success: result.exitCode === 0, output: result.stdout, error: result.stderr };
     } });
     expect((await arsenal.execute('fixture_progress', { parameters: {} })).success).toBe(true);

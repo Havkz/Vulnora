@@ -126,8 +126,8 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
   }
 
   async pause(): Promise<void> {
-    await this.command.pauseAndDrain();
     if (this.project.status !== 'completed') this.project.status = 'paused';
+    await this.command.pauseAndDrain();
     this.record('project:paused', { projectId: this.project.id });
     await this.persist();
   }
