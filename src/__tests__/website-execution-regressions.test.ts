@@ -20,6 +20,27 @@ afterEach(async () => {
 });
 
 describe('website execution repairs', () => {
+  it.each([false, true])('dispatches saved Scanning tasks through an installed CLI even with a full Recon cell (full=%s)', async full => {
+    const command = new VulnoraCommand({ name: 'Phase fixture', llm: { provider: 'local-agent', model: 'codex' },
+      operators: { maxConcurrent: 1 } }); commands.push(command);
+    command.targetEnv.addTarget({ name: 'Fixture', type: 'web_application', zone: 'external', address: 'https://fixture.test' });
+    const mission = command.mission.createMission({ name: 'Fixture', objectives: [], phases: [KillChainPhase.WEAPONIZE] }); command.mission.startMission(mission.id);
+    const task = command.mission.createTask({ missionId: mission.id, name: 'Web Application Security Testing',
+      description: 'Inspect https://fixture.test', phase: KillChainPhase.WEAPONIZE, operatorType: 'scanner' });
+    if (full) command.spawnOperator('Recon-Auto', 'recon');
+    const saved = command.exportCheckpoint(); saved.command.taskSeeded = true;
+    const restored = new VulnoraCommand({ name: 'Restored', llm: { provider: 'local-agent', model: 'codex' }, operators: { maxConcurrent: 1 } }); commands.push(restored);
+    restored.restoreCheckpoint(saved);
+    const spawn = restored.spawnOperator.bind(restored);
+    const assigned = vi.fn(async () => ({ success: true, output: 'Offline fixture completed', findings: [] }));
+    vi.spyOn(restored, 'spawnOperator').mockImplementation((...args) => {
+      const operator = spawn(...args); vi.spyOn(operator, 'assignTask').mockImplementation(assigned); return operator;
+    });
+    await (restored as unknown as { tick(): Promise<void> }).tick();
+    await vi.waitFor(() => expect(restored.mission.getTaskQueue().getTask(task.id)?.status).toBe('completed'));
+    expect(assigned).toHaveBeenCalledOnce(); expect(restored.cell.getAllOperators()[0].archetype).toBe('scanner');
+  });
+
   it('includes nested subdomains and DNS service labels without allowing sibling domains, other TLDs or IP suffixes', () => {
     const command = new VulnoraCommand({ name: 'Scope fixture', llm: { provider: 'mock', model: 'fixture' }, strictScope: true }); commands.push(command);
     command.targetEnv.addTarget({ name: 'Fixture', type: 'web_application', zone: 'external', address: 'https://example.com/' });
