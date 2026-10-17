@@ -30,6 +30,16 @@ async function open(store: ProjectStore, id: string) {
 }
 
 describe('persistent project sessions', () => {
+  it('persists the actual partial completion outcome in the project journal', async () => {
+    const { store, project } = await fixture(); const session = await open(store, project.id);
+    await session.start();
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
+    session.command.mission.completeMission(mission.id, 'PARTIALLY_COMPLETED');
+    await session.close();
+    const logs = (await store.readLogs(project.id)).events as ProjectLogEvent[];
+    expect(logs.find(event => event.category === 'project:completed')?.data).toMatchObject({ completionStatus: 'PARTIALLY_COMPLETED' });
+  });
+
   it('applies mode changes durably without resetting budgets, backoff, scope, or operator capacity', async () => {
     const { store, project } = await fixture();
     const session = await open(store, project.id);

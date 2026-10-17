@@ -20,6 +20,23 @@ afterEach(async () => {
 });
 
 describe('website execution repairs', () => {
+  it('does not report dangerous methods from 404s or send state-changing method probes', async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => {
+      methods.push(request.method || '');
+      response.statusCode = ['GET', 'HEAD'].includes(request.method || '') ? 200 : 404;
+      response.end('No method reflection');
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'http_methods_test'));
+    const result = await arsenal.execute('http_methods_test', { parameters: { url } });
+    expect(result.success).toBe(true); expect(result.findings).toBeUndefined();
+    expect(result.output).toContain('OPTIONS: 404 (not confirmed)');
+    expect(methods).not.toEqual(expect.arrayContaining(['POST']));
+    expect(methods.some(method => ['POST', 'PUT', 'DELETE', 'PATCH', 'CONNECT'].includes(method))).toBe(false);
+  });
+
   it.each([false, true])('dispatches saved Scanning tasks through an installed CLI even with a full Recon cell (full=%s)', async full => {
     const command = new VulnoraCommand({ name: 'Phase fixture', llm: { provider: 'local-agent', model: 'codex' },
       operators: { maxConcurrent: 1 } }); commands.push(command);

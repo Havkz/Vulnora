@@ -19,26 +19,20 @@ export interface AgentPromptProfile {
 
 export const AGENT_PROMPT_PROFILES: Record<AgentPromptProfileName, AgentPromptProfile> = {
   large_model: {
-    name: 'large_model', maxTools: 20, maxToolCalls: 20, maxIterations: 15,
-    maxTotalTokens: 50_000, responseTokens: 4096, finalResponseTokens: 2048,
+    name: 'large_model', maxTools: 20, maxToolCalls: Infinity, maxIterations: Infinity,
+    maxTotalTokens: Infinity, responseTokens: 4096, finalResponseTokens: 2048,
     findingLimit: 24, evidenceChars: 500, sourceChars: 6000,
   },
   small_model_30b: {
-    name: 'small_model_30b', maxTools: 12, maxToolCalls: 12, maxIterations: 12,
-    maxTotalTokens: 8_000, responseTokens: 1536, finalResponseTokens: 1024,
+    name: 'small_model_30b', maxTools: 12, maxToolCalls: Infinity, maxIterations: Infinity,
+    maxTotalTokens: Infinity, responseTokens: 1536, finalResponseTokens: 1024,
     findingLimit: 8, evidenceChars: 180, sourceChars: 1200,
   },
 };
 
-/** Resolve runtime overrides without mutating the shared profile constants. */
+/** Context and response sizing differ by model; cumulative work is unrestricted. */
 export function resolveAgentPromptProfile(name: AgentPromptProfileName): AgentPromptProfile {
-  const profile = AGENT_PROMPT_PROFILES[name];
-  if (name !== 'small_model_30b') return { ...profile };
-  const configured = Number(process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET || profile.maxTotalTokens);
-  const maxTotalTokens = Number.isFinite(configured) && configured >= 2_000
-    ? Math.min(50_000, Math.round(configured))
-    : profile.maxTotalTokens;
-  return { ...profile, maxTotalTokens };
+  return { ...AGENT_PROMPT_PROFILES[name] };
 }
 
 export interface PromptSecurityContext {
@@ -253,15 +247,15 @@ export function buildMissionPrompt(args: {
     `Limits: ${supplied.intensity || (hasReceipt ? 'receipt-defined intensity only' : 'non-intrusive and read-only only')}`,
     `Forbidden: ${forbidden.join(', ')}`,
     `Rate limit: ${supplied.rateLimit || 'Use tool defaults; stop on throttling or instability.'}`,
-    `Stop conditions: ${(supplied.stopConditions || ['validated result', 'missing scope', 'no testable path', 'two steps without new relevant evidence']).map(condition => assessment && condition === 'validated result' ? 'task objective covered' : condition).join(', ')}`,
+    `Stop conditions: ${(supplied.stopConditions || ['validated result', 'missing scope', 'no testable path']).map(condition => assessment && condition === 'validated result' ? 'task objective covered' : condition).join(', ')}`,
     '',
     'MISSION',
     `Objective: ${oneLine(task.description, profile.name === 'small_model_30b' ? 320 : 600)}`,
     task.operatorType === 'analyst' ? 'Success condition: An evidence-backed report with explicit limitations and coverage gaps.'
       : assessment ? 'Success condition: Cover the applicable checks in the task objective using shared and newly collected evidence. One HTTP response or technology fingerprint does not complete a vulnerability assessment.'
         : 'Success condition: One reproducible, in-scope result supported by a real tool response.',
-    assessment ? 'Stop condition: Task objective covered, no remaining testable path, blocked, or two steps without new relevant evidence. State every untested area explicitly.'
-      : 'Stop condition: Validated, not exploitable, inconclusive, blocked, or two steps without new relevant evidence.',
+    assessment ? 'Stop condition: Task objective covered, scope or required authorization missing, or no distinct testable path remains. State every untested area explicitly.'
+      : 'Stop condition: Validated, not exploitable, blocked, or no distinct testable path remains.',
     '',
     'KNOWN EVIDENCE',
     ...evidence,
@@ -274,7 +268,9 @@ export function buildMissionPrompt(args: {
     '',
     'TOOL USE',
     `${tools.length} relevant function schemas are available. ${toolPreference(tools)}`.trim(),
-    `Token budget: ${profile.maxTotalTokens} cumulative model tokens. This includes model prompt/input and response/output tokens across all steps; tool output counts when it is included in a later model prompt.`,
+    'No cumulative token or step budget. Keep each response concise; continue while distinct applicable checks remain.',
+    'A timeout, crash or transport error is not a negative security result. Retry safe checks with backoff, correct invalid arguments, or choose a relevant alternative. Report a persistent technical blocker explicitly.',
+    'Successful negative checks are useful evidence. Do not stop merely because no new vulnerability was found.',
     profile.name === 'large_model'
       ? 'Decision rationale: Explain briefly why the selected test is highest-value, what evidence would advance the mission, and what result would stop it. Do not restate known evidence.'
       : 'Decision rationale: Use one short evidence-linked sentence.',

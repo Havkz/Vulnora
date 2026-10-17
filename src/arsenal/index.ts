@@ -393,7 +393,7 @@ export interface ArsenalEvents {
 
 export interface ProcessEvent {
   id: string;
-  type: 'queued' | 'started' | 'completed' | 'cancelled';
+  type: 'queued' | 'started' | 'progress' | 'completed' | 'cancelled';
   command: string;
   args: string[];
   output?: string;
@@ -2640,7 +2640,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
     ],
     handler: async (context) => {
       const url = context.parameters.url as string;
-      const methods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD', 'TRACE', 'CONNECT'];
+      const methods = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
       const results: { method: string; status: number; allowed: boolean }[] = [];
       const dangerousMethods: string[] = [];
 
@@ -2656,18 +2656,13 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
         if (accessControlMethods) {
           optionsAllow = optionsAllow ? `${optionsAllow}, ${accessControlMethods}` : accessControlMethods;
         }
+        await optResp.text().catch(() => {});
       } catch {
         // OPTIONS request failed, continue with individual tests
       }
 
       // Test each method individually
       for (const method of methods) {
-        if (method === 'CONNECT') {
-          // CONNECT is for proxying, skip actual test
-          results.push({ method, status: 0, allowed: false });
-          continue;
-        }
-
         try {
           const response = await targetFetch(url, {
             method,
@@ -2676,16 +2671,14 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           });
 
           const status = response.status;
-          // Consider a method "allowed" if it doesn't return 405 Method Not Allowed
-          const allowed = status !== 405 && status !== 501;
+          const body = await response.text().catch(() => '');
+          const allowed = status >= 200 && status < 300;
           results.push({ method, status, allowed });
 
-          if (allowed && ['PUT', 'DELETE', 'TRACE', 'PATCH'].includes(method)) {
+          if (allowed && method === 'TRACE' && /^TRACE\s+\S+\s+HTTP\/1\.[01]/m.test(body)) {
             dangerousMethods.push(method);
           }
 
-          // Consume response body to prevent connection leaks
-          await response.text().catch(() => {});
         } catch {
           results.push({ method, status: 0, allowed: false });
         }
@@ -2693,21 +2686,22 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
 
       const output = results.map(r => {
         if (r.status === 0) return `  ${r.method}: unreachable`;
-        return `  ${r.method}: ${r.status} ${r.allowed ? '(allowed)' : '(not allowed)'}`;
+        return `  ${r.method}: ${r.status} ${r.allowed ? '(accepted)' : '(not confirmed)'}`;
       }).join('\n');
 
       const sections = [`HTTP Methods Test for ${url}:\n${output}`];
       if (optionsAllow) {
-        sections.push(`\nAllow header: ${optionsAllow}`);
+        sections.push(`\nAdvertised methods: ${optionsAllow} (not proof of unauthorized access)`);
       }
+      sections.push('\nPOST, PUT, DELETE, PATCH and CONNECT were not executed; method availability alone is not a vulnerability.');
 
       return {
         success: true,
         output: sections.join('\n'),
         findings: dangerousMethods.length > 0 ? [{
-          title: 'Dangerous HTTP Methods Enabled',
-          severity: 'medium' as const,
-          details: `The following potentially dangerous HTTP methods are enabled: ${dangerousMethods.join(', ')}. TRACE can enable XST attacks, PUT/DELETE may allow unauthorized modifications.`,
+          title: 'HTTP TRACE Reflects Request',
+          severity: 'low' as const,
+          details: 'A successful TRACE response reflected an HTTP request. Sensitive header exposure and exploitable impact have not been established.',
         }] : undefined,
       };
     },
@@ -3389,7 +3383,7 @@ export async function isToolAvailable(command: string): Promise<boolean> {
 export async function runSubprocess(
   command: string,
   args: string[],
-  options?: { timeout?: number; maxOutput?: number; signal?: AbortSignal }
+  options?: { timeout?: number; idleTimeout?: boolean; maxOutput?: number; signal?: AbortSignal }
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const timeout = options?.timeout ?? 60000;
   const maxOutput = options?.maxOutput ?? 1024 * 1024; // 1MB
@@ -3421,18 +3415,18 @@ export async function runSubprocess(
       try {
         return await policy.runNetwork(context.host, () => {
           admitted = true;
-          return executeSubprocess(command, argv, effectiveTimeout, maxOutput, signal, { id });
+          return executeSubprocess(command, argv, effectiveTimeout, maxOutput, signal, { id, idleTimeout: options?.idleTimeout || command === 'nuclei' });
         }, signal, true, command === 'nmap' ? 'ports' : 'web');
       } finally { if (!admitted) context.onProcess?.({ id, type: 'cancelled', command, args: argv }); }
     }
-    return await executeSubprocess(command, argv, timeout, maxOutput, signal);
+    return await executeSubprocess(command, argv, timeout, maxOutput, signal, { idleTimeout: options?.idleTimeout || command === 'nuclei' });
   } finally {
     if (temporary) await rm(temporary, { recursive: true, force: true });
   }
 }
 
 async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal,
-  capture: { id?: string; bytes?: boolean; input?: string } = {}): Promise<{ stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }> {
+  capture: { id?: string; bytes?: boolean; input?: string; idleTimeout?: boolean } = {}): Promise<{ stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }> {
   const onProcess = fetchContext.getStore()?.onProcess;
   const id = capture.id || randomUUID(); const startedAt = Date.now();
   const finish = (result: { stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }) => {
@@ -3459,7 +3453,32 @@ async function executeSubprocess(command: string, args: string[], timeout: numbe
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') { failure = String(error); child.kill('SIGKILL'); } }
       }
     };
+    let lastProgress = 0;
+    let nucleiRequests = -1;
+    const lineBuffers = { stdout: '', stderr: '' };
     const captureOutput = (stream: 'stdout' | 'stderr', data: Buffer) => {
+      let advancing = command !== 'nuclei';
+      if (capture.idleTimeout && command === 'nuclei') {
+        const lines = (lineBuffers[stream] + data.toString()).split('\n');
+        lineBuffers[stream] = (lines.pop() || '').slice(-65536);
+        for (const line of lines) {
+          try {
+            const event = JSON.parse(line);
+            const requests = Number(event.requests);
+            if (event['template-id'] || (Number.isFinite(requests) && requests > nucleiRequests)) {
+              advancing = true;
+              if (Number.isFinite(requests)) nucleiRequests = requests;
+            }
+          } catch { /* Startup diagnostics are retained, but do not prove scan progress. */ }
+        }
+      }
+      if (capture.idleTimeout && advancing) {
+        timer?.refresh();
+        if (Date.now() - lastProgress >= 1000) {
+          lastProgress = Date.now();
+          onProcess?.({ id, type: 'progress', command, args, timeoutMs: timeout });
+        }
+      }
       const room = Math.max(0, maxOutput - sizes[stream]);
       if (room) output[stream].push(data.subarray(0, room));
       sizes[stream] += data.length;
@@ -3729,7 +3748,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       const severity = context.parameters.severity as string || 'medium,high,critical';
       const tags = context.parameters.tags as string | undefined;
 
-      const args = ['-target', target, '-severity', severity, '-silent', '-jsonl'];
+      const args = ['-target', target, '-severity', severity, '-jsonl', '-stats-json', '-stats-interval', '10'];
       if (tags) args.push('-tags', tags);
 
       const result = await runSubprocess('nuclei', args, { timeout: 300000, signal: context.abortSignal });
@@ -3739,6 +3758,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       for (const line of result.stdout.split('\n').filter(l => l.trim())) {
         try {
           const entry = JSON.parse(line);
+          if (!entry['template-id'] || !entry.info) continue;
           findings.push({
             title: entry.info?.name || entry['template-id'] || 'Unknown',
             severity: entry.info?.severity || 'info',

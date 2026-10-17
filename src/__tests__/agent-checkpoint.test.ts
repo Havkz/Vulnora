@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentLoop, type AgentLoopOptions } from '../agent/index.js';
-import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from '../agent/checkpoint.js';
+import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, ToolRecoveryRequiredError, UnsafeResumeError } from '../agent/checkpoint.js';
 import type { Arsenal } from '../arsenal/index.js';
 import type { LLMBackbone } from '../llm/index.js';
 import { ProjectStore } from '../projects/store.js';
@@ -32,6 +32,39 @@ function fixture(options: AgentLoopOptions = {}) {
 }
 
 describe('granular agent recovery', () => {
+  it('continues beyond the former token, step and zero-finding limits while distinct checks return useful negatives', async () => {
+    const run = fixture(); run.llm.getPromptProfile = () => 'small_model_30b';
+    for (let index = 0; index < 22; index++) run.chatWithTools.mockResolvedValueOnce({
+      content: 'Inspect next input', model: 'fixture', toolCalls: [call(String(index))], usage: { totalTokens: 10000 },
+    });
+    const result = await run.loop.run(newTask(), '', target);
+    expect(run.execute).toHaveBeenCalledTimes(22); expect(run.chatWithTools).toHaveBeenCalledTimes(23);
+    expect(result.tokensUsed).toBeGreaterThan(200000); expect(result.hitLimit).toBe(false);
+    expect(run.chatWithTools.mock.calls.flatMap(([messages]) => messages).map(message => message.content).join('\n')).not.toContain('No new relevant evidence after');
+  });
+
+  it('retries safe failures with backoff, keeps successful evidence cached, and accepts the eventual result', async () => {
+    const run = fixture(); const task = newTask();
+    run.execute.mockResolvedValueOnce({ success: false, error: 'Process killed (timeout)' })
+      .mockResolvedValueOnce({ success: false, error: 'fixture process crashed' })
+      .mockResolvedValueOnce({ success: true, output: 'Recovered response' });
+    run.chatWithTools.mockResolvedValueOnce({ content: 'Inspect', model: 'fixture', toolCalls: [call('retry')] });
+    const result = await run.loop.run(task, '', target);
+    expect(run.execute).toHaveBeenCalledTimes(3); expect(result.steps.find(step => step.toolName)?.toolResult?.output).toBe('Recovered response');
+    expect(task.checkpoint?.seenCalls).toContainEqual([expect.stringContaining('http_request:'), 'Recovered response']);
+  });
+
+  it('pauses an unresolved recovery plan instead of completing it and retries on resume', async () => {
+    const run = fixture(); const task = newTask(); task.executionPlan = { toolName: 'http_request', parameters: call('retry').arguments };
+    run.execute.mockResolvedValue({ success: false, error: 'Process killed (timeout)' });
+    await expect(run.loop.run(task, '', target)).rejects.toBeInstanceOf(ToolRecoveryRequiredError);
+    expect(run.execute).toHaveBeenCalledTimes(3); expect(task.checkpoint?.phase).toBe('bootstrap');
+    expect(task.checkpoint?.result).toBeUndefined(); expect(task.checkpoint?.seenCalls).toEqual([]);
+    run.execute.mockResolvedValue({ success: true, output: 'Recovered' });
+    expect((await run.loop.run(task, '', target)).success).toBe(true);
+    expect(run.execute).toHaveBeenCalledTimes(4);
+  });
+
   it('finishes a saved partial batch in evidence-only mode without requesting another plan or summary', async () => {
     const controller = new AbortController(); const task = newTask();
     const first = fixture({ onCheckpoint: async checkpoint => {

@@ -144,7 +144,7 @@ const ARG_TEMPLATES: Record<string, ArgTemplate> = {
     build: (target, params) => {
       const severity = str(params.severity) ?? 'medium,high,critical';
       const tags = str(params.tags);
-      const args = ['-target', target, '-severity', severity, '-silent', '-jsonl'];
+      const args = ['-target', target, '-severity', severity, '-jsonl', '-stats-json', '-stats-interval', '10'];
       if (tags) args.push('-tags', tags);
       return args;
     },

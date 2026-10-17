@@ -76,33 +76,34 @@ describe('agent prompt profiles', () => {
     expect(compact).toContain('enum=["GET","HEAD"] default="GET"');
     expect(compact.length).toBeLessThan(renderToolContract([tool]).length);
   });
-  it('uses the bounded 30B budget', () => {
+  it('keeps the compact 30B context without cumulative work limits', () => {
     expect(AGENT_PROMPT_PROFILES.small_model_30b).toMatchObject({
-      maxTools: 12, maxToolCalls: 12, maxIterations: 12, maxTotalTokens: 8_000,
+      maxTools: 12, maxToolCalls: Infinity, maxIterations: Infinity, maxTotalTokens: Infinity,
       responseTokens: 1536,
     });
   });
 
-  it('allows a bounded runtime override of the total 30B token budget', () => {
+  it('does not restore the removed cumulative budget from an old environment override', () => {
     const previous = process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
     try {
       process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '9500';
-      expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(9500);
+      expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(Infinity);
       process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = '500';
-      expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(8000);
+      expect(resolveAgentPromptProfile('small_model_30b').maxTotalTokens).toBe(Infinity);
     } finally {
       if (previous === undefined) delete process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET;
       else process.env.VULNORA_SMALL_MODEL_TOTAL_TOKEN_BUDGET = previous;
     }
   });
 
-  it('uses the mission-wide specialization and documents cumulative token accounting', () => {
+  it('explains evidence-driven continuation and technical recovery without a cumulative budget', () => {
     const prompt = buildMissionPrompt({
       task: task(), target: target(), tools: [], profile: AGENT_PROMPT_PROFILES.small_model_30b,
     });
     expect(prompt).toContain('Specialization: Validate only reproducible, in-scope security findings relevant to the mission.');
-    expect(prompt).toContain('8000 cumulative model tokens');
-    expect(prompt).toContain('tool output counts when it is included in a later model prompt');
+    expect(prompt).toContain('No cumulative token or step budget');
+    expect(prompt).toContain('A timeout, crash or transport error is not a negative security result');
+    expect(prompt).not.toContain('two steps without new relevant evidence');
   });
 
   it('deduplicates findings and keeps the strongest evidence state', () => {

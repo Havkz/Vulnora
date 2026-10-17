@@ -111,4 +111,11 @@ describe('readable project logs', () => {
     expect(formatProjectLog({ timestamp: 1, category: 'project:completed', data: { phase: 'actions_on_objectives' } })).toContain('Reporting completed');
     expect(formatProjectLog({ timestamp: 1, category: 'project:completed', data: {} })).toBe('Scan completed');
   });
+
+  it('shows partial completion and warnings instead of an unconditional successful completion', () => {
+    const event = (completionStatus: string) => ({ timestamp: 1, category: 'project:completed', data: { phase: 'actions_on_objectives', completionStatus } });
+    expect(formatProjectLog(event('PARTIALLY_COMPLETED'))).toContain('Scan partially completed · untested areas remain');
+    expect(formatProjectLog(event('COMPLETED_WITH_WARNINGS'))).toContain('Scan completed with warnings');
+    expect(formatProjectLog({ timestamp: 1, category: 'execution:progress', data: {} })).toBe('');
+  });
 });

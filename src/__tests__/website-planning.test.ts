@@ -14,6 +14,30 @@ function fixture() {
 }
 
 describe('website mission planning', () => {
+  it('retries technical coverage failures and pauses persistently broken work instead of advancing to reporting', async () => {
+    const command = fixture(); const mission = command.mission.getActiveMission();
+    if (!mission) throw new Error('Missing fixture mission'); command.mission.advancePhase(mission.id);
+    vi.spyOn(command.arsenal, 'getReadyToolDefinitions').mockResolvedValue([
+      { name: 'nuclei_scan', description: 'Vulnerabilities', parameters: { type: 'object', properties: {} } },
+    ]);
+    const failure = { id: 'failed', toolName: 'nuclei_scan', toolCategory: 'vulnerability_scan', target: 'https://fixture.test',
+      requestParameters: { target: 'https://fixture.test', tags: 'exposure' }, timestamp: Date.now(), status: 'failed',
+      executionStatus: 'failed', resultType: 'inconclusive', errorType: 'timeout', result: { success: false, error: 'timeout' } } as unknown as import('../orchestrator/tool-orchestrator.js').EvidenceRecord;
+    vi.spyOn(command.arsenal.getOrchestrator(), 'getEvidence').mockReturnValue([failure]);
+    const planner = command as unknown as { ensureCoverageBeforeAdvance(mission: Mission, queue: TaskQueue): Promise<boolean>; coverageRecoveryAttempts: Map<string, number> };
+    const queue = command.mission.getTaskQueue();
+    expect(await planner.ensureCoverageBeforeAdvance(mission, queue)).toBe(true);
+    expect(queue.getForMission(mission.id)[0].executionPlan).toMatchObject({ toolName: 'nuclei_scan', repeatReason: 'previous_failure', parameters: failure.requestParameters });
+    for (const task of queue.getForMission(mission.id)) queue.fail(task.id, 'timeout');
+    planner.coverageRecoveryAttempts.set(`${mission.id}:https://fixture.test:vulnerability_scanning`, 3);
+    const blocked = vi.fn(); command.on('recovery:blocked', blocked);
+    expect(await planner.ensureCoverageBeforeAdvance(mission, queue)).toBe(true);
+    expect(command.isRunning()).toBe(false); expect(mission.currentPhase).toBe(KillChainPhase.WEAPONIZE); expect(blocked).toHaveBeenCalledOnce();
+    command.resume(); expect(command.isRunning()).toBe(true);
+    expect(await planner.ensureCoverageBeforeAdvance(mission, queue)).toBe(true);
+    expect(queue.getPending().some(task => task.executionPlan?.toolName === 'nuclei_scan')).toBe(true);
+  });
+
   it('uses only implemented website phases and does not claim an empty impact validation completed', () => {
     const command = fixture(); const mission = command.mission.getActiveMission();
     expect(mission?.phases).toEqual([KillChainPhase.RECON, KillChainPhase.WEAPONIZE, KillChainPhase.DELIVER, KillChainPhase.ACTIONS]);

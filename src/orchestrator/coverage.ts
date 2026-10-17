@@ -137,6 +137,18 @@ export function planCoverageRecovery(params: {
   const url = address.href;
   const webPorts = [...new Set([80, 443, Number(address.port) || 443])].join(',');
 
+  for (const capability of snapshot.retryable) {
+    if (snapshot.entries[capability].status !== 'failed_retryable' || count(capability) >= 3) continue;
+    const record = [...params.records].reverse().find(item => {
+      try { return targetUrl(item.target).hostname === address.hostname && belongs(item, capability); }
+      catch { return false; }
+    });
+    if (record && availableTools.has(record.toolName)) return {
+      capability, toolName: record.toolName, parameters: { ...record.requestParameters }, repeatReason: 'previous_failure',
+      description: `Retry ${capability} after ${record.errorType || 'technical failure'}; prior failure is not a negative result`,
+    };
+  }
+
   if (open('dns_enumeration') && count('dns_enumeration') < 1 && availableTools.has('dns_lookup')) return { capability: 'dns_enumeration', toolName: 'dns_lookup', parameters: { domain: target, type: 'A' }, repeatReason: 'previous_failure', description: 'DNS baseline recovery' };
   if (open('http_probe') && count('http_probe') < 2 && availableTools.has('http_request')) return { capability: 'http_probe', toolName: 'http_request', parameters: { url, method: 'GET', headers: {}, body: '' }, repeatReason: 'previous_failure', description: 'HTTP baseline recovery' };
   if (open('tls_analysis') && count('tls_analysis') < 1 && availableTools.has('ssl_scan')) return { capability: 'tls_analysis', toolName: 'ssl_scan', parameters: { host: target, port: address.protocol === 'https:' ? Number(address.port || 443) : 443 }, repeatReason: 'previous_failure', description: 'TLS coverage recovery' };

@@ -23,7 +23,7 @@ import {
 import type { LLMBackbone } from '../llm/index.js';
 import type { Arsenal } from '../arsenal/index.js';
 import type { AgentLoop, AgentResult } from '../agent/index.js';
-import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError, validateTaskDecomposition } from '../agent/checkpoint.js';
+import { CheckpointRestoreError, ToolRecoveryRequiredError, CheckpointWriteError, UnsafeResumeError, validateTaskDecomposition } from '../agent/checkpoint.js';
 import type { ToolResult } from '../types/index.js';
 
 export function evaluateExploitExecution(result: Pick<AgentResult, 'steps'>): {
@@ -434,7 +434,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       return result;
     } catch (error) {
       if (!isCurrent()) return cancelled();
-      if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) {
+      if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError || error instanceof ToolRecoveryRequiredError) {
         this._state.currentTask = null;
         this.activeTask = undefined;
         this.setStatus('idle');
@@ -477,7 +477,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       }
       catch (error) {
         signal.throwIfAborted();
-        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError || error instanceof ToolRecoveryRequiredError) throw error;
         // Four children per level grow exponentially; recovery is capped at three levels.
         if (!this.llm || depth >= Math.min(this.config.maxRetries, 3)) throw error;
         task.decomposition = { version: 1, phase: 'planning', reason: error instanceof Error ? error.message : String(error), tasks: [] };
@@ -505,7 +505,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       try { child.result = await this.executeRecoverable(child, target, signal, depth + 1); }
       catch (error) {
         signal.throwIfAborted();
-        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError || error instanceof ToolRecoveryRequiredError) throw error;
         child.result = { success: false, error: error instanceof Error ? error.message : String(error) };
         if (!child.decomposition) this._state.failedTasks++;
         this.emit('task:failed', { task: child, error: child.result.error || 'Child task failed' });
@@ -629,7 +629,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
       const executionSuccess = !exploitLane || exploitEvaluation.success;
       const outcomeStatus = exploitLane ? exploitEvaluation.outcomeStatus : undefined;
       const policySkip = result.steps.map(step => String(step.toolResult?.metadata?.orchestrationStatus || '')).find(reason =>
-        ['scope_denied', 'not_authorized', 'budget_exceeded', 'dependency_missing', 'waf_blocked', 'configuration_error'].includes(reason)
+        ['scope_denied', 'not_authorized', 'budget_exceeded', 'dependency_missing', 'waf_blocked'].includes(reason)
       ) as TaskResult['skipReason'] | undefined;
 
       return {

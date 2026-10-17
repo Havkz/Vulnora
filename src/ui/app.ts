@@ -263,7 +263,10 @@ export class InteractiveApp {
       const paused = !completed && !session.command.isRunning();
       this.surface.paused = paused;
       const blocked = !!this.issue && !session.command.isRunning();
-      const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
+      const outcome = mission?.completionStatus;
+      const completionLabel = outcome === 'PARTIALLY_COMPLETED' ? 'Partially completed'
+        : outcome === 'COMPLETED_WITH_WARNINGS' ? 'Completed with warnings' : outcome === 'BLOCKED' ? 'Blocked' : outcome === 'FAILED' ? 'Failed' : 'Completed';
+      const header = [`Stage: ${completed ? completionLabel : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
         dense ? `${session.project.status} · ${session.project.progress.toFixed(1)}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress.toFixed(1)}%`,
         session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
       const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),

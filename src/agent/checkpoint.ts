@@ -48,6 +48,10 @@ export class CheckpointRestoreError extends Error {
   }
 }
 
+export class ToolRecoveryRequiredError extends Error {
+  constructor(message: string) { super(message); this.name = 'ToolRecoveryRequiredError'; }
+}
+
 export function checkpointContract(task: Task, target?: Target): string {
   return JSON.stringify({ id: task.id, missionId: task.missionId, name: task.name,
     description: task.description, phase: task.phase, operatorType: task.operatorType,

@@ -8,11 +8,12 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { isContextCompactionNotice, LLMUnavailableError, type LLMBackbone } from '../llm/index.js';
 import { KillChainPhase } from '../types/index.js';
 import { hostFromTargetValue, type Arsenal } from '../arsenal/index.js';
-import { normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
-import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
+import { errorType, normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
+import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, ToolRecoveryRequiredError, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
 import {
   buildMissionPrompt,
   resolveAgentPromptProfile,
@@ -35,9 +36,9 @@ import type {
 // =============================================================================
 
 export interface AgentLoopOptions {
-  /** Max ReAct iterations before forcing a conclusion (default: 15) */
+  /** Optional caller-imposed iteration cap; unrestricted by default. */
   maxIterations?: number;
-  /** Max total tokens to spend (default: 50000) */
+  /** Optional caller-imposed cumulative token cap; unrestricted by default. */
   maxTokens?: number;
   /** Tool categories to expose (default: all) */
   toolCategories?: string[];
@@ -88,15 +89,18 @@ export interface AgentResult {
   finalSummaryError?: string;
 }
 
+function isTechnicalFailure(result?: ToolResult): boolean {
+  return !!result && !result.success && ['timeout', 'network_unreachable', 'tool_crash', 'target_error'].includes(errorType(result) || '');
+}
+
 export function maxToolCallsPerTask(toolName: string): number | undefined {
   if (toolName === 'nmap_scan') {
-    const configured = Number(process.env.VULNORA_NMAP_MAX_CALLS_PER_TASK || 4);
-    return Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.min(10, Math.round(configured))) : 4;
+    const configured = Number(process.env.VULNORA_NMAP_MAX_CALLS_PER_TASK);
+    return Number.isFinite(configured) && configured > 0 ? Math.round(configured) : undefined;
   }
-  if (toolName === 'port_scan') return 4;
   if (toolName === 'nuclei_scan') {
-    const configured = Number(process.env.VULNORA_NUCLEI_MAX_CALLS_PER_TASK || 4);
-    return Number.isFinite(configured) && configured > 0 ? Math.max(1, Math.min(8, Math.round(configured))) : 4;
+    const configured = Number(process.env.VULNORA_NUCLEI_MAX_CALLS_PER_TASK);
+    return Number.isFinite(configured) && configured > 0 ? Math.round(configured) : undefined;
   }
   return undefined;
 }
@@ -147,8 +151,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     this.arsenal = arsenal;
     this.onCheckpoint = options?.onCheckpoint;
     this.options = {
-      maxIterations: options?.maxIterations ?? 15,
-      maxTokens: options?.maxTokens ?? 50000,
+      maxIterations: options?.maxIterations ?? Infinity,
+      maxTokens: options?.maxTokens ?? Infinity,
       toolCategories: options?.toolCategories ?? [],
       tools: options?.tools ?? [],
       verboseToolOutput: options?.verboseToolOutput ?? true,
@@ -182,8 +186,12 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     const allFindings: ToolFinding[] = saved?.findings || [];
     let tokensUsed = saved?.tokensUsed || 0;
     let hitLimit = false;
-    // anti-stall: dedup identical tool calls + detect runs of no-new-findings (ported from the hunter)
+    // Cache completed observations, never transient tool failures.
     const seenCalls = new Map<string, string>(saved?.seenCalls);
+    for (const key of seenCalls.keys()) {
+      const latest = [...steps].reverse().find(step => `${step.toolName}:${JSON.stringify(step.toolArgs || {})}` === key);
+      if (latest?.toolResult?.success === false && !latest.toolResult.error?.startsWith('Duplicate call')) seenCalls.delete(key);
+    }
     const toolCallCounts = new Map<string, number>(saved?.toolCallCounts);
     const exhaustedToolWarnings = new Set<string>(saved?.exhaustedToolWarnings);
     let noProgress = saved?.noProgress || 0;
@@ -231,7 +239,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       : '';
 
     // Build initial messages
-    const messages: LLMMessage[] = saved?.messages || [
+    const initialMessages: LLMMessage[] = [
       {
         role: 'system',
         content: 'Follow the mission contract exactly. Function schemas are authoritative. Never invent observations, authorization, tool results, or impact.',
@@ -251,6 +259,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         }),
       },
     ];
+    const messages: LLMMessage[] = saved?.messages.filter(message => !(message.role === 'user'
+      && /^(?:No new relevant evidence after|The step budget is exhausted)/.test(message.content))) || initialMessages;
+    const missionPrompt = messages.find(message => message.role === 'user' && message.content.startsWith('ROLE\n'));
+    if (missionPrompt) missionPrompt.content = initialMessages[1].content;
     const refreshEvidence = () => {
       const active = this.arsenal.getOrchestrator().getActiveCalls?.()
         .filter(call => !evidenceTarget || call.host === evidenceTarget).slice(0, profile.maxTools) || [];
@@ -304,7 +316,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       toolCallCounts.set(bootstrapCall.name, 1);
       totalToolCalls++;
       steps.push(toolStep);
-      seenCalls.set(
+      if (toolStep.toolResult?.success) seenCalls.set(
         `${bootstrapCall.name}:${JSON.stringify(bootstrapCall.arguments || {})}`,
         String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160)
       );
@@ -317,6 +329,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       }
 
       if (task.executionPlan) {
+        if (isTechnicalFailure(toolStep.toolResult)) {
+          bootstrapCompleted = false;
+          await publish('bootstrap');
+          throw new ToolRecoveryRequiredError(`${bootstrapCall.name} still fails after recovery attempts: ${toolStep.toolResult?.error || 'technical error'}. Progress is saved; resume retries the check.`);
+        }
         const result: AgentResult = {
           success: toolStep.toolResult?.success === true,
           summary: this.formatToolResult(toolStep.toolResult),
@@ -445,8 +462,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
                 await publish('tool_batch');
                 toolStep = await this.executeTool(toolCall, target, task, i, signal, activeAttempt,
                   savedReceipt?.attemptId === activeAttempt.attemptId ? savedReceipt : undefined);
-                toolCallCounts.set(toolCall.name, count + 1);
-                seenCalls.set(callHash, String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160));
+                if (toolStep.toolResult?.success) {
+                  toolCallCounts.set(toolCall.name, count + 1);
+                  seenCalls.set(callHash, String(toolStep.toolResult.output || 'no output').replace(/\s+/g, ' ').slice(0, 160));
+                }
               }
             }
             totalToolCalls++;
@@ -488,21 +507,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
             if (pendingCalls.length > 0) await publish('tool_batch');
           }
 
-          // ANTI-STALL: after a run of iterations with no new findings, steer (once) toward a new
-          // vector or a final debrief — don't let the agent grind the budget on a dead approach.
-          noProgress = allFindings.length > findingsBeforeBatch ? 0 : noProgress + 1;
-          const noProgressLimit = profile.name === 'small_model_30b' ? 2 : 4;
-          if (noProgress >= noProgressLimit && i < maxIterations - 1) {
-            messages.push({
-              role: 'user',
-              content: `No new relevant evidence after ${noProgressLimit} steps. Stop and return the required RESULT format unless one genuinely different, specific test has a concrete evidence-based reason.`,
-            });
-            if (profile.name === 'small_model_30b') {
-              hitLimit = true;
-              break;
-            }
-            noProgress = 0;
-          }
+          noProgress = 0;
         } else {
           if (isContextCompactionNotice(response.content || '')) {
             messages.push({
@@ -512,6 +517,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
             iteration = i + 1;
             await publish('planning');
             continue;
+          }
+          const lastTool = steps.filter(step => step.type === 'tool_call').at(-1);
+          if (lastTool && isTechnicalFailure(lastTool.toolResult)) {
+            await publish('planning');
+            throw new ToolRecoveryRequiredError(`${lastTool.toolName}: unresolved technical failure. Progress is saved; resume retries the unfinished assessment.`);
           }
           // LLM finished reasoning — this is the final answer.
           const finalStep: AgentStep = {
@@ -552,23 +562,19 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           break;
         }
       } catch (error) {
-        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError) throw error;
+        if (error instanceof CheckpointWriteError || error instanceof CheckpointRestoreError || error instanceof UnsafeResumeError || error instanceof ToolRecoveryRequiredError) throw error;
         signal?.throwIfAborted();
         this.emit('agent:error', { error: error as Error, step: i });
 
         // On error, try to continue with a reduced context
         const errMsg = error instanceof Error ? error.message : String(error);
         lastLlmError = errMsg;
-        if (error instanceof LLMUnavailableError) { modelUnavailable = true; break; }
         consecutiveLlmFailures++;
-        if (consecutiveLlmFailures >= 2) {
-          // Repeating a dead primary+fallback request for every remaining ReAct
-          // iteration previously kept a mission alive for hours. Preserve all
-          // collected tool evidence and finish the task deterministically.
-          modelUnavailable = true;
-          hitLimit = true;
-          break;
+        if (error instanceof LLMUnavailableError || consecutiveLlmFailures >= 3) {
+          await publish('planning');
+          throw new ToolRecoveryRequiredError(`AI planning is unavailable: ${errMsg}. Progress is saved; resume retries the configured providers.`);
         }
+        await delay(consecutiveLlmFailures * 1000, undefined, { signal });
         messages.push({
           role: 'user',
           content: `[System: Tool execution error: ${errMsg}. Please continue with available information or try a different approach.]`,
@@ -746,7 +752,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         || target?.metadata?.scopeReceipt
         || target?.metadata?.receipt;
       if (receipt) this.emit('agent:thinking', { content: `Using the persisted completed result for ${toolCall.name}; no new tool execution.` });
-      toolResult = receipt ? receipt.result : await this.arsenal.execute(toolCall.name, {
+      const execute = () => this.arsenal.execute(toolCall.name, {
         target,
         operator: this.options.sourceAgent,
         mission: task.missionId,
@@ -758,7 +764,20 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         repeatReason: task.executionPlan?.toolName === toolCall.name ? task.executionPlan.repeatReason : undefined,
         parameters: toolCall.arguments,
         abortSignal: signal,
+      }).catch((error: unknown) => {
+        if (error instanceof CheckpointWriteError || /Tool ".*" not found/.test(String(error))) throw error;
+        signal?.throwIfAborted();
+        return { success: false, error: error instanceof Error ? error.message : String(error) };
       });
+      toolResult = receipt ? receipt.result : await execute();
+      if (!receipt && (canReplayInterruptedCall(toolCall) || toolCall.name === 'nuclei_scan')) {
+        for (let retry = 1; retry <= 2 && isTechnicalFailure(toolResult); retry++) {
+          this.emit('agent:tool_result', { name: toolCall.name, result: toolResult, source });
+          this.emit('agent:thinking', { content: `${toolCall.name}: retry ${retry}/2 after ${errorType(toolResult)}; waiting ${retry}s.` });
+          await delay(retry * 1000, undefined, { signal });
+          toolResult = await execute();
+        }
+      }
     } catch (err) {
       if (err instanceof CheckpointWriteError) throw err;
       signal?.throwIfAborted();

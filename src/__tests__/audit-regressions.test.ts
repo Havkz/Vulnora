@@ -13,6 +13,7 @@ import { OperatorAgent } from '../operators/index.js';
 import { LLMBackbone } from '../llm/index.js';
 import { commandPath } from '../command-path.js';
 import { AgentLoop } from '../agent/index.js';
+import { ToolRecoveryRequiredError } from '../agent/checkpoint.js';
 import type { Task, TaskResult, LLMConfig } from '../types/index.js';
 import { KillChainPhase } from '../types/index.js';
 
@@ -94,7 +95,7 @@ describe('audit security regressions', () => {
     expect(documentation?.details).not.toContain('/swagger');
   });
 
-  it.each([true, false])('executes recovery outside role defaults once, with actual success=%s and no model call', async success => {
+  it.each([true, false])('executes recovery outside role defaults and pauses persistent failure (success=%s)', async success => {
     const arsenal = new Arsenal();
     const handler = vi.fn(async () => ({ success, output: success ? 'TLS observation' : undefined, error: success ? undefined : 'TLS unavailable' }));
     arsenal.register({ name: 'ssl_scan', description: 'TLS', category: 'recon', handler });
@@ -102,11 +103,16 @@ describe('audit security regressions', () => {
     const chat = vi.spyOn(llm, 'chatWithTools');
     const loop = new AgentLoop(llm, arsenal, { tools: ['dns_lookup'] });
     const task: Task = { id: 'recovery', missionId: 'test', name: 'Coverage Recovery', description: 'TLS', operatorType: 'recon', phase: KillChainPhase.RECON, status: 'in_progress', priority: 1, dependencies: [], createdAt: 1, executionPlan: { toolName: 'ssl_scan', parameters: { host: '127.0.0.1' } } };
-    const result = await loop.run(task, '', { id: 'local', address: '127.0.0.1' } as never);
-    expect(handler).toHaveBeenCalledTimes(1);
+    const pending = loop.run(task, '', { id: 'local', address: '127.0.0.1' } as never);
+    if (success) {
+      const result = await pending;
+      expect(result.success).toBe(true); expect(result.steps).toHaveLength(1);
+    } else {
+      await expect(pending).rejects.toBeInstanceOf(ToolRecoveryRequiredError);
+      expect(task.checkpoint?.phase).toBe('bootstrap');
+    }
+    expect(handler).toHaveBeenCalledTimes(success ? 1 : 3);
     expect(chat).not.toHaveBeenCalled();
-    expect(result.success).toBe(success);
-    expect(result.steps).toHaveLength(1);
   });
 
   it('does not advertise absent executables while preserving built-in tools', async () => {

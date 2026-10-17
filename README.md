@@ -68,6 +68,8 @@ Select providers and scanning behavior in **Settings**. The selected primary pro
 
 Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` selects an alternative directory. Private CLI credential files remain owned by their providers and are neither copied nor modified.
 
+Assessments have no default cumulative AI token or step budget. Technical failures trigger recovery or a saved pause; partial coverage is shown explicitly. See [execution and recovery rules](docs/SCAN_EXECUTION.md).
+
 ## Architecture
 
 **Terminal UI → Project session → Task orchestration → Tool execution**

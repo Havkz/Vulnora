@@ -174,13 +174,13 @@ describe('central tool orchestrator', () => {
     expect(orchestrator.getNetworkContext('target.test').blockState).toBe('probable_edge_block');
   });
 
-  it('activates edge blocking after a success and a timeout series', async () => {
+  it('keeps transport timeouts retryable without inventing WAF evidence', async () => {
     const orchestrator = new ToolOrchestrator();
     await orchestrator.execute(tool('http_request'), context({ url: 'https://target.test/' }), async () => httpResult(200));
     for (const suffix of ['one', 'two']) {
       await orchestrator.execute(tool('http_request'), context({ url: `https://target.test/${suffix}` }), async () => ({ success: false, error: 'operation timeout' }));
     }
-    expect(orchestrator.getNetworkContext('target.test').blockState).toBe('probable_edge_block');
+    expect(orchestrator.getNetworkContext('target.test').blockState).not.toBe('probable_edge_block');
   });
 
   it('does not bypass an edge block by switching equivalent tools', async () => {
@@ -219,7 +219,7 @@ describe('central tool orchestrator', () => {
     expect(record?.errorType).not.toBe('valid_negative_result');
   });
 
-  it('allows one retry after failure and blocks an unbounded third equivalent attempt', async () => {
+  it('does not confuse repeated transport failures with redundant completed evidence', async () => {
     const orchestrator = new ToolOrchestrator();
     let executions = 0;
     const invoke = () => orchestrator.execute(tool('http_request'), context({ url: 'https://target.test/fails' }), async () => {
@@ -229,9 +229,9 @@ describe('central tool orchestrator', () => {
     await invoke();
     await invoke();
     const third = await invoke();
-    expect(executions).toBe(2);
-    expect(third.metadata?.orchestrationStatus).toBe('redundant_skipped');
-    expect(orchestrator.getEvidence().at(-1)?.status).toBe('skipped');
+    expect(executions).toBe(3);
+    expect(third.metadata?.orchestrationStatus).not.toBe('redundant_skipped');
+    expect(orchestrator.getEvidence().at(-1)?.status).toBe('failed');
   });
 
   it('resets the consecutive failure chain after a successful equivalent verification', async () => {

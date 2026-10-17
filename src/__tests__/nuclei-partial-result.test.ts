@@ -2,7 +2,20 @@ import { expect, it, vi } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { Arsenal, EXTERNAL_TOOLS } from '../arsenal/index.js';
+import { Arsenal, EXTERNAL_TOOLS, runSubprocess } from '../arsenal/index.js';
+
+it.skipIf(process.platform === 'win32')('uses increasing Nuclei request counts as progress and stops unchanged heartbeat statistics', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vulnora-nuclei-progress-'));
+  try {
+    const script = "let n=0;setInterval(()=>{console.log(JSON.stringify({requests:process.argv[1]==='advancing'?++n:1,duration:Date.now()}));if(n===8)process.exit(0)},100)";
+    await writeFile(join(directory, 'nuclei'), `#!/bin/sh\nexec '${process.execPath}' -e '${script.replace(/'/g, "'\\''")}' "$1"\n`, { mode: 0o700 });
+    vi.stubEnv('PATH', directory + ':' + process.env.PATH);
+    const advancing = await runSubprocess('nuclei', ['advancing'], { timeout: 400 });
+    expect(advancing.exitCode).toBe(0); expect(advancing.stdout).toContain('"requests":8');
+    const frozen = await runSubprocess('nuclei', ['frozen'], { timeout: 400 });
+    expect(frozen.exitCode).toBe(-1); expect(frozen.stderr).toContain('timeout');
+  } finally { vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); }
+});
 
 it.skipIf(process.platform === 'win32')('retains parsed Nuclei findings and exact locations when the scanner exits unsuccessfully', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vulnora-nuclei-partial-'));

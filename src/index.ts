@@ -124,7 +124,7 @@ export type { CoverageCapability, CoverageEntry, CoverageSnapshot, CoverageStatu
 // Agent Loop
 export { AgentLoop, createAgentLoop, runAgentTask } from './agent/index.js';
 export type { AgentLoopOptions, AgentStep, AgentResult, AgentEvents } from './agent/index.js';
-export { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
+export { CheckpointRestoreError, ToolRecoveryRequiredError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
 export type { AgentCheckpoint } from './agent/checkpoint.js';
 
 // OPSEC
@@ -277,7 +277,7 @@ import { normalizeToolCall } from './orchestrator/tool-orchestrator.js';
 import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
-import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
+import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, ToolRecoveryRequiredError, UnsafeResumeError } from './agent/checkpoint.js';
 import { validateEngineCheckpoint, type EngineCheckpoint } from './projects/engine-checkpoint.js';
 import { redactString, redactSecrets } from './redact.js';
 import { redactConfiguredSecrets } from './arsenal/target-headers.js';
@@ -316,8 +316,6 @@ import {
 // VULNORA COMMAND
 // =============================================================================
 
-const DEFAULT_AGENT_MAX_ITERATIONS = 15;
-const LOCAL_AGENT_MAX_ITERATIONS = Number(process.env.VULNORA_LOCAL_AGENT_MAX_ITERATIONS || 30);
 const MAX_PROGRESS_EVENTS = 300;
 
 /**
@@ -562,7 +560,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       if (event.type === 'queued') {
         const ownerDeadline = Math.max(Date.now(), ...[...this.processDeadlines.values()].map(process => process.until));
         this.processDeadlines.set(event.id, { taskId, until: ownerDeadline + this.taskTimeoutMs });
-      } else if (event.type === 'started' && event.timeoutMs) {
+      } else if ((event.type === 'started' || event.type === 'progress') && event.timeoutMs) {
         this.processDeadlines.set(event.id, { taskId, until: Date.now() + event.timeoutMs + 1000 });
       } else if (event.type === 'completed' || event.type === 'cancelled') this.processDeadlines.delete(event.id);
     });
@@ -1043,6 +1041,15 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   private retryInterruptedReads(): void {
     const mission = this.mission.getActiveMission();
     if (!mission) return;
+    for (const target of this.targetEnv.getAllTargets()) {
+      const snapshot = evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence());
+      for (const capability of snapshot.retryable) {
+        if (snapshot.entries[capability].status === 'failed_retryable') {
+          this.coverageRecoveryAttempts.delete(this.coverageKey(mission.id, target.address, capability));
+          this.coverageTerminalized.get(`${mission.id}:${target.address}`)?.delete(capability);
+        }
+      }
+    }
     for (const task of this.mission.getTaskQueue().getForMission(mission.id)) {
       const call = task.checkpoint?.activeCall || (task.executionPlan ? { name: task.executionPlan.toolName, arguments: task.executionPlan.parameters, id: task.id } : undefined);
       if (task.status !== 'failed' || task.result?.failureKind !== 'dispatch_infrastructure' || !call || !canReplayInterruptedCall(call)) continue;
@@ -1166,6 +1173,15 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
           createdAt: Date.now(),
         });
         this.phaseStatuses.set(`${mission.id}:${mission.currentPhase}:${target.id}`, `coverage_recovery:${action.capability}`);
+        return true;
+      }
+
+      const technical = open.filter(capability => snapshot.entries[capability].status === 'failed_retryable');
+      if (technical.length) {
+        this.stallReason = `Technical recovery paused: ${technical.join(', ')}. Attempts failed; no negative result was established. Ctrl+P retries after correcting the blocker.`;
+        this.pause();
+        const task = taskQueue.getForMission(mission.id).filter(item => item.phase === mission.currentPhase).at(-1);
+        if (task) this.emit('recovery:blocked', { task, error: new Error(this.stallReason) });
         return true;
       }
 
@@ -1436,7 +1452,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       }).catch(async (_error) => {
         if (!this.activeDispatches.has(task.id)) return;
         this.clearDispatch(task.id);
-        if (_error instanceof CheckpointWriteError || _error instanceof CheckpointRestoreError || _error instanceof UnsafeResumeError) {
+        if (_error instanceof CheckpointWriteError || _error instanceof CheckpointRestoreError || _error instanceof UnsafeResumeError || _error instanceof ToolRecoveryRequiredError) {
           this.pause();
           taskQueue.updateStatus(task.id, 'pending');
           this.emit('recovery:blocked', { task, error: _error });
@@ -1640,9 +1656,6 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     // curated role allowlist here would leave the newly installed binaries registered but
     // unreachable. Approval and scope gates still apply at Arsenal.execute().
     const fullArsenal = /^(1|true|on)$/i.test(process.env.VULNORA_FULL_ARSENAL ?? '');
-    const maxIterations = this.llm.getProvider() === 'local-agent'
-      ? LOCAL_AGENT_MAX_ITERATIONS
-      : DEFAULT_AGENT_MAX_ITERATIONS;
     const mission = this.mission.getActiveMission();
     const configuredReceipt = process.env.VULNORA_AUTHORIZATION_RECEIPT?.trim();
     const approvedTools = this.approval.approvedTools();
@@ -1652,8 +1665,6 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         catch (error) { this.pause(); throw error; }
       },
       sourceAgent: callsign,
-      maxIterations,
-      maxTokens: 50000,
       toolCategories: fullArsenal ? undefined : profile.toolCategories,
       tools: fullArsenal ? undefined : profile.defaultTools,
       securityContext: {
@@ -1665,8 +1676,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         approvedTools,
         intensity: configuredReceipt ? 'Only actions covered by the receipt.' : 'Non-intrusive and read-only only.',
         forbidden: mission?.rules.forbiddenTechniques || [],
-        rateLimit: 'Use tool defaults; stop on throttling, instability, or OPSEC abort.',
-        stopConditions: ['validated result', 'missing scope', 'missing required receipt', 'no testable path', 'two steps without new relevant evidence'],
+        rateLimit: 'Honor tool rate limits and server backoff; pause on persistent instability or OPSEC abort.',
+        stopConditions: ['task objective covered', 'missing scope', 'missing required receipt', 'no distinct testable path remains'],
         intrusiveAllowed: Boolean(configuredReceipt),
         credentialToolsAllowed: Boolean(configuredReceipt),
       },

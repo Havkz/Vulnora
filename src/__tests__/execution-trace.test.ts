@@ -3,6 +3,20 @@ import { Arsenal, runSubprocess, type ProcessEvent } from '../arsenal/index.js';
 import { readFile } from 'node:fs/promises';
 
 describe('actual command execution journal', () => {
+  it('allows a progressing scan to outlive its inactivity window, then stops a silent child', async () => {
+    const arsenal = new Arsenal(); const events: ProcessEvent[] = [];
+    arsenal.on('tool:process', event => events.push(event));
+    arsenal.register({ name: 'fixture_progress', category: 'util', description: 'Owned progress fixture', parameters: [], handler: async () => {
+      const child = "let n=0; const t=setInterval(()=>{console.log('progress',++n);if(n===6){clearInterval(t);process.exit(0)}},150)";
+      const result = await runSubprocess(process.execPath, ['-e', child], { timeout: process.platform === 'win32' ? 800 : 500, idleTimeout: true });
+      return { success: result.exitCode === 0, output: result.stdout, error: result.stderr };
+    } });
+    expect((await arsenal.execute('fixture_progress', { parameters: {} })).success).toBe(true);
+    expect(events.some(event => event.type === 'progress')).toBe(true);
+    const silent = await runSubprocess(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], { timeout: 400, idleTimeout: true });
+    expect(silent.exitCode).toBe(-1); expect(silent.stderr).toContain('timeout');
+  });
+
   it('starts the deadline before notifying a slow process listener', async () => {
     const arsenal = new Arsenal();
     const timeout = process.platform === 'win32' ? 3500 : 800;

@@ -306,7 +306,7 @@ function targetKey(target: string): string {
   return normalizeUrl(target).host || target.trim().toLowerCase();
 }
 
-function errorType(result: ToolResult): ToolErrorType | undefined {
+export function errorType(result: ToolResult): ToolErrorType | undefined {
   const declared = result.metadata?.orchestrationStatus;
   if (typeof declared === 'string' && [
     'configuration_error', 'dependency_missing', 'timeout', 'network_unreachable',
@@ -377,7 +377,6 @@ export class ToolOrchestrator {
   private readonly onEvent?: (event: OrchestratorEvent) => void;
   private readonly dnsResolver: (host: string) => Promise<string[]>;
   private readonly evidenceStore: EvidenceStore;
-  private readonly explicitRepeatLimit: number;
   private onCheckpoint?: () => Promise<void>;
 
   constructor(options: {
@@ -395,7 +394,6 @@ export class ToolOrchestrator {
     this.dnsResolver = options.dnsResolver || resolve4;
     this.preflightTtlMs = options.preflightTtlMs ?? Number(process.env.VULNORA_PREFLIGHT_TTL_MS || 5 * 60_000);
     this.evidenceStore = options.evidenceStore || evidenceStoreFromEnvironment();
-    this.explicitRepeatLimit = options.explicitRepeatLimit ?? Number(process.env.VULNORA_EXPLICIT_REPEAT_LIMIT || 2);
     void this.evidenceStore.load().catch(() => {});
   }
   private readonly defaultBudgets: TargetBudgets;
@@ -803,29 +801,6 @@ export class ToolOrchestrator {
       if (offline) { this.metrics.cacheHits++; this.metrics.redundantRequestsAvoided++; this.emit('USED', 'cached evidence', call); this.store(call, context, offline, 0); return offline; }
     }
     const latestEquivalent = [...this.records].reverse().find(record => record.equivalentSignature === call.equivalentSignature);
-    const technicalErrors = new Set<ToolErrorType>(['timeout', 'network_unreachable', 'waf_blocked', 'rate_limited', 'target_error', 'tool_crash']);
-    const recentEquivalent = this.records.filter(record => record.equivalentSignature === call.equivalentSignature && Date.now() - record.timestamp <= this.cacheTtlMs);
-    const sinceLastSuccess = (() => {
-      const lastSuccess = recentEquivalent.map(record => record.status).lastIndexOf('success');
-      return recentEquivalent.slice(lastSuccess + 1);
-    })();
-    const consecutiveFailures = [...sinceLastSuccess].reverse().findIndex(record => record.status !== 'failed' || !record.errorType || !technicalErrors.has(record.errorType));
-    const technicalFailureCount = consecutiveFailures === -1 ? sinceLastSuccess.length : consecutiveFailures;
-    const allowedExplicitReasons = new Set<RepeatReason>(['contradiction_verification', 'independent_confirmation_required', 'different_network_perspective', 'materially_different_configuration']);
-    const explicitRepeatCount = recentEquivalent.filter(record => record.repeatReason && allowedExplicitReasons.has(record.repeatReason)).length;
-    const validExplicitRepeat = !!context.repeatReason && allowedExplicitReasons.has(context.repeatReason) && explicitRepeatCount < this.explicitRepeatLimit;
-    if (latestEquivalent?.status === 'failed' && technicalFailureCount >= 2 && !validExplicitRepeat) {
-      this.metrics.redundantRequestsAvoided++;
-      this.metrics.blockedCalls++;
-      this.emit('SKIPPED', 'repeated failure limit reached', call);
-      const result: ToolResult = {
-        success: false,
-        error: 'ORCHESTRATOR redundant_skipped: two equivalent attempts failed without new evidence.',
-        metadata: { orchestrationStatus: 'redundant_skipped', cacheHit: true, networkRequests: 0 },
-      };
-      this.store(call, context, result, 0, 'redundant_skipped');
-      return result;
-    }
     const inferredRepeatReason: RepeatReason | undefined = context.repeatReason
       || (latestEquivalent?.status === 'failed' ? 'previous_failure' : undefined)
       || (latestEquivalent?.status === 'success' && Date.now() - latestEquivalent.timestamp > this.cacheTtlMs ? 'expired_cache' : undefined);
@@ -1031,9 +1006,9 @@ export class ToolOrchestrator {
     }
     const hadSuccess = state.recent.some(item => item.type === 'success');
     const failingCategories = new Set(state.recent.filter(item => item.type === 'timeout' || item.type === 'failure').map(item => item.category).filter(Boolean));
-    const simultaneousFailures = state.recent.filter(item => item.type === 'timeout' || ['403_strong', '429', '503_strong', 'challenge'].includes(item.type)).length;
+    const simultaneousFailures = state.recent.filter(item => ['403_strong', '429', '503_strong', 'challenge'].includes(item.type)).length;
     if (failingCategories.size >= 2 && state.recent.some(item => item.type === '403_weak')) state.blockingResponses++;
-    if ((hadSuccess && (state.consecutiveTimeouts >= 2 || state.blockingResponses >= 2)) || simultaneousFailures >= 3 || edge.challenge) {
+    if ((hadSuccess && state.blockingResponses >= 2) || simultaneousFailures >= 3 || edge.challenge) {
       if (state.blockState !== 'probable_edge_block') { this.metrics.wafEvents++; this.emit('STOPPED', 'probable WAF block', call); }
       state.blockState = 'probable_edge_block'; state.blockedAt = now;
       this.abortTarget(call.host, 'probable edge block');

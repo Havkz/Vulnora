@@ -69,7 +69,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
   const data = fields(event);
   const detail = typeof data.detail === 'string' ? data.detail : '';
   const operator = data.callsign ? ` · ${data.callsign}` : '';
-  if (event.category === 'execution:queued' || event.category === 'execution:cancelled') return undefined;
+  if (event.category === 'execution:queued' || event.category === 'execution:cancelled' || event.category === 'execution:progress') return undefined;
   if (event.category === 'execution:started' || event.category === 'execution:completed') {
     return { title: 'Ran', command: toolInvocation(data), body: typeof data.output === 'string' ? data.output : undefined };
   }
@@ -88,7 +88,13 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
     const outcome = data.previousOutcome === 'not_applicable' ? 'not applicable' : data.previousOutcome === 'incomplete' ? 'incomplete' : 'completed';
     return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} ${outcome}${data.reason ? ` · ${data.reason}` : ''}\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
   }
-  if (event.category === 'project:completed') return { title: `${typeof data.phase === 'string' ? `${phaseLabel(data.phase)} completed\n` : ''}Scan completed` };
+  if (event.category === 'project:completed') {
+    const status = data.completionStatus;
+    const outcome = status === 'PARTIALLY_COMPLETED' ? 'Scan partially completed · untested areas remain'
+      : status === 'COMPLETED_WITH_WARNINGS' ? 'Scan completed with warnings'
+        : status === 'BLOCKED' ? 'Scan blocked' : status === 'FAILED' ? 'Scan failed' : 'Scan completed';
+    return { title: `${typeof data.phase === 'string' ? `${phaseLabel(data.phase)} completed\n` : ''}${outcome}` };
+  }
   if (event.category === 'provider:fallback') return { title: `Fallback · ${data.fromProvider} → ${data.toProvider}`, body: String(data.reason || data.error || '') };
   if (event.category === 'recovery:blocked') return { title: `Recovery paused · ${data.taskName || 'operation'}`, body: String(data.error || '') };
   if (event.category === 'orchestration:event') {

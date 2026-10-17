@@ -63,7 +63,8 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
       this.saveWorkTime();
       if (!this.closing && this.command.mission.getAllMissions().some(mission => mission.status === 'completed')) {
         this.project.status = 'completed';
-        this.record('project:completed', { projectId: project.id, phase: this.command.mission.getAllMissions().at(-1)?.currentPhase });
+        const mission = this.command.mission.getAllMissions().at(-1);
+        this.record('project:completed', { projectId: project.id, phase: mission?.currentPhase, completionStatus: mission?.completionStatus });
       }
     });
   }

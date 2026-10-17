@@ -91,6 +91,7 @@ describe('whole scanner checkpoints', () => {
         return { success: result.exitCode === 0, error: result.stderr };
       } });
     task.executionPlan = { toolName: 'fixture_stalled_timer', parameters: {} };
+    const blocked = vi.fn(); command.on('recovery:blocked', blocked);
     let started = false;
     command.arsenal.on('tool:process', event => { if (event.type === 'started') started = true; });
     await tick(command);
@@ -98,9 +99,10 @@ describe('whole scanner checkpoints', () => {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1300);
     await tick(command);
     expect(task.result?.failureKind).not.toBe('dispatch_infrastructure');
-    await vi.waitFor(() => expect(task.status).toBe('failed'), { timeout: 5000 });
-    expect(task.result?.failureKind).toBe('tool');
-    expect(task.result?.error).toContain('Process killed (timeout)');
+    await vi.waitFor(() => expect(blocked).toHaveBeenCalledOnce(), { timeout: 5000 });
+    expect(task.status).toBe('pending');
+    expect(task.result?.failureKind).not.toBe('dispatch_infrastructure');
+    expect(task.checkpoint?.steps.at(-1)?.toolResult?.error).toContain('Process killed (timeout)');
   }, 10000);
   it('lets a real bounded child finish after the inactivity window without stalling the mission', async () => {
     vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
