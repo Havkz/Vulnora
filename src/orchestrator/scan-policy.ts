@@ -63,29 +63,30 @@ export class ScanPolicy {
     }
   }
 
-  private async acquire(host: string, signal?: AbortSignal, exclusive = false, reserveStart = true): Promise<() => void> {
+  private async acquire(host: string, signal?: AbortSignal, exclusive = false, reserveStart = true, lane = 'web'): Promise<() => void> {
+    const resource = `${host}\0${lane}`;
     for (;;) {
       signal?.throwIfAborted();
       const state = this.state(host);
-      const active = this.active.get(host) || 0;
+      const active = this.active.get(resource) || 0;
       const wait = Math.max(state.nextStart, state.backoffUntil) - Date.now();
-      if (wait <= 0 && !this.external.has(host) && (exclusive ? active === 0 : active < this.limits(host).concurrency)) {
-        this.active.set(host, active + 1);
-        if (exclusive) this.external.add(host);
+      if (wait <= 0 && !this.external.has(resource) && (exclusive ? active === 0 : active < this.limits(host).concurrency)) {
+        this.active.set(resource, active + 1);
+        if (exclusive) this.external.add(resource);
         if (reserveStart) state.nextStart = Date.now() + this.limits(host).intervalMs;
         return () => {
-          const remaining = (this.active.get(host) || 1) - 1;
-          if (remaining) this.active.set(host, remaining); else this.active.delete(host);
-          if (exclusive) this.external.delete(host);
+          const remaining = (this.active.get(resource) || 1) - 1;
+          if (remaining) this.active.set(resource, remaining); else this.active.delete(resource);
+          if (exclusive) this.external.delete(resource);
         };
       }
       await delay(Math.min(100, Math.max(1, wait)), undefined, { signal });
     }
   }
 
-  async runNetwork<T>(host: string, runner: () => Promise<T>, signal?: AbortSignal, exclusive = true): Promise<T> {
+  async runNetwork<T>(host: string, runner: () => Promise<T>, signal?: AbortSignal, exclusive = true, lane = 'web'): Promise<T> {
     if (!this.behavior) return runner();
-    const release = await this.acquire(host, signal, exclusive);
+    const release = await this.acquire(host, signal, exclusive, true, lane);
     try {
       signal?.throwIfAborted();
       const result = runner();
@@ -103,7 +104,7 @@ export class ScanPolicy {
     const seconds = String(Math.ceil(limits.timeoutMs / 1000));
     const retries = String(limits.retries);
     const options: Record<string, string[]> = {
-      nmap: ['-T3', '--max-rate', rate, '--max-parallelism', concurrency, '--scan-delay', `${limits.intervalMs}ms`, '--max-retries', retries],
+      nmap: ['-T3', '--max-rate', rate, '--scan-delay', `${limits.intervalMs}ms`, '--max-retries', retries, '--stats-every', '10s'],
       nuclei: ['-rl', rate, '-c', concurrency, '-bs', '1', '-pc', concurrency, '-prc', concurrency, '-timeout', seconds, '-retries', retries, '-duc'],
       ffuf: ['-rate', rate, '-t', concurrency, '-timeout', seconds, '-p', String(limits.intervalMs / 1000), '-sa', '-noninteractive'],
       sqlmap: [`--threads=${concurrency}`, `--delay=${limits.intervalMs / 1000}`, `--timeout=${seconds}`, `--retries=${retries}`],
@@ -136,8 +137,8 @@ export class ScanPolicy {
     return [...filtered, ...flags];
   }
 
-  async fetch(url: URL, init: RequestInit, beforeRequest: () => Promise<void>): Promise<Response> {
-    if (!this.behavior) return globalThis.fetch(url, init);
+  async fetch(url: URL, init: RequestInit, beforeRequest: () => Promise<void>, transport = globalThis.fetch): Promise<Response> {
+    if (!this.behavior) return transport(url, init);
     const host = url.hostname;
     const method = (init.method || 'GET').toUpperCase();
     const retrySafe = (method === 'GET' || method === 'HEAD') && (init.body === undefined || init.body === null);
@@ -159,7 +160,7 @@ export class ScanPolicy {
         const signal = AbortSignal.any([AbortSignal.timeout(this.limits(host).timeoutMs), ...(init.signal ? [init.signal] : [])]);
         started = Date.now();
         state.nextStart = started + this.limits(host).intervalMs;
-        const pendingResponse = globalThis.fetch(url, { ...init, signal });
+        const pendingResponse = transport(url, { ...init, signal });
         this.starting.delete(host); ownsStart = false;
         const response = await pendingResponse;
         const bytes: Uint8Array[] = [];

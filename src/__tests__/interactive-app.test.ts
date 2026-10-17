@@ -50,7 +50,7 @@ describe('durable interactive project flow', () => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rBlocked fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
-    await f.wait('Esc Pause');
+    await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
     await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing fixture mission');
@@ -88,7 +88,7 @@ describe('durable interactive project flow', () => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rStage fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
-    await f.wait('Esc Pause');
+    await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
     await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const view = () => screens.mock.calls.at(-1)?.[0]() || { lines: [] };
@@ -107,7 +107,7 @@ describe('durable interactive project flow', () => {
     });
     expect(text().match(/Ran curl/g)).toHaveLength(2);
     const content = view().lines.map(stripVTControlCharacters).map(line => line.replace(/^│/, '').replace(/│$/, '').trim()).join('\n');
-    expect(content).toMatch(/--url https:\/\/fixture.test\/one\none OUTPUT\n\nRan/);
+    expect(content).toMatch(/--url https:\/\/fixture.test\/one · 0s\none OUTPUT\n\nRan/);
     expect(view().lines.join('\n')).not.toContain('●');
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
     session.command.mission.advancePhase(mission.id);
@@ -131,7 +131,7 @@ describe('durable interactive project flow', () => {
     f.output.emit('resize'); await f.wait('14.3%');
     expect(f.transcript()).not.toContain('14.285714');
     f.input.write('\x1b'); await f.wait('Beenden');
-    f.input.write('\x1b[B\x1b[B\r');
+    f.input.write('\x1b[B\x1b[B\x1b[B\r');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(session.command.isRunning()).toBe(false);
     const saved = await f.store.load(session.project.id);
@@ -144,7 +144,7 @@ describe('durable interactive project flow', () => {
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
-    if (status === 'paused') { f.input.write('\x1b'); await f.wait('> Resume'); }
+    if (status === 'paused') { f.input.write('\x1b[27;2u'); await f.wait('Paused · Work'); f.input.write('\x1b'); await f.wait('> Resume'); }
     f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(session.command.isRunning()).toBe(false);
@@ -214,7 +214,7 @@ describe('durable interactive project flow', () => {
     const formatting = vi.spyOn(projectLog, 'formatProjectLog');
     f.input.write('\rLog fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
-    await f.wait('Esc Pause');
+    await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
     const detail = 'EVIDENCE_BEGIN\n' + Array.from({ length: 200 }, (_, index) => `Evidence row ${String(index).padStart(3, '0')} · complete technical detail`).join('\n') + '\nEVIDENCE_END';
     session.command.emit('scan:progress', { id: 'colored-fixture', timestamp: Date.now(), kind: 'tool_result',
@@ -281,7 +281,18 @@ describe('durable interactive project flow', () => {
     const session = f.session();
     expect(session).toBeDefined();
     f.input.write('\x1b');
-    await f.wait('> Resume');
+    await f.wait('Project menu · Running');
+    expect(session?.command.isRunning()).toBe(true);
+    const beforeClose = f.transcript().length;
+    f.input.write('\x1b');
+    await expect.poll(() => stripVTControlCharacters(f.transcript().slice(beforeClose)), { timeout: 3000 }).toContain('Esc Menu');
+    f.input.write('\x1b[27;2u'); await expect.poll(() => session?.project.status).toBe('paused');
+    const work = session!.workDurationMs;
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(session!.workDurationMs).toBe(work);
+    expect(f.surface.paused).toBe(true);
+    expect(f.surface.panel(['Paused'])[0]).toContain('\x1b[38;5;1m');
+    f.input.write('\x1b'); await f.wait('> Resume');
     expect(session?.project.status).toBe('paused');
     f.input.write('\r');
     await expect.poll(() => session?.project.status).toBe('running');

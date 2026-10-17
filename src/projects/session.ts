@@ -14,6 +14,15 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
   readonly command: VulnoraCommand;
   private closing?: Promise<void>;
   private fatalError?: Error;
+  private workStartedAt?: number;
+
+  get workDurationMs(): number { return (this.project.workDurationMs || 0) + (this.workStartedAt === undefined ? 0 : Date.now() - this.workStartedAt); }
+
+  private saveWorkTime(running = false): void {
+    const now = Date.now();
+    if (this.workStartedAt !== undefined) this.project.workDurationMs = (this.project.workDurationMs || 0) + now - this.workStartedAt;
+    this.workStartedAt = running ? now : undefined;
+  }
 
   private constructor(readonly store: ProjectStore, readonly project: ProjectRecord,
     configuration: Omit<VulnoraConfig, 'name' | 'hooks'>, private release: () => Promise<void>) {
@@ -30,6 +39,9 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
       this.command.setScanningBehavior(project.behavior);
     } catch (error) { this.command.opsec.cleanup(); throw error; }
 
+    this.command.on('command:started', () => { this.workStartedAt ??= Date.now(); });
+    this.command.on('command:resumed', () => { this.workStartedAt ??= Date.now(); });
+    this.command.on('command:paused', () => this.saveWorkTime());
     this.command.on('scan:progress', event => this.record('scan:progress', event));
     this.command.arsenal.on('tool:process', event => this.record(`execution:${event.type}`, event));
     this.command.on('orchestration:event', event => this.record('orchestration:event', event));
@@ -48,6 +60,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.llm.on('request:retry', ({ error, ...event }) => this.record('provider:retry', { ...event, error: error.message }));
     this.command.llm.on('request:error', ({ error }) => this.record('provider:error', { error: error.message }));
     this.command.on('command:stopped', () => {
+      this.saveWorkTime();
       if (!this.closing && this.command.mission.getAllMissions().some(mission => mission.status === 'completed')) {
         this.project.status = 'completed';
         this.record('project:completed', { projectId: project.id, phase: this.command.mission.getAllMissions().at(-1)?.currentPhase });
@@ -90,6 +103,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
 
   private async persist(): Promise<void> {
     if (this.fatalError) throw this.fatalError;
+    this.saveWorkTime(this.workStartedAt !== undefined);
     this.project.checkpoint = this.command.exportCheckpoint();
     const mission = this.command.mission.getActiveMission() || this.command.mission.getAllMissions().at(-1);
     this.project.progress = mission?.progress || 0;

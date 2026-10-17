@@ -21,6 +21,15 @@ function terminal(columns = 80, rows = 30) {
 }
 
 describe('terminal surface', () => {
+  it('distinguishes enhanced Shift+Esc and Ctrl+P from plain Esc', async () => {
+    const { surface, input } = terminal();
+    input.write('\x1b[27;2u');
+    expect((await surface.nextKey()).key).toMatchObject({ name: 'escape', shift: true });
+    input.write('\x10');
+    expect((await surface.nextKey()).key).toMatchObject({ name: 'p', ctrl: true });
+    input.write('\x1b');
+    expect((await surface.nextKey()).key).toMatchObject({ name: 'escape', shift: false });
+  });
   it.each([[80, 30], [40, 24], [24, 12], [40, 8], [16, 8]])('shows actual startup substeps and elapsed time within %s × %s', async (columns, height) => {
     vi.useFakeTimers(); vi.setSystemTime(0);
     const { surface, transcript } = terminal(columns, height);

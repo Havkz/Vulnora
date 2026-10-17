@@ -9,7 +9,7 @@ import { THEME_TOKENS, createTheme, renderLogo, visibleWidth } from '../ui/theme
 describe('Vulnora theme', () => {
   it('centers the original browser and lock with steel-blue colors', () => {
     expect(THEME_TOKENS).toEqual({ accent: 75, secondary: 109, border: 67, foreground: 7,
-      bright: 15, muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3, command: 25 });
+      bright: 15, muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3, command: 75 });
     const lines = renderLogo(80, createTheme(3));
     expect(lines).toHaveLength(12);
     expect(lines[0]).toContain('\u001b[38;5;75m');

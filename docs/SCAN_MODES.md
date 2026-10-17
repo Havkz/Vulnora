@@ -36,13 +36,18 @@ the ceilings. Stealth adds no identity randomization, traffic blending or monito
 evasion. Dalfox's payload-bypass mode is explicitly disabled for these presets.
 
 Native TCP probes and cancellable DNS queries use the same per-host scheduler.
-Negative DNS answers are ordinary observations, not transport failures. External
-subprocesses run exclusively against their host while native requests wait.
+Negative DNS answers are ordinary observations, not transport failures. Nmap has a
+separate per-host port-scanning lane, so independent web checks can run alongside
+it. Web scanners retain an exclusive lane to avoid interfering with other web
+requests and timing measurements. Queued subprocesses do not consume their own
+execution timeout before admission.
 Nmap, Nuclei, ffuf, sqlmap, Gobuster, Feroxbuster, httpx, Katana, Naabu, Dalfox,
 Nikto, dnsx, Subfinder, WhatWeb and curl receive their supported rate, worker,
 delay, timeout and retry flags where available. Naabu's passes use retries + 1:
-zero would restore its default. Existing subprocess deadlines and cancellation
-remain enforced.
+zero would restore its default. Nmap's deadline accounts for the final port count,
+rate limit, probe delay and retries, with a finite cap. It does not combine
+`--scan-delay` with the parallelism options Nmap ignores in that mode. Existing
+subprocess deadlines and cancellation remain enforced.
 
 External scanners control their own internal requests. Their native rate limits
 and stop-on-error behavior apply during a run; Vulnora adjusts subsequent work

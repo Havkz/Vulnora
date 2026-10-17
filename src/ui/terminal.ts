@@ -52,6 +52,7 @@ export function fitTerminalText(text: string, columns: number): string {
 /** One owner for keyboard input, differential repaint, animation and restoration. */
 export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   readonly colors = createTheme(2);
+  paused = false;
   private previous: string[] = [];
   private screen?: () => TerminalFrame;
   private timer?: NodeJS.Timeout;
@@ -77,7 +78,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     output.on('resize', this.onResize);
     output.on('error', this.onClosed);
     input.resume();
-    output.write('\x1b[?1049h\x1b[?25l');
+    output.write('\x1b[?1049h\x1b[?25l\x1b[>1u');
     this.timer = setInterval(() => { this.frame++; this.paint(); }, 125);
   }
 
@@ -85,11 +86,12 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   get rows(): number { return Math.max(1, this.output.rows || 24); }
   get panelColumns(): number { return Math.max(1, this.columns - (this.rows >= 12 ? 7 : 4)); }
   get panelRows(): number { return Math.max(1, this.rows - (this.rows >= 12 ? 6 : 2)); }
+  get spinner(): string { return SPINNER_FRAMES[this.frame % SPINNER_FRAMES.length]; }
 
   /** Rounded panel and padding (1, 2); compact below 12 rows. */
   panel(lines: string[]): string[] {
     if (this.rows < 12 || this.columns < 16) return lines.map(line => '  ' + line);
-    const border = this.colors.border;
+    const border = this.paused ? this.colors.error : this.colors.border;
     const edge = (left: string, right: string) => border(left + '─'.repeat(this.columns - 3) + right);
     const row = (text: string) => border('│') + '  ' + text + ' '.repeat(Math.max(0, this.panelColumns - visibleWidth(text))) + '  ' + border('│');
     return [edge('╭', '╮'), row(''), ...lines.map(row), row(''), edge('╰', '╯')];
@@ -97,6 +99,13 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
 
   private onKey = (text: string, key: Key): void => {
     if (this.stopped) return;
+    text = text || key.sequence || '';
+    const enhanced = text.startsWith('\x1b') ? text.slice(1).match(/^\[(\d+);(\d+)u$/) : null;
+    if (enhanced) {
+      const code = Number(enhanced[1]); const modifiers = Number(enhanced[2]) - 1;
+      key = { name: code === 27 ? 'escape' : code === 13 ? 'return' : String.fromCodePoint(code).toLowerCase(),
+        ctrl: !!(modifiers & 4), meta: !!(modifiers & 2), shift: !!(modifiers & 1), sequence: text };
+    } else if (text === '\x1b[27;2;27~') key = { name: 'escape', shift: true, sequence: text };
     if (key.ctrl && (key.name === 'c' || key.name === 'x')) {
       this.emit('interrupt');
       this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
@@ -191,7 +200,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     if (!choices.length) throw new Error('Menu must contain at least one choice.');
     let selected = 0; let detailOffset = 0; let detailRoom = 1;
     this.show(() => {
-      const logo = this.rows < 12 ? [] : this.logo();
+      const logo = this.paused || this.rows < 12 ? [] : this.logo();
       const detailLines = details?.(selected).flatMap(line => wrapTerminalText(line, this.columns - 4)) || [];
       const prefix = [...logo, ...(logo.length ? [''] : []), this.colors.accent(fitTerminalText(title, this.columns - 1)), ''];
       const available = Math.max(1, this.rows - 2 - prefix.length);
@@ -199,11 +208,12 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       detailRoom = Math.max(0, available - room - 1);
       detailOffset = Math.max(0, Math.min(detailOffset, Math.max(0, detailLines.length - detailRoom)));
       const start = Math.max(0, selected - room + 1);
-      return { lines: [...prefix,
+      const lines = [...prefix,
         ...choices.slice(start, start + room).map((label, offset) => {
           const text = fitTerminalText(label, this.columns - 5);
           return offset + start === selected ? this.colors.accent(`  > ${text}`) : this.colors.foreground(`    ${text}`);
-        }), ...(detailRoom && detailLines.length ? ['', ...detailLines.slice(detailOffset, detailOffset + detailRoom).map(line => '  ' + this.colors.detail(line))] : [])],
+        }), ...(detailRoom && detailLines.length ? ['', ...detailLines.slice(detailOffset, detailOffset + detailRoom).map(line => '  ' + this.colors.detail(line))] : [])];
+      return { lines: this.paused ? this.panel(lines.slice(0, this.panelRows)) : lines,
         footer: details ? '↑/↓ Select    Enter Open    PgUp/PgDn Details    Esc Back    Ctrl+X Save & Quit' : '↑/↓ Select    Enter Confirm    Esc Back    Ctrl+X Save & Quit' };
     });
     for (;;) {
@@ -275,7 +285,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     this.input.off('end', this.onClosed); this.input.off('error', this.onClosed); this.output.off('error', this.onClosed);
     this.input.setRawMode(this.originalRaw);
     if (this.originallyPaused) this.input.pause();
-    this.output.write('\x1b[?25h\x1b[?1049l');
+    this.output.write('\x1b[<u\x1b[?25h\x1b[?1049l');
     this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
     this.screen = undefined; this.stopped = true;
   }

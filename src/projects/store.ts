@@ -26,6 +26,7 @@ export interface ProjectRecord<Checkpoint = unknown> {
   lastActivity: number;
   status: ProjectStatus;
   progress: number;
+  workDurationMs?: number;
   behavior: ScanningBehavior;
   checkpoint?: Checkpoint;
   inputDraft?: string;
@@ -51,6 +52,7 @@ function validateRecord(value: unknown): asserts value is ProjectRecord {
     || !Number.isFinite(project.progress) || project.progress < 0 || project.progress > 100) throw new Error('Invalid project metadata.');
   validateProjectName(project.name);
   if (project.inputDraft !== undefined && (typeof project.inputDraft !== 'string' || project.inputDraft.length > 8192)) throw new Error('Invalid pending target input.');
+  if (project.workDurationMs !== undefined && (!Number.isFinite(project.workDurationMs) || project.workDurationMs < 0)) throw new Error('Invalid project work duration.');
   const validated = validateProjectTarget(project.target.input);
   if (validated.kind !== project.target.kind || validated.hostname !== project.target.hostname) throw new Error('Project target metadata does not match the original input.');
   if (project.report && (typeof project.report.markdown !== 'string' || !Number.isFinite(project.report.generatedAt))) throw new Error('Invalid saved report.');

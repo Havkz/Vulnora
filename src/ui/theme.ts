@@ -4,7 +4,7 @@ import stringWidth from 'string-width';
 // Vulnora's steel-blue identity; standard status colors retain their meaning.
 export const THEME_TOKENS = Object.freeze({
   accent: 75, secondary: 109, border: 67, foreground: 7, bright: 15,
-  muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3, command: 25,
+  muted: 244, detail: 247, active: 80, success: 2, error: 1, warning: 3, command: 75,
 });
 
 export const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'] as const;

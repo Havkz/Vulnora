@@ -9,6 +9,14 @@ export function phaseLabel(phase?: string): string {
   return phase ? names[phase] || phase.replace(/_/g, ' ') : 'Preparing';
 }
 
+export function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor(seconds % 86400 / 3600)}h`;
+}
+
 export function formatSavedProjectLog(event: ProjectLogEvent): string {
   const safe = redactSecrets(event) as ProjectLogEvent;
   const data = fields(safe);
@@ -23,7 +31,7 @@ function fields(event: ProjectLogEvent): Record<string, unknown> {
 }
 
 export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
-  if (event.category === 'mission:phase_changed' || event.category === 'project:completed') return colors.foreground;
+  if (event.category === 'mission:phase_changed' || event.category === 'project:completed' || event.category === 'scan:progress') return colors.foreground;
   return colors.muted;
 }
 
@@ -61,6 +69,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
   const data = fields(event);
   const detail = typeof data.detail === 'string' ? data.detail : '';
   const operator = data.callsign ? ` · ${data.callsign}` : '';
+  if (event.category === 'execution:queued' || event.category === 'execution:cancelled') return undefined;
   if (event.category === 'execution:started' || event.category === 'execution:completed') {
     return { title: 'Ran', command: toolInvocation(data), body: typeof data.output === 'string' ? data.output : undefined };
   }
@@ -115,8 +124,11 @@ export function formatProjectLog(event: ProjectLogEvent, transcript = false, col
     const response = result ? redactSecrets(result) as ProjectLogEvent : safe;
     const failure = fields(response).success === false;
     const label = colors ? (failure ? colors.error : colors.foreground)('Ran') : 'Ran';
-    const exit = failure && typeof fields(response).exitCode === 'number' ? ` · exit ${fields(response).exitCode}` : '';
-    lines[0] = `${label} ${command}${colors ? colors.error(exit) : exit}`;
+    const data = fields(response);
+    const exit = typeof data.exitCode === 'number' ? ` · exit ${data.exitCode}` : '';
+    const duration = typeof data.durationMs === 'number' ? data.durationMs : result ? result.timestamp - safe.timestamp : undefined;
+    const elapsed = duration === undefined ? '' : ` · ${formatDuration(duration)}`;
+    lines[0] = `${label} ${command}${colors ? colors.muted(elapsed) + (failure ? colors.error(exit) : colors.muted(exit)) : elapsed + exit}`;
     if (result) {
       const data = fields(response);
       if (typeof data.output === 'string' || typeof data.detail === 'string') content.body = String(data.output ?? data.detail);

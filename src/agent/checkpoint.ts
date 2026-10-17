@@ -56,6 +56,11 @@ export function checkpointContract(task: Task, target?: Target): string {
 
 // Unknown tools and scanners with potentially intrusive flags require inspection.
 export function canReplayInterruptedCall(call: LLMToolCall): boolean {
+  if (call.name === 'nmap_scan') {
+    const flags = call.arguments.flags;
+    return (flags === undefined || typeof flags === 'string') && String(flags || '-sV -T4').split(/\s+/).filter(Boolean).every(flag =>
+      /^(?:-s[STUV]|-Pn|-n|-R|-6|-T[0-5]|--open|--reason|--version-(?:light|all)|--(?:top-ports|max-retries|max-rate|max-parallelism|host-timeout|scan-delay|stats-every)(?:=\d+(?:\.\d+)?(?:ms|s|m|h)?)?|\d+(?:[.,-]\d+)*(?:ms|s|m|h)?)$/.test(flag));
+  }
   if (call.name === 'http_request') {
     const method = call.arguments.method;
     return (method === undefined || (typeof method === 'string' && ['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())))

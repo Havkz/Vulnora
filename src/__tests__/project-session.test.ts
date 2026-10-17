@@ -54,20 +54,38 @@ describe('persistent project sessions', () => {
     await restored.setScanningBehavior('aggressive');
     expect((await store.load(project.id)).behavior).toBe('aggressive');
   });
-  it('blocks model-supplied local and subdomain targets before the tool handler runs, including after resume', async () => {
+  it('allows the project domain and subdomains after resume while blocking unrelated domains and local targets', async () => {
     const { store, project } = await fixture();
     const first = await open(store, project.id);
     await first.close();
     const session = await open(store, project.id);
     const handler = vi.fn().mockResolvedValue({ success: true, output: 'Selected target' });
     session.command.arsenal.register({ name: 'scope_fixture', category: 'web', description: 'Fixture', parameters: [], handler });
-    for (const url of ['http://127.0.0.1:8080', 'http://10.0.0.9', 'https://api.fixture.test']) {
+    for (const url of ['http://127.0.0.1:8080', 'http://10.0.0.9', 'https://fixture.test.other.test', 'https://fixture.org']) {
       const result = await session.command.arsenal.execute('scope_fixture', { parameters: { url } });
       expect(result.error).toMatch(/SCOPE DENIED/);
     }
     expect(handler).not.toHaveBeenCalled();
+    expect((await session.command.arsenal.execute('scope_fixture', { parameters: { url: 'https://api.fixture.test' } })).success).toBe(true);
     expect((await session.command.arsenal.execute('scope_fixture', { parameters: { url: project.target.input } })).success).toBe(true);
-    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+  it('persists active work duration across pause and reopen without counting time while paused', async () => {
+    const { store, project } = await fixture();
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100000);
+    try {
+      const session = await open(store, project.id); await session.start();
+      now.mockReturnValue(165000);
+      expect(session.workDurationMs).toBe(65000);
+      await session.pause();
+      now.mockReturnValue(225000);
+      expect(session.workDurationMs).toBe(65000);
+      await session.close();
+      const restored = await open(store, project.id);
+      expect(restored.workDurationMs).toBe(65000);
+      await restored.start(); now.mockReturnValue(230000); await restored.pause();
+      expect((await store.load(project.id)).workDurationMs).toBe(70000);
+    } finally { now.mockRestore(); }
   });
   it('opens a READY project with its original target and makes no model or scan request', async () => {
     const target = '  https://fixture.test/path?mode=read  ';

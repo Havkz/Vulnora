@@ -9,7 +9,7 @@ import { commandPath } from '../command-path.js';
 import { DEFAULT_WEB_WORDLIST } from './catalog.js';
 import { EventEmitter } from 'eventemitter3';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
-import { createHash, randomUUID } from 'crypto';
+import { createHash, randomUUID, X509Certificate } from 'crypto';
 import { execFile, spawn } from 'child_process';
 import { access, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -219,11 +219,54 @@ const fetchContext = new AsyncLocalStorage<{
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 const CROSS_ORIGIN_CREDENTIAL_HEADERS = ['authorization', 'cookie', 'cookie2', 'proxy-authorization'];
 
+/** Real curl transport; redirects and each retry remain under the shared scope/budget gate. */
+async function curlFetch(input: string | URL | Request, init: RequestInit = {}): Promise<Response> {
+  const url = String(input); const headers = new Headers(init.headers);
+  const method = (init.method || 'GET').toUpperCase();
+  const body = init.body === undefined || init.body === null ? undefined : String(init.body);
+  if (body !== undefined && !headers.has('content-type')) headers.set('content-type', 'text/plain;charset=UTF-8');
+  const seconds = Math.ceil(webRequestTimeoutMs() / 1000);
+  const args = ['--disable', '--silent', '--show-error', '--include', '--path-as-is', '--proto', '=http,https',
+    '--max-time', String(seconds), '--max-filesize', String(16 * 1024 * 1024),
+    ...(method === 'HEAD' ? ['--head'] : ['--request', method]),
+    ...[...headers].flatMap(([key, value]) => ['--header', `${key}: ${value}`]),
+    ...(body === undefined ? [] : ['--data-binary', '@-']), '--url', url];
+  const result = await executeSubprocess('curl', args, seconds * 1000 + 5000, 16 * 1024 * 1024 + 65536,
+    init.signal || undefined, { bytes: true, input: body });
+  init.signal?.throwIfAborted();
+  if (result.exitCode) {
+    const message = result.stderr || `curl exited ${result.exitCode}`;
+    throw isRetryableCurlExit(result.exitCode) ? new TypeError(message) : new Error(message);
+  }
+  const bytes = result.stdoutBytes || Buffer.from(result.stdout);
+  let offset = 0;
+  for (;;) {
+    const end = bytes.indexOf('\r\n\r\n', offset);
+    if (end < 0) throw new Error('curl returned no HTTP response headers.');
+    const lines = bytes.subarray(offset, end).toString('latin1').split('\r\n');
+    const status = lines.shift()?.match(/^HTTP\/[\d.]+ (\d{3})(?: (.*))?$/);
+    if (!status) throw new Error('curl returned invalid HTTP status.');
+    offset = end + 4;
+    if (Number(status[1]) < 200 || status[2] === 'Connection established') continue;
+    const responseHeaders = new Headers();
+    for (const line of lines) {
+      const colon = line.indexOf(':');
+      if (colon > 0) responseHeaders.append(line.slice(0, colon), line.slice(colon + 1).trim());
+    }
+    const code = Number(status[1]);
+    const response = new Response(method === 'HEAD' || [204, 205, 304].includes(code) ? null : bytes.subarray(offset),
+      { status: code, statusText: status[2] || '', headers: responseHeaders });
+    Object.defineProperty(response, 'url', { value: url });
+    return response;
+  }
+}
+
 /** Apply exact-origin headers to every built-in fetch without leaking them across redirects. */
 async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<Response> {
   const config = parseTargetHeaderConfig();
   let currentUrl = new URL(url);
   const context = fetchContext.getStore();
+  const transport = context?.scope && context.orchestrator?.scanPolicy.behavior && await isToolAvailable('curl') ? curlFetch : globalThis.fetch;
   const signals = [init.signal, context?.signal].filter((signal): signal is AbortSignal => !!signal);
   const signal = signals.length ? AbortSignal.any(signals) : undefined;
 
@@ -240,8 +283,8 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
     const headers = targetHeadersForUrl(currentUrl, explicitHeaders);
     const request = { ...init, method, body, headers, signal, redirect: 'manual' as const };
     const response = context?.orchestrator?.scanPolicy.behavior
-      ? await context.orchestrator.scanPolicy.fetch(currentUrl, request, context.beforeRequest || (async () => {}))
-      : await globalThis.fetch(currentUrl, request);
+      ? await context.orchestrator.scanPolicy.fetch(currentUrl, request, context.beforeRequest || (async () => {}), transport)
+      : await transport(currentUrl, request);
     const location = response.headers.get('location');
     if (!REDIRECT_STATUS.has(response.status) || !location || init.redirect === 'manual') return response;
     await response.body?.cancel();
@@ -350,13 +393,14 @@ export interface ArsenalEvents {
 
 export interface ProcessEvent {
   id: string;
-  type: 'started' | 'completed';
+  type: 'queued' | 'started' | 'completed' | 'cancelled';
   command: string;
   args: string[];
   output?: string;
   success?: boolean;
   exitCode?: number;
   timeoutMs?: number;
+  durationMs?: number;
 }
 
 export interface ToolExecution {
@@ -453,7 +497,7 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
     let minMask: number;
     if (scope.allowLoopback && isLoopbackTargetHost(h)) minMask = 8;              // 127/8, ::1
     else if (scope.allowPrivate && isPrivateTargetHost(h)) minMask = privateBlockMinMask(h);
-    else if (allow.some(a => a === h || (!scope.exactHosts && h.endsWith('.' + a)))) minMask = net.isIP(h) === 6 ? 128 : 32;
+    else if (allow.some(a => a === h || (!scope.exactHosts && !net.isIP(a) && h.endsWith('.' + a)))) minMask = net.isIP(h) === 6 ? 128 : 32;
     else return h; // base host out of scope
     // treat a trailing "/N" as a CIDR mask ONLY on a bare host/ip (no scheme) — not a URL path segment.
     const cidr = !v.includes('://') && v.match(/^[^/]+\/(\d{1,3})$/);
@@ -527,7 +571,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
     if (!serialized.has(toolName)) return handler(context);
 
     const rawTarget = approvalTargetOf(context) || context.target?.address || 'unknown';
-    const host = hostFromTargetValue(rawTarget) || rawTarget.toLowerCase();
+    const host = (hostFromTargetValue(rawTarget) || rawTarget.toLowerCase()) + (toolName === 'nmap_scan' ? ':ports' : ':web');
     const previous = this.hostScannerTails.get(host) || Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -1253,7 +1297,10 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         // same exact-origin header injection/redaction rules, so this is a real result rather than
         // a permanent "method unsupported" tool failure.
         if (method.toUpperCase() === 'TRACE') {
-          const response = await nativeHttpRequest(url, 'TRACE', headers, body, webRequestTimeoutMs());
+          const traced = fetchContext.getStore()?.scope && await isToolAvailable('curl')
+            ? await targetFetch(url, { method: 'TRACE', headers, body, signal: requestTimeoutSignal(webRequestTimeoutMs()) }) : undefined;
+          const response = traced ? { status: traced.status, statusText: traced.statusText, headers: Object.fromEntries(traced.headers) }
+            : await nativeHttpRequest(url, 'TRACE', headers, body, webRequestTimeoutMs());
           return redactConfiguredSecrets({
             success: true,
             output: `HTTP TRACE ${url}\nStatus: ${response.status} ${response.statusText}\nHeaders: ${JSON.stringify(response.headers, null, 2)}`,
@@ -1719,6 +1766,29 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       const port = (context.parameters.port as number) || 443;
 
       context.abortSignal?.throwIfAborted();
+      if (fetchContext.getStore()?.scope && await isToolAvailable('openssl')) {
+        const endpoint = `${net.isIP(host) === 6 ? `[${host}]` : host}:${port}`;
+        const result = await executeSubprocess('openssl', ['s_client', '-connect', endpoint,
+          ...(!net.isIP(host) ? ['-servername', host] : []), '-showcerts'], webRequestTimeoutMs(), 1024 * 1024, context.abortSignal, { input: '' });
+        const pem = result.stdout.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/);
+        if (result.exitCode !== 0 || !pem) return { success: false, output: result.stdout,
+          error: `TLS handshake failed: ${result.stderr || 'No server certificate returned.'}` };
+        const cert = new X509Certificate(pem[0]);
+        const output = result.stdout + '\n' + result.stderr;
+        const protocol = output.match(/(?:Protocol\s*:\s*|New, )(TLSv[\d.]+)/)?.[1] || 'Unknown';
+        const cipher = output.match(/(?:Cipher is |Cipher\s*:\s*)([^\s]+)/)?.[1] || 'Unknown';
+        const issues = [];
+        const days = Math.floor((Date.parse(cert.validTo) - Date.now()) / 86400000);
+        if (days < 0) issues.push('Certificate has expired');
+        else if (days < 30) issues.push(`Certificate expires in ${days} days`);
+        if (cert.subject === cert.issuer) issues.push('Self-signed certificate detected');
+        if (/^TLSv1(?:\.1)?$/.test(protocol)) issues.push(`Outdated protocol: ${protocol}`);
+        if (/RC4|3DES|(?:^|_)DES|MD5|NULL|EXPORT/i.test(cipher)) issues.push(`Weak cipher: ${cipher}`);
+        const bits = cert.publicKey.asymmetricKeyDetails?.modulusLength;
+        if (bits && bits < 2048) issues.push(`Weak key size: ${bits} bits`);
+        return { success: true, output: `SSL/TLS scan of ${endpoint}:\nProtocol: ${protocol}\nCipher: ${cipher}\nSubject: ${cert.subject}\nIssuer: ${cert.issuer}\nValid From: ${cert.validFrom}\nValid To: ${cert.validTo}\n${issues.join('\n')}`,
+          findings: issues.length ? [{ title: 'SSL/TLS Configuration Issues', severity: days < 0 ? 'critical' : 'medium', details: issues.join('; ') }] : undefined };
+      }
       return new Promise((resolve) => {
         const issues: string[] = [];
         const info: string[] = [];
@@ -1726,6 +1796,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         const socket = tls.connect({
           host,
           port,
+          servername: net.isIP(host) ? undefined : host,
           rejectUnauthorized: false, // Allow self-signed for scanning
           timeout: webRequestTimeoutMs(),
         }, () => {
@@ -3343,8 +3414,16 @@ export async function runSubprocess(
     }
     if (policy?.behavior && context?.host) {
       argv = policy.commandArgs(command, argv, context.host);
-      return await policy.runNetwork(context.host,
-        () => executeSubprocess(command, argv, timeout, maxOutput, signal), signal);
+      const portIndex = argv.indexOf('-p');
+      const effectiveTimeout = command === 'nmap' ? resolveNmapTimeoutMs(argv, portIndex < 0 ? undefined : argv[portIndex + 1]) : timeout;
+      const id = randomUUID(); let admitted = false;
+      context.onProcess?.({ id, type: 'queued', command, args: argv });
+      try {
+        return await policy.runNetwork(context.host, () => {
+          admitted = true;
+          return executeSubprocess(command, argv, effectiveTimeout, maxOutput, signal, { id });
+        }, signal, true, command === 'nmap' ? 'ports' : 'web');
+      } finally { if (!admitted) context.onProcess?.({ id, type: 'cancelled', command, args: argv }); }
     }
     return await executeSubprocess(command, argv, timeout, maxOutput, signal);
   } finally {
@@ -3352,20 +3431,21 @@ export async function runSubprocess(
   }
 }
 
-async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+async function executeSubprocess(command: string, args: string[], timeout: number, maxOutput: number, signal?: AbortSignal,
+  capture: { id?: string; bytes?: boolean; input?: string } = {}): Promise<{ stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }> {
   const onProcess = fetchContext.getStore()?.onProcess;
-  const id = randomUUID();
-  const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
-    onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode });
+  const id = capture.id || randomUUID(); const startedAt = Date.now();
+  const finish = (result: { stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }) => {
+    onProcess?.({ id, type: 'completed', command, args, output: [result.stdout, result.stderr].filter(Boolean).join('\n'), success: result.exitCode === 0, exitCode: result.exitCode, durationMs: Date.now() - startedAt });
     return result;
   };
   if (!Number.isFinite(timeout) || timeout < 0 || !Number.isFinite(maxOutput) || maxOutput < 0) {
     return finish({ stdout: '', stderr: 'Invalid subprocess timeout or output limit', exitCode: 1 });
   }
-  return new Promise<{ stdout: string; stderr: string; exitCode: number }>(resolve => {
+  return new Promise<{ stdout: string; stderr: string; exitCode: number; stdoutBytes?: Buffer }>(resolve => {
     let child;
     try {
-      child = spawn(command, args, { detached: process.platform !== 'win32', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(command, args, { detached: process.platform !== 'win32', windowsHide: true, stdio: [capture.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     } catch (error) { resolve({ stdout: '', stderr: String(error), exitCode: 1 }); return; }
     const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
     const sizes = { stdout: 0, stderr: 0 };
@@ -3379,15 +3459,19 @@ async function executeSubprocess(command: string, args: string[], timeout: numbe
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') { failure = String(error); child.kill('SIGKILL'); } }
       }
     };
-    const capture = (stream: 'stdout' | 'stderr', data: Buffer) => {
+    const captureOutput = (stream: 'stdout' | 'stderr', data: Buffer) => {
       const room = Math.max(0, maxOutput - sizes[stream]);
       if (room) output[stream].push(data.subarray(0, room));
       sizes[stream] += data.length;
       if (sizes[stream] > maxOutput && !overflow) { overflow = true; terminate(); }
     };
-    child.stdout.on('data', (data: Buffer) => capture('stdout', data));
-    child.stderr.on('data', (data: Buffer) => capture('stderr', data));
+    child.stdout!.on('data', (data: Buffer) => captureOutput('stdout', data));
+    child.stderr!.on('data', (data: Buffer) => captureOutput('stderr', data));
     child.on('error', error => { failure = error.message; });
+    if (capture.input !== undefined) {
+      child.stdin?.on('error', error => { if ((error as NodeJS.ErrnoException).code !== 'EPIPE') failure = error.message; });
+      child.stdin?.end(capture.input);
+    }
     const timer = timeout > 0 ? setTimeout(() => { timedOut = true; terminate(); }, timeout) : undefined;
     const abort = () => { aborted = true; terminate(); };
     signal?.addEventListener('abort', abort, { once: true });
@@ -3396,7 +3480,8 @@ async function executeSubprocess(command: string, args: string[], timeout: numbe
       clearTimeout(timer); signal?.removeEventListener('abort', abort);
       const diagnostic = aborted ? `Process aborted: ${String(signal?.reason || 'policy stop')}`
         : timedOut ? 'Process killed (timeout)' : overflow ? 'Process output exceeded capture limit' : failure || (terminationSignal ? `Process terminated by ${terminationSignal}` : '');
-      resolve({ stdout: Buffer.concat(output.stdout).toString(), stderr: [Buffer.concat(output.stderr).toString(), diagnostic].filter(Boolean).join('\n'),
+      const stdout = Buffer.concat(output.stdout);
+      resolve({ stdout: stdout.toString(), ...(capture.bytes ? { stdoutBytes: stdout } : {}), stderr: [Buffer.concat(output.stderr).toString(), diagnostic].filter(Boolean).join('\n'),
         exitCode: aborted ? -2 : timedOut || overflow ? -1 : failure ? 1 : code ?? 1 });
     });
     // Rendering and journal listeners must not delay the child's deadline.
@@ -3550,7 +3635,6 @@ export function normalizeNmapRuntimeFlags(flags: string[], ports?: string, targe
   if (!normalized.some(flag => /^-T[0-5]$/i.test(flag))) normalized.push('-T4');
   if (!has('--max-retries')) normalized.push('--max-retries', '1');
   if (!has('--min-rate')) normalized.push('--min-rate', '500');
-  if (!has('--host-timeout')) normalized.push('--host-timeout', '10m');
   return normalized;
 }
 
@@ -3562,11 +3646,23 @@ export function resolveNmapTimeoutMs(flags: string[], ports?: string): number {
   }
   const portCount = portCountFromSpec(ports);
   const topPortsIndex = flags.findIndex(flag => flag === '--top-ports');
-  const topPorts = topPortsIndex >= 0 ? Number(flags[topPortsIndex + 1]) : 0;
+  const topPorts = topPortsIndex >= 0 ? Number(flags[topPortsIndex + 1]) : Number(flags.find(flag => flag.startsWith('--top-ports='))?.split('=')[1]) || 0;
   const versionHeavy = flags.some(flag => /^-sV$/i.test(flag) || /^--version-all$/i.test(flag));
-  if ((portCount || 0) > 10_000) return versionHeavy ? 30 * 60_000 : 15 * 60_000;
-  if ((portCount || 0) > 1_000 || topPorts >= 1_000) return versionHeavy ? 10 * 60_000 : 7 * 60_000;
-  return versionHeavy ? 5 * 60_000 : 3 * 60_000;
+  const base = (portCount || 0) > 10_000 ? (versionHeavy ? 30 : 15) * 60_000
+    : (portCount || 0) >= 1_000 || topPorts >= 1_000 ? (versionHeavy ? 10 : 7) * 60_000 : (versionHeavy ? 5 : 3) * 60_000;
+  const value = (name: string) => {
+    const at = flags.findIndex(flag => flag === name || flag.startsWith(name + '='));
+    return at < 0 ? undefined : flags[at].includes('=') ? flags[at].split('=')[1] : flags[at + 1];
+  };
+  const milliseconds = (raw?: string) => {
+    const match = raw?.match(/^(\d+(?:\.\d+)?)(ms|s|m|h)?$/);
+    return match ? Number(match[1]) * ({ ms: 1, s: 1000, m: 60000, h: 3600000 }[match[2] || 's'] || 1000) : 0;
+  };
+  const rate = Number(value('--max-rate'));
+  const interval = Math.max(milliseconds(value('--scan-delay')), rate > 0 ? 1000 / rate : 0);
+  const retries = Math.max(0, Number(value('--max-retries')) || 0);
+  const paced = (portCount || topPorts || (flags.includes('-F') ? 100 : 1000)) * (retries + 1) * interval;
+  return Math.min(24 * 3600000, Math.ceil(Math.max(base, paced * 1.5 + base, milliseconds(value('--host-timeout')) + 30000)));
 }
 
 export const EXTERNAL_TOOLS: CustomTool[] = [
@@ -3596,7 +3692,10 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
       const nmapTimeoutMs = resolveNmapTimeoutMs(flags, ports);
       const result = await runSubprocess('nmap', args, { timeout: nmapTimeoutMs, signal: context.abortSignal });
       if (result.exitCode !== 0) {
-        return { success: false, error: `nmap failed (timeout limit ${nmapTimeoutMs}ms): ${result.stderr}` };
+        return { success: false, output: result.stdout, error: `nmap failed: ${result.stderr}`, metadata: { partial: true } };
+      }
+      if (/Skipping host.*host timeout|host timed out|due to host timeout/i.test(result.stdout)) {
+        return { success: false, output: result.stdout, error: 'Nmap host timeout; coverage is incomplete.', metadata: { partial: true } };
       }
 
       // Parse open ports from output

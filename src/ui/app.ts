@@ -6,7 +6,7 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { formatProjectLog, formatSavedProjectLog, phaseLabel, projectActivity } from './project-log.js';
+import { formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, projectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
@@ -214,7 +214,7 @@ export class InteractiveApp {
       return undefined;
     };
     logs.forEach((_event, index) => linkResult(index));
-    let activity = 'Working'; let activitySince = Date.now();
+    let activity = 'Working';
     let recoveryDetails = '';
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
@@ -225,7 +225,7 @@ export class InteractiveApp {
         processed = changed; wrapped = wrapped.filter(line => line.event < changed);
       }
       const next = projectActivity(event);
-      if (next && next !== activity) { activity = next; activitySince = Date.now(); }
+      if (next) activity = next;
       this.surface.refresh();
     };
     const onError = (error: Error) => {
@@ -247,6 +247,8 @@ export class InteractiveApp {
       const dense = this.surface.rows < 18;
       const mission = session.command.mission.getActiveMission() || session.command.mission.getAllMissions().at(-1);
       const completed = session.project.status === 'completed';
+      const paused = !completed && !session.command.isRunning();
+      this.surface.paused = paused;
       const blocked = !!this.issue && !session.command.isRunning();
       const header = [`Stage: ${completed ? 'Completed' : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
         dense ? `${session.project.status} · ${session.project.progress.toFixed(1)}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress.toFixed(1)}%`,
@@ -279,14 +281,17 @@ export class InteractiveApp {
         });
       }
       const pausedLabel = this.surface.columns < 40 ? 'Paused · Enter Details' : 'Recovery paused · Enter Details · Esc Back';
-      const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(blocked ? pausedLabel : `${activity} · ${Math.floor((Date.now() - activitySince) / 1000)}s`, this.surface.panelColumns))];
+      const progress = Math.max(0, Math.min(10, Math.floor(session.project.progress / 10)));
+      const animation = paused ? 'Paused' : `${this.surface.spinner} ${activity}`;
+      const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(blocked ? pausedLabel
+        : `${animation} · Work ${formatDuration(session.workDurationMs)}${this.surface.panelColumns >= 65 ? `  [${'━'.repeat(progress)}${'─'.repeat(10 - progress)}]` : ''}`, this.surface.panelColumns))];
       const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - status.length - (dense ? 0 : 2));
       offset = tail ? Math.max(0, wrapped.length - room) : Math.max(0, Math.min(offset, Math.max(0, wrapped.length - room)));
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
       footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
-        : this.surface.columns < 60 ? `Esc Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
-        : `Esc Pause  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
+        : this.surface.columns < 60 ? `Esc Menu ^P Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
+        : `Esc Menu  Shift+Esc / Ctrl+P Pause  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
     };
     try {
       this.surface.show(render);
@@ -299,17 +304,29 @@ export class InteractiveApp {
           this.surface.show(render); continue;
         }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }
+        if ((key.name === 'escape' && key.shift) || (key.ctrl && key.name === 'p')) {
+          if (session.project.status !== 'completed' && session.command.isRunning()) {
+            this.surface.paused = true;
+            this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
+            await session.pause();
+          }
+          this.surface.show(render); continue;
+        }
         if (key.name === 'escape') {
           if (session.project.status === 'completed') return;
           if (this.issue && !session.command.isRunning()) return;
-          this.surface.show(() => ({ lines: [this.surface.colors.active('Saving progress and stopping active work…')], footer: 'Ctrl+X Save & Quit' }));
-          await session.pause();
           for (;;) {
-            const choice = await this.surface.menu('Paused', ['Resume', 'Settings', 'Beenden']);
-            if (choice === undefined) return;
-            if (choice === 0) { this.surface.show(render); await session.start(); break; }
-            if (choice === 2) throw new TerminalInterrupted();
-            await this.settings();
+            const running = session.command.isRunning();
+            this.surface.paused = !running;
+            const choices = running ? ['Continue', 'Pause', 'Settings (pause scan)', 'Beenden'] : ['Resume', 'Settings', 'Beenden'];
+            const selected = await this.surface.menu(running ? 'Project menu · Running' : 'Project menu · Paused', choices);
+            const choice = selected === undefined ? 'Continue' : choices[selected];
+            if (choice === 'Beenden') throw new TerminalInterrupted();
+            if (choice === 'Continue' || this.session?.project.status === 'completed') { this.surface.show(render); break; }
+            if (choice === 'Resume') { await session.start(); this.surface.show(render); break; }
+            if (session.command.isRunning()) await session.pause();
+            this.surface.paused = true;
+            if (choice !== 'Pause') await this.settings();
           }
         }
         if (key.name === 'pageup' || key.name === 'up') { tail = false; offset -= key.name === 'up' ? 1 : this.surface.rows - 5; }
@@ -318,7 +335,7 @@ export class InteractiveApp {
         if (key.name === 'end') tail = true;
         this.surface.refresh();
       }
-    } finally { session.off('log', onLog); session.off('error', onError); }
+    } finally { this.surface.paused = false; session.off('log', onLog); session.off('error', onError); }
   }
 
   private async results(): Promise<void> {

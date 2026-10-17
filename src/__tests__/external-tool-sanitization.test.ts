@@ -64,7 +64,7 @@ describe('scanner timeout normalization', () => {
 
   it('adds finite fast-scan controls to broad ranges but leaves targeted scans alone', () => {
     expect(normalizeNmapRuntimeFlags(['-Pn', '-sT'], '1-65535')).toEqual([
-      '-Pn', '-sT', '-T4', '--max-retries', '1', '--min-rate', '500', '--host-timeout', '10m',
+      '-Pn', '-sT', '-T4', '--max-retries', '1', '--min-rate', '500',
     ]);
     expect(normalizeNmapRuntimeFlags(['-sV'], '80,443')).toEqual(['-sV']);
     expect(normalizeNmapRuntimeFlags(['-T3', '--max-retries', '2', '--host-timeout=4m'], '1-20000'))

@@ -55,6 +55,31 @@ async function listen(server: Server): Promise<string> {
 }
 
 describe('whole scanner checkpoints', () => {
+  it('does not classify a command waiting on a busy scanner lane as a stalled dispatch', async () => {
+    vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
+    const command = scanner(); command.setScanningBehavior('aggressive');
+    vi.spyOn(command.llm, 'getProvider').mockReturnValue('deterministic');
+    const { task } = prepare(command);
+    command.arsenal.register({ name: 'fixture_queued_process', description: 'Queued local child', category: 'util', parameters: [],
+      handler: async () => {
+        const result = await runSubprocess(process.execPath, ['-e', 'process.stdout.write("Queued fixture completed")'], { timeout: 5000 });
+        return { success: result.exitCode === 0, output: result.stdout };
+      } });
+    task.executionPlan = { toolName: 'fixture_queued_process', parameters: { host: '127.0.0.1' } };
+    let release!: () => void; let begin!: () => void;
+    const started = new Promise<void>(resolve => { begin = resolve; });
+    const blocker = command.arsenal.getOrchestrator().scanPolicy.runNetwork('127.0.0.1', async () => {
+      begin(); await new Promise<void>(resolve => { release = resolve; });
+    });
+    await started;
+    let queued = false; command.arsenal.on('tool:process', event => { if (event.type === 'queued') queued = true; });
+    try {
+      await tick(command); await vi.waitFor(() => expect(queued).toBe(true), { timeout: 5000 });
+      await new Promise(resolve => setTimeout(resolve, 100)); await tick(command);
+      expect(task.result?.failureKind).not.toBe('dispatch_infrastructure');
+    } finally { release(); await blocker; }
+    await vi.waitFor(() => expect(task.status).toBe('completed'), { timeout: 5000 });
+  }, 10000);
   it('lets an overdue child timer run after an event-loop stall instead of aborting it as a dispatch failure', async () => {
     vi.stubEnv('VULNORA_TASK_TIMEOUT_MS', '50');
     const command = scanner();

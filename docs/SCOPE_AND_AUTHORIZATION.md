@@ -18,6 +18,11 @@ The core rule is simple: a mission can be imaginative, aggressive, and adversari
 
 ## Execution Modes
 
+Interactive website projects include the selected domain and its nested
+subdomains, including DNS service labels such as `_dmarc`. Other domains and TLDs,
+lookalike suffixes and unrelated local addresses remain outside scope. An IP
+target authorizes that address, not hostname strings ending in that IP.
+
 - `safe_command`: local-read or lab-safe command, still logged and evidence-oriented.
 - `receipt_required`: active, networked, credential-adjacent, or otherwise risky command.
 - `catalog_only`: known capability that should not run through generic command execution.

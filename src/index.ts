@@ -277,7 +277,7 @@ import { normalizeToolCall } from './orchestrator/tool-orchestrator.js';
 import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
-import { CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
+import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, UnsafeResumeError } from './agent/checkpoint.js';
 import { validateEngineCheckpoint, type EngineCheckpoint } from './projects/engine-checkpoint.js';
 import { redactString, redactSecrets } from './redact.js';
 import { redactConfiguredSecrets } from './arsenal/target-headers.js';
@@ -559,9 +559,12 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       const taskId = [...this.dispatchOperators].find(([, operator]) => operator.callsign === event.operator)?.[0];
       if (!taskId) return;
       this.dispatchLastProgress.set(taskId, Date.now());
-      if (event.type === 'started' && event.timeoutMs) {
+      if (event.type === 'queued') {
+        const ownerDeadline = Math.max(Date.now(), ...[...this.processDeadlines.values()].map(process => process.until));
+        this.processDeadlines.set(event.id, { taskId, until: ownerDeadline + this.taskTimeoutMs });
+      } else if (event.type === 'started' && event.timeoutMs) {
         this.processDeadlines.set(event.id, { taskId, until: Date.now() + event.timeoutMs + 1000 });
-      } else if (event.type === 'completed') this.processDeadlines.delete(event.id);
+      } else if (event.type === 'completed' || event.type === 'cancelled') this.processDeadlines.delete(event.id);
     });
     this.arsenal.on('tool:orchestration', event => {
       this.emit('orchestration:event', event);
@@ -634,7 +637,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       .map((t) => hostFromTargetValue(t.address))
       .filter((h): h is string => !!h);
     this.arsenal.setScope({ allowedHosts, allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
-      exactHosts: this.strictScope });
+      exactHosts: false });
   }
 
   /**
@@ -901,6 +904,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
 
     // Auto-create a mission if none exists
     this.ensureMission();
+    this.retryInterruptedReads();
 
     // Reset the seed flag so the first tick generates tasks for targets added
     // BEFORE start(). A pre-mission target:added event leaves taskSeeded stale-true
@@ -1029,9 +1033,22 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    */
   public resume(): void {
     if (!this.running || !this.paused) return;
+    this.retryInterruptedReads();
     this.paused = false;
     this.stallReason = null;
     this.emit('command:resumed');
+  }
+
+  /** Resume saved read-only dispatch failures without replaying writes or scripts. */
+  private retryInterruptedReads(): void {
+    const mission = this.mission.getActiveMission();
+    if (!mission) return;
+    for (const task of this.mission.getTaskQueue().getForMission(mission.id)) {
+      const call = task.checkpoint?.activeCall || (task.executionPlan ? { name: task.executionPlan.toolName, arguments: task.executionPlan.parameters, id: task.id } : undefined);
+      if (task.status !== 'failed' || task.result?.failureKind !== 'dispatch_infrastructure' || !call || !canReplayInterruptedCall(call)) continue;
+      delete task.result; delete task.assignedTo; delete task.completedAt;
+      this.mission.getTaskQueue().updateStatus(task.id, 'pending');
+    }
   }
 
   /**

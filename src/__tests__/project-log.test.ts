@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { stripVTControlCharacters } from 'node:util';
-import { formatProjectLog, formatSavedProjectLog, projectActivity } from '../ui/project-log.js';
+import { formatDuration, formatProjectLog, formatSavedProjectLog, projectActivity } from '../ui/project-log.js';
 import { createTheme } from '../ui/theme.js';
 import type { ProjectLogEvent } from '../projects/session.js';
 
 describe('readable project logs', () => {
+  it('uses readable units and shows measured process duration beside every exit code', () => {
+    expect([59000, 60000, 754000, 3600000, 90000000].map(formatDuration)).toEqual(['59s', '1m 0s', '12m 34s', '1h 0m', '1d 1h']);
+    const event = { timestamp: 1, category: 'execution:completed', data: { command: 'nmap', args: ['fixture.test'], durationMs: 125000, exitCode: 0, success: true } };
+    expect(formatProjectLog(event)).toContain(' · 2m 5s · exit 0');
+    expect(formatProjectLog({ ...event, category: 'execution:queued' })).toBe('');
+  });
   it('keeps complete protocol events and technical metadata accessible in saved logs', () => {
     const event = { timestamp: 1, category: 'provider:progress', data: { type: 'item.completed', text: '{"tool_calls":[]}', operatorId: 'fixture-operator' } };
     expect(formatProjectLog(event)).toBe('');
