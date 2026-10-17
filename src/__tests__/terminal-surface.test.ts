@@ -124,13 +124,23 @@ describe('terminal surface', () => {
     expect(transcript()).toContain('•');
   });
 
-  it('preserves received edit text on Ctrl+C without submitting a queued Enter or accepting later input', async () => {
+  it('preserves received edit text on Ctrl+X without submitting a queued Enter or accepting later input', async () => {
     const { input, surface } = terminal(); const changed = vi.fn();
     const editing = surface.prompt('Target URL or IP:', '', false, changed);
     const rejected = expect(editing).rejects.toBeInstanceOf(TerminalInterrupted);
-    input.write('https://unfinished\rnot-another-target\x03ignored-after-interrupt');
+    input.write('https://unfinished\rnot-another-target\x18ignored-after-interrupt');
     await rejected;
     expect(changed.mock.calls.at(-1)?.[0]).toBe('https://unfinished');
+  });
+
+  it('skips cancellable provider discovery with S while retaining Ctrl+X as a real interruption', async () => {
+    const { input, surface } = terminal();
+    const run = (signal: AbortSignal) => new Promise<string>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    });
+    const skipped = surface.skippable(run); input.write('s'); expect(await skipped).toBeUndefined();
+    const interrupted = surface.skippable(run); const rejected = expect(interrupted).rejects.toBeInstanceOf(TerminalInterrupted);
+    input.write('\x18'); await rejected;
   });
 
   it('updates exactly four real initialization rows and reports a failing job honestly', async () => {
@@ -169,14 +179,14 @@ describe('terminal surface', () => {
   it('does not repaint an unchanged frame and fixes the shortcut bar at the bottom', async () => {
     vi.useFakeTimers();
     const { input, surface, output, write } = terminal();
-    surface.show(() => ({ lines: ['Stable log'], footer: 'Esc Pause    Ctrl+C Save & Quit' }));
+    surface.show(() => ({ lines: ['Stable log'], footer: 'Esc Pause    Ctrl+X Save & Quit' }));
     const before = write.mock.calls.length;
     vi.advanceTimersByTime(500);
     expect(write.mock.calls.length).toBe(before);
     expect(write.mock.calls.some(([value]) => String(value).includes(`\x1b[${output.rows};1H`))).toBe(true);
     const waiting = surface.nextKey();
     const rejected = expect(waiting).rejects.toBeInstanceOf(TerminalInterrupted);
-    input.emit('keypress', '\x03', { name: 'c', ctrl: true });
+    input.emit('keypress', '\x18', { name: 'x', ctrl: true });
     await rejected;
   });
 

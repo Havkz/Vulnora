@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProjectStore } from '../projects/store.js';
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
+import { acquireProjectLease } from '../projects/lease.js';
 
 describe('project inputs', () => {
   it.each(['https://example.com/path?x=1', 'http://127.0.0.1:8080/', '127.0.0.1', '::1', '[2001:db8::1]', 'https://[::1]:443/', 'localhost', 'example.com.'])('preserves accepted input %s', value => {
@@ -20,6 +21,34 @@ describe('project inputs', () => {
 });
 
 describe('durable project records', () => {
+  it('renames projects and drafts, protects open projects, and deletes all owned files into recoverable trash', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-manage-'));
+    try {
+      const store = new ProjectStore(directory);
+      const project = await store.create('Before', 'https://fixture.test'); const neighbor = await store.create('Keep', 'https://neighbor.test');
+      project.checkpoint = { evidence: 'retain' }; project.report = { markdown: '# Saved report', generatedAt: 1 }; await store.save(project);
+      await store.appendLog(project.id, { evidence: 'full log' }); await store.exportReport(project);
+      const draft = await store.createDraft('Draft'); await store.renameProject(draft.id, 'Renamed draft');
+      expect((await store.listDrafts()).drafts[0].name).toBe('Renamed draft');
+      await store.renameProject(project.id, 'After');
+      expect(await store.load(project.id)).toMatchObject({ name: 'After', checkpoint: project.checkpoint, report: project.report });
+      const release = await acquireProjectLease(directory, project.id);
+      try {
+        await expect(store.renameProject(project.id, 'Unsafe')).rejects.toThrow('exclusive project');
+        await expect(store.deleteProject(project.id)).rejects.toThrow('exclusive project');
+      } finally { await release(); }
+      await store.deleteProject(project.id); await store.deleteProject(draft.id);
+      expect((await store.list()).projects.map(item => item.id)).toEqual([neighbor.id]); expect((await store.listDrafts()).drafts).toEqual([]);
+      const archived = (await readdir(join(directory, '.trash'))).find(file => file.startsWith(project.id));
+      if (!archived) throw new Error('Missing project archive');
+      const trash = join(directory, '.trash', archived);
+      expect(JSON.parse(await readFile(join(trash, project.id + '.json'), 'utf8')).name).toBe('After');
+      expect(await readFile(join(trash, project.id + '.report.md'), 'utf8')).toBe('# Saved report');
+      expect(await readFile(join(trash, project.id + '.logs.jsonl'), 'utf8')).toContain('full log');
+      await expect(store.deleteProject('../config')).rejects.toThrow('Invalid project ID');
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('round-trips partial operations, queues, AI context, evidence, full logs and completed reports', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-store-'));
     try {

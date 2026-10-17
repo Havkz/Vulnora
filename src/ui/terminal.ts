@@ -64,6 +64,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   private previousCursor = '';
   private originalRaw: boolean;
   private originallyPaused: boolean;
+  private skipTask?: () => void;
 
   constructor(private input: ReadStream = process.stdin, private output: WriteStream = process.stdout) {
     super();
@@ -106,12 +107,13 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       key = { name: code === 27 ? 'escape' : code === 13 ? 'return' : String.fromCodePoint(code).toLowerCase(),
         ctrl: !!(modifiers & 4), meta: !!(modifiers & 2), shift: !!(modifiers & 1), sequence: text };
     } else if (text === '\x1b[27;2;27~') key = { name: 'escape', shift: true, sequence: text };
-    if (key.ctrl && (key.name === 'c' || key.name === 'x')) {
+    if (key.ctrl && key.name === 'x') {
       this.emit('interrupt');
       this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
       this.stopped = true;
       return;
     }
+    if (this.skipTask && !key.ctrl && !key.meta && key.name === 's') { this.skipTask(); return; }
     if (this.waiting) { this.waiting.resolve({ text, key }); this.waiting = undefined; }
     else if (this.keys.length < 8192) this.keys.push({ text, key });
   };
@@ -127,6 +129,20 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
   show(screen: () => TerminalFrame): void { this.screen = screen; this.paint(); }
 
   refresh(): void { this.paint(); }
+
+  async skippable<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
+    const controller = new AbortController();
+    const interrupt = () => controller.abort(new TerminalInterrupted());
+    this.on('interrupt', interrupt);
+    this.skipTask = () => controller.abort(new DOMException('Check skipped', 'AbortError'));
+    try { return await run(controller.signal); }
+    catch (error) {
+      if (!controller.signal.aborted) throw error;
+      if (controller.signal.reason instanceof TerminalInterrupted) throw controller.signal.reason;
+      return undefined;
+    }
+    finally { this.skipTask = undefined; this.off('interrupt', interrupt); }
+  }
 
   interrupt(): void { this.onClosed(); }
 
@@ -196,7 +212,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     });
   }
 
-  async menu(title: string, choices: string[], details?: (selected: number) => string[]): Promise<number | undefined> {
+  async menu(title: string, choices: string[], details?: (selected: number) => string[], shortcuts?: (key: Key) => boolean): Promise<number | undefined> {
     if (!choices.length) throw new Error('Menu must contain at least one choice.');
     let selected = 0; let detailOffset = 0; let detailRoom = 1;
     this.show(() => {
@@ -218,6 +234,7 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
     });
     for (;;) {
       const { key } = await this.nextKey();
+      if (shortcuts?.(key)) return undefined;
       if (key.name === 'escape') return undefined;
       if (key.name === 'return') return selected;
       if (key.name === 'up') { selected = (selected - 1 + choices.length) % choices.length; detailOffset = 0; }
@@ -300,7 +317,7 @@ export async function initializeTerminal(surface: TerminalSurface,
   surface.startup(rows);
   for (let index = 0; index < jobs.length; index++) {
     signal?.throwIfAborted();
-    rows[index].status = 'active'; surface.startup(rows);
+    rows[index].status = 'active'; surface.startup(rows, index === 2 ? 'S Skip provider checks    Ctrl+X Save & Quit' : undefined);
     const report: InitializationReporter = update => {
       const steps = rows[index].steps ??= [];
       let step = [...steps].reverse().find(entry => entry.label === update.label);

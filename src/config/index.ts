@@ -859,13 +859,14 @@ class ConfigManager {
         // /api/paas/v4) and VULNORA_LOCAL_MODEL at the model tag you're serving.
         // Some OpenAI-compatible servers require a real bearer (Zhipu, Together, etc.) —
         // VULNORA_LOCAL_API_KEY (or a provider-specific env like ZAI_API_KEY) provides it.
-        baseUrl = process.env.VULNORA_LOCAL_BASE_URL?.trim() || this.config.get('local').baseUrl;
+        baseUrl = (this.selected('endpoint:local') ? this.config.get('local').baseUrl : undefined)
+          || process.env.VULNORA_LOCAL_BASE_URL?.trim() || this.config.get('local').baseUrl;
         // Placeholder ids from AVAILABLE_MODELS / the static UI are not real served model tags.
-        // Treat them as unset so VULNORA_LOCAL_MODEL (or the llama3 default) wins; a real tag
+        // Treat them as unset so the configured served model wins; a real tag
         // passed in still takes priority.
         actualModel = (model && !['local-model', 'local/ollama'].includes(model) ? model : undefined)
           || (this.selected('model:local') ? this.config.get('local').defaultModel : undefined)
-          || process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel || 'llama3';
+          || process.env.VULNORA_LOCAL_MODEL?.trim() || this.config.get('local').defaultModel;
         apiKey = this.getApiKey('local');
         break;
       default:
@@ -952,6 +953,18 @@ class ConfigManager {
     }
     if (this.config.get('defaultProvider') === provider) changes.defaultModel = model;
     this.config.set(changes);
+  }
+
+  setLocalEndpoint(baseUrl: string): void {
+    const url = new URL(baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('Enter an HTTP(S) endpoint without credentials, query or fragment.');
+    }
+    if (!/\/(?:api|v\d+)$/.test(url.pathname.replace(/\/$/, ''))) {
+      throw new Error('Use an Ollama /api or OpenAI-compatible /v1 endpoint.');
+    }
+    this.config.set({ local: { ...this.config.get('local'), baseUrl: url.toString().replace(/\/$/, '') },
+      userSelections: this.selections('endpoint:local') });
   }
 
   /**
@@ -1048,7 +1061,7 @@ DEEPSEEK_API_KEY=
 # Most local servers are keyless; if yours requires a bearer (Zhipu, Together, …)
 # set VULNORA_LOCAL_API_KEY (ZAI_API_KEY / ZHIPUAI_API_KEY are accepted as aliases).
 VULNORA_LOCAL_BASE_URL=http://localhost:11434/api
-VULNORA_LOCAL_MODEL=llama3
+VULNORA_LOCAL_MODEL=
 VULNORA_LOCAL_API_KEY=
 `;
     writeFileSync(filePath, template);

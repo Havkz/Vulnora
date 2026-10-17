@@ -46,6 +46,36 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it('renames and deletes saved projects from Manage Projects with an explicit delete confirmation', async () => {
+    const f = await fixture(); const project = await f.store.create('Before rename', 'https://fixture.test'); const result = f.start();
+    f.input.write('\x1b[B\x1b[B\x1b[B\r\r\r'); await f.wait('Project name:');
+    f.input.write('\x15After rename\r');
+    await expect.poll(async () => (await f.store.load(project.id)).name).toBe('After rename');
+    f.input.write('\x1b[B\x1b[B\x1b[B\r\r\x1b[B\r'); await f.wait('Delete After rename?');
+    expect((await f.store.list()).projects).toHaveLength(1);
+    f.input.write('\x1b[B\r'); await expect.poll(async () => (await f.store.list()).projects.length).toBe(0);
+    expect(f.open).not.toHaveBeenCalled(); f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
+  it('allows manual local endpoint/model entry while discovery is offline and keeps the installed primary selected', async () => {
+    const f = await fixture(); const directory = await mkdtemp(join(tmpdir(), 'vulnora-manual-model-')); directories.push(directory);
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory); vi.stubEnv('VULNORA_LOCAL_MODEL', '');
+    vi.stubEnv('VULNORA_LOCAL_BASE_URL', 'http://127.0.0.1:11434/api'); vi.resetModules();
+    const { config } = await import('../config/index.js'); config.setDefaultProvider('codex');
+    expect(config.getLLMConfig('local').model).toBe('');
+    expect(() => config.setLocalEndpoint('file:///tmp/model')).toThrow();
+    expect(() => config.setLocalEndpoint('http://user:secret@localhost/v1')).toThrow();
+    f.services.configuration = config;
+    f.services.installedModels = async () => { throw new Error('Local server offline'); };
+    const prepare = vi.fn(async () => 'Manual local fallback saved'); f.services.prepareProviders = prepare;
+    const result = f.start(); f.input.write('\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\r'); await f.wait('Add model manually');
+    f.input.write('\r'); await f.wait('Local endpoint (/api or /v1):'); f.input.write('\x15http://127.0.0.1:1234/v1\r');
+    await f.wait('Model ID:'); f.input.write('my-served-model\r'); await f.wait('Manual local fallback saved');
+    expect(config.getLLMConfig().provider).toBe('codex');
+    expect(config.getLLMConfig('local')).toMatchObject({ model: 'my-served-model', baseUrl: 'http://127.0.0.1:1234/v1' });
+    expect(prepare).toHaveBeenCalledOnce(); f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
   it.each([[80, 30], [24, 12], [16, 8]])('shows paused recovery at %s × %s and opens details without replaying a write', async (columns, rows) => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rBlocked fixture\r'); await f.wait('Target URL or IP:');
@@ -121,7 +151,7 @@ describe('durable interactive project flow', () => {
     expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(1);
   });
 
-  it('rounds displayed progress and saves the project when choosing Beenden in the pause menu', async () => {
+  it('rounds displayed progress, keeps Esc and Ctrl+C inside the app, and exits only with Ctrl+X', async () => {
     const f = await fixture(); const result = f.start();
     f.input.write('\rQuit menu fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
@@ -130,8 +160,14 @@ describe('durable interactive project flow', () => {
     session.project.progress = 100 / 7;
     f.output.emit('resize'); await f.wait('14.3%');
     expect(f.transcript()).not.toContain('14.285714');
-    f.input.write('\x1b'); await f.wait('Beenden');
+    f.input.write('\x1b'); await f.wait('Project menu · Running');
+    expect(stripVTControlCharacters(f.transcript())).not.toContain('Beenden');
     f.input.write('\x1b[B\x1b[B\x1b[B\r');
+    await f.wait('Manage Projects');
+    f.input.write('\x1b\x03');
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(session.command.isRunning()).toBe(false);
+    f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(session.command.isRunning()).toBe(false);
     const saved = await f.store.load(session.project.id);
@@ -144,7 +180,7 @@ describe('durable interactive project flow', () => {
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
-    if (status === 'paused') { f.input.write('\x1b[27;2u'); await f.wait('Paused · Work'); f.input.write('\x1b'); await f.wait('> Resume'); }
+    if (status === 'paused') { f.input.write('\x10'); await f.wait('Paused · Work'); f.input.write('\x1b'); await f.wait('> Resume'); }
     f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(session.command.isRunning()).toBe(false);
@@ -176,7 +212,7 @@ describe('durable interactive project flow', () => {
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(stripVTControlCharacters(f.transcript())).not.toContain('Environment override');
     expect(process.env.VULNORA_DEFAULT_PROVIDER).toBe('codex');
-    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
   it.each([[24, 12], [16, 8]])('keeps READY and completion visible at %s × %s with a long original target and preserves all scrollable metadata', async (columns, rows) => {
     const f = await fixture(); f.output.columns = columns; f.output.rows = rows;
@@ -206,7 +242,7 @@ describe('durable interactive project flow', () => {
     expect(content().join(' ')).toContain('Press Enter to view results');
     expect(report).not.toHaveBeenCalled();
     f.input.write('\r'); await expect.poll(() => report.mock.calls.length).toBe(1);
-    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
   it('shows white full output, caches stable logs, and retains the visible content anchor on resize', async () => {
     const f = await fixture(); const result = f.start();
@@ -243,7 +279,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\x14');
     await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('^T Full');
     expect(screens.mock.calls.at(-1)?.[0]().lines.map(stripVTControlCharacters).join('\n')).not.toContain('EVIDENCE_END');
-    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
   it('saves the name and incomplete target before READY, preserves edits on Esc, and never starts automatically', async () => {
     const f = await fixture(); const result = f.start();
@@ -264,12 +300,12 @@ describe('durable interactive project flow', () => {
     await expect.poll(() => prompts.mock.calls.length, { timeout: 5000 }).toBe(4);
     f.input.write('/still-editing\x1b');
     await expect.poll(async () => (await f.store.load(project.id)).inputDraft, { timeout: 5000 }).toBe(project.target.input + '/still-editing');
-    f.input.write('\x03');
+    f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(f.open).not.toHaveBeenCalled();
   });
 
-  it('starts only on Enter, safely pauses/resumes the real scheduler, and closes on repeated Ctrl+C', async () => {
+  it('starts only on Enter, safely pauses/resumes the real scheduler, and closes on repeated Ctrl+X', async () => {
     const f = await fixture(); const result = f.start();
     f.input.write('\rRuntime fixture\r');
     await f.wait('Target URL or IP:');
@@ -286,7 +322,10 @@ describe('durable interactive project flow', () => {
     const beforeClose = f.transcript().length;
     f.input.write('\x1b');
     await expect.poll(() => stripVTControlCharacters(f.transcript().slice(beforeClose)), { timeout: 3000 }).toContain('Esc Menu');
-    f.input.write('\x1b[27;2u'); await expect.poll(() => session?.project.status).toBe('paused');
+    f.input.write('\x1b[27;2u');
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(session?.command.isRunning()).toBe(true);
+    f.input.write('\x10'); await expect.poll(() => session?.project.status).toBe('paused');
     const work = session!.workDurationMs;
     await new Promise(resolve => setTimeout(resolve, 30));
     expect(session!.workDurationMs).toBe(work);
@@ -294,9 +333,11 @@ describe('durable interactive project flow', () => {
     expect(f.surface.panel(['Paused'])[0]).toContain('\x1b[38;5;1m');
     f.input.write('\x1b'); await f.wait('> Resume');
     expect(session?.project.status).toBe('paused');
-    f.input.write('\r');
+    f.input.write('\x10');
     await expect.poll(() => session?.project.status).toBe('running');
-    f.input.write('\x03\x03');
+    f.input.write('\x10'); await expect.poll(() => session?.project.status).toBe('paused');
+    f.input.write('\x10'); await expect.poll(() => session?.project.status).toBe('running');
+    f.input.write('\x18\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect(session?.command.isRunning()).toBe(false);
     const saved = await f.store.load(session?.project.id || '');
@@ -314,7 +355,7 @@ describe('durable interactive project flow', () => {
     await f.wait('Press Enter to start'); f.input.write('\x1b');
     await expect.poll(() => prompts.mock.calls.length).toBe(1);
     expect(prompts.mock.calls[0][1]).toBe('');
-    f.input.write('https://unfinished'); f.input.write('\x03');
+    f.input.write('https://unfinished'); f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     const saved = await f.store.load(project.id);
     expect(saved.inputDraft).toBe('https://unfinished');
@@ -339,7 +380,7 @@ describe('durable interactive project flow', () => {
     expect(await readFile(join(f.store.directory, project.id + '.report.md'), 'utf8')).toBe(project.report.markdown);
     f.input.write('\x1b[F');
     await f.wait('END OF EVIDENCE');
-    f.input.write('\x03');
+    f.input.write('\x18');
     expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect((await f.store.load(project.id)).report).toEqual(project.report);
   });
@@ -362,7 +403,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\r');
     await f.wait('Saved report:');
     expect(report).toHaveBeenCalledOnce();
-    f.input.write('\x03'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
     expect((await f.store.load(session.project.id)).report).toBeDefined();
   });
 

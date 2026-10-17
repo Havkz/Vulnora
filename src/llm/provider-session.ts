@@ -6,7 +6,7 @@ import { LLMBackbone } from './index.js';
 import { createOllamaSession } from './ollama-session.js';
 
 type Configuration = Pick<typeof settings, 'getLLMConfig' | 'get'>;
-export interface ProviderProgress { label: string; status: 'active' | 'completed' | 'failed'; detail?: string }
+export interface ProviderProgress { label: string; status: 'active' | 'completed' | 'failed' | 'skipped'; detail?: string }
 type ProgressReporter = (step: ProviderProgress) => void;
 
 async function providerStep<T>(report: ProgressReporter | undefined, label: string, run: () => Promise<T>, detail?: string): Promise<T> {
@@ -16,7 +16,7 @@ async function providerStep<T>(report: ProgressReporter | undefined, label: stri
     report?.({ label, status: 'completed', detail });
     return result;
   } catch (error) {
-    report?.({ label, status: 'failed', detail: String(redactSecrets(error instanceof Error ? error.message : String(error))) });
+    report?.({ label, status: error instanceof Error && error.name === 'AbortError' ? 'skipped' : 'failed', detail: String(redactSecrets(error instanceof Error ? error.message : String(error))) });
     throw error;
   }
 }
@@ -52,7 +52,7 @@ export async function validateProvider(config: LLMConfig, signal: AbortSignal, c
   }, config.model);
 }
 
-/** One CLI lifetime: selected primary, installed/warmed Ollama, then evidence-only execution. */
+/** Keep the chosen primary first; load local fallback only when a request needs it. */
 export class ProviderSession {
   private localSession?: ReturnType<typeof createOllamaSession>;
   private localConfig?: Pick<LLMConfig, 'model' | 'baseUrl'>;
@@ -64,14 +64,19 @@ export class ProviderSession {
     signal.addEventListener('abort', this.abort, { once: true });
   }
 
-  async installedModels(): Promise<string[]> {
+  async installedModels(signal = this.signal): Promise<string[]> {
     const base = (this.configuration.getLLMConfig('local').baseUrl || '').replace(/\/$/, '');
-    if (!base.endsWith('/api')) throw new Error('Installed model discovery requires an Ollama /api endpoint.');
-    const response = await fetch(`${base}/tags`, { signal: AbortSignal.any([this.signal, AbortSignal.timeout(10000)]) });
-    if (!response.ok) throw new Error(`Ollama discovery failed: HTTP ${response.status}`);
-    const data = await response.json() as { models?: { name?: unknown }[] };
-    if (!Array.isArray(data.models)) throw new Error('Invalid Ollama model response.');
-    return [...new Set(data.models.map(model => model.name).filter((name): name is string => typeof name === 'string' && !!name.trim()))];
+    const ollama = base.endsWith('/api');
+    const key = this.configuration.getLLMConfig('local').apiKey;
+    const response = await fetch(`${base}/${ollama ? 'tags' : 'models'}`, {
+      headers: key ? { Authorization: `Bearer ${key}` } : undefined,
+      signal: AbortSignal.any([this.signal, signal, AbortSignal.timeout(10000)]),
+    });
+    if (!response.ok) throw new Error(`Local model discovery failed: HTTP ${response.status}`);
+    const data = await response.json() as { models?: { name?: unknown }[]; data?: { id?: unknown }[] };
+    const names = ollama ? data.models?.map(model => model.name) : data.data?.map(model => model.id);
+    if (!Array.isArray(names)) throw new Error('Invalid local model response.');
+    return [...new Set(names.filter((name): name is string => typeof name === 'string' && !!name.trim()))];
   }
 
   async installedAgents(): Promise<string[]> {
@@ -87,64 +92,52 @@ export class ProviderSession {
   description(): string {
     const state = this.readiness;
     if (!state) return 'Provider initialization pending';
-    return `Primary ${state.configured.provider}/${state.configured.model}: ${state.primary.detail}; Ollama: ${state.local.detail}; active ${state.active.provider}/${state.active.model}`;
+    return `Primary ${state.configured.provider}/${state.configured.model}: ${state.primary.detail}; local: ${state.local.detail}; active ${state.active.provider}/${state.active.model}`;
   }
 
-  async prepare(report?: ProgressReporter): Promise<string> {
+  track(backbone: LLMBackbone): void {
+    const retain = () => this.localSession?.retain();
+    backbone.on('request:start', () => { if (backbone.getProvider() === 'local') retain(); });
+    backbone.on('request:fallback', event => { if (event.toProvider === 'local') retain(); });
+  }
+
+  async prepare(report?: ProgressReporter, checkSignal = this.signal): Promise<string> {
     this.signal.throwIfAborted();
-    this.effective = { provider: 'deterministic', model: 'evidence-only' }; this.readiness = undefined;
     const primary = { ...this.configuration.getLLMConfig(), fallbackChain: [] };
-    let local: LLMConfig | undefined;
+    const chosen = this.configuration.getLLMConfig('local');
+    const local = chosen.model?.trim() ? { ...chosen, fallbackChain: [] } : undefined;
+    if (this.localSession && (!local || this.localConfig?.model !== local.model || this.localConfig.baseUrl !== local.baseUrl)) await this.stop();
+    if (local && !this.localSession) {
+      this.localSession = createOllamaSession(local);
+      this.localConfig = { model: local.model, baseUrl: local.baseUrl };
+    }
+    const deterministic = { provider: 'deterministic' as const, model: 'evidence-only' };
+    this.effective = { ...primary, fallbackChain: [...(primary.provider !== 'local' && local ? [local] : []), deterministic] };
     const state: ProviderReadiness = {
       configured: { provider: primary.provider, model: primary.model },
-      primary: { ready: false, detail: 'not validated' }, local: { ready: false, detail: 'not validated' },
-      active: { provider: 'deterministic', model: 'evidence-only' },
+      primary: { ready: false, detail: 'checked on first request' },
+      local: { ready: false, model: local?.model, detail: local ? 'configured; loaded on first use' : 'not selected; discover or add a model in Settings' },
+      active: { provider: primary.provider, model: primary.model },
     };
-    const detail = (error: unknown) => String(redactSecrets(error instanceof Error ? error.message : String(error)));
-    try {
-      local = await providerStep(report, 'Discovering installed Ollama models', async () => {
-        const models = await this.installedModels();
-        const chosen = this.configuration.getLLMConfig('local');
-        const model = models.includes(chosen.model) ? chosen.model : models.length === 1 ? models[0] : undefined;
-        if (!model) throw new Error(models.length ? 'Choose an installed Ollama model in Settings.' : 'No installed Ollama model found.');
-        return { ...chosen, model, fallbackChain: [] };
-      });
-      if (!this.localSession || this.localConfig?.model !== local.model || this.localConfig.baseUrl !== local.baseUrl) {
-        if (this.localSession) await providerStep(report, 'Releasing previous Ollama model', () => this.stop());
-        this.localSession = createOllamaSession(local);
-        this.localConfig = { model: local.model, baseUrl: local.baseUrl };
-      }
-      const session = this.localSession;
-      await providerStep(report, 'Loading Ollama model', () => session.start(), local.model); this.signal.throwIfAborted();
-      await validateProvider(local, this.signal, undefined, report);
-      state.local = { ready: true, model: local.model, detail: `${local.model} ready and held` };
-    } catch (error) {
-      this.signal.throwIfAborted();
-      state.local.detail = detail(error); local = undefined;
-      try {
-        if (this.localSession) await providerStep(report, 'Releasing unavailable Ollama model', () => this.stop());
-      } catch (stopError) { state.local.detail += `; unload: ${detail(stopError)}`; }
-    }
-    this.signal.throwIfAborted();
-    try {
-      if (primary.provider === 'local' && local) {
-        primary.model = local.model;
-      } else if (primary.provider === 'local' && !/\/v\d+(\/|$)/.test(primary.baseUrl || '')) {
-        throw new Error(state.local.detail);
-      } else await validateProvider(primary, this.signal, this.configuration.get('codex').command, report);
-      state.primary = { ready: true, detail: 'inference ready' };
-    } catch (error) { this.signal.throwIfAborted(); state.primary.detail = detail(error); }
-    const deterministic = { provider: 'deterministic' as const, model: 'evidence-only' };
-    // A failed startup probe must not replace the user's primary for the whole session.
-    const retryPrimary = local && !['local', 'mock', 'deterministic'].includes(primary.provider);
-    this.effective = state.primary.ready || retryPrimary
-      ? { ...primary, fallbackChain: [...(primary.provider !== 'local' && local ? [local] : []), deterministic] }
-      : local ? { ...local, fallbackChain: [deterministic] } : deterministic;
-    const active = state.primary.ready ? primary : local || deterministic;
-    state.active = { provider: active.provider, model: active.model };
     this.readiness = state;
+    const detail = (error: unknown) => String(redactSecrets(error instanceof Error ? error.message : String(error)));
+    if (primary.provider === 'local') {
+      if (!primary.model?.trim()) throw new Error('Select or manually add a local model in Settings.');
+      report?.({ label: 'Local inference deferred until first use', status: 'skipped' });
+    } else if (['mock', 'deterministic'].includes(primary.provider)) {
+      this.effective = deterministic; state.active = deterministic;
+      throw new Error('No AI inference provider selected.');
+    } else {
+      try {
+        await validateProvider(primary, AbortSignal.any([this.signal, checkSignal]), this.configuration.get('codex').command, report);
+        state.primary = { ready: true, detail: 'inference ready' };
+      } catch (error) {
+        this.signal.throwIfAborted();
+        state.primary.detail = checkSignal.aborted ? 'check skipped; retried on first request' : detail(error);
+        if (!checkSignal.aborted) throw new Error(this.description());
+      }
+    }
     report?.({ label: `Using ${state.active.provider}/${state.active.model}`, status: 'completed' });
-    if (!state.primary.ready && !state.local.ready) throw new Error(this.description());
     return this.description();
   }
 

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createOllamaSession } from '../llm/ollama-session.js';
 import { LLMBackbone } from '../llm/index.js';
+import { ProviderSession } from '../llm/provider-session.js';
 import type { LLMConfig } from '../types/index.js';
 
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); });
@@ -11,6 +12,23 @@ const settings: LLMConfig = {
 };
 
 describe('Ollama CLI session lifecycle', () => {
+  it('makes no startup requests, then holds a model on its first actual chat and unloads it on exit', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (String(url).endsWith('/ps')) return new Response('{"models":[]}');
+      bodies.push(JSON.parse(init.body)); return new Response('{"message":{"content":"ready"},"done":true}');
+    }));
+    const local: LLMConfig = { provider: 'local', model: 'test-model', baseUrl: 'http://127.0.0.1:11434/api' };
+    const source = { getLLMConfig: () => local, get: () => ({ command: 'unused' }) } as never;
+    const unused = new ProviderSession(source, new AbortController().signal); await unused.prepare(); await unused.close();
+    expect(fetch).not.toHaveBeenCalled();
+    const runtime = new ProviderSession(source, new AbortController().signal); await runtime.prepare();
+    const llm = new LLMBackbone(runtime.getConfig()); runtime.track(llm);
+    await llm.chat([{ role: 'user', content: 'Owned local fixture' }]);
+    expect(bodies).toHaveLength(1); expect(bodies[0]).toMatchObject({ model: 'test-model', keep_alive: -1 });
+    await runtime.close(); expect(bodies[1]).toMatchObject({ model: 'test-model', keep_alive: 0 });
+  });
+
   it('preloads with the chat context, holds the model across chat, and unloads once on exit', async () => {
     vi.stubEnv('VULNORA_LOCAL_KEEP_ALIVE', '5m');
     const bodies: Array<Record<string, unknown>> = [];

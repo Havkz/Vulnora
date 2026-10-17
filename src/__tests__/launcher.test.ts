@@ -8,7 +8,7 @@ const directories: string[] = [];
 afterEach(async () => { for (const path of directories.splice(0)) await rm(path, { recursive: true, force: true }); });
 
 describe('installed launcher', () => {
-  it.skipIf(process.platform !== 'win32')('preserves existing Ollama services, stops its own service and accepts clean interruption', async () => {
+  it.skipIf(process.platform !== 'win32')('starts without probing or launching Ollama and preserves the host CLI bridge', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-launcher-')); directories.push(directory);
     await mkdir(join(directory, '.vulnora', 'sandbox'), { recursive: true });
     await copyFile('scripts/start-windows-vulnora.ps1', join(directory, 'start.ps1'));
@@ -25,8 +25,7 @@ $env:USERPROFILE = $PSScriptRoot
 $env:OLLAMA_HOST = 'preserved-host'
 $global:started = 0; $global:stopped = 0; $global:unavailable = $false; $global:exitCode = 0
 function Invoke-RestMethod {
-  if ($global:unavailable) { $global:unavailable = $false; throw 'Fixture API unavailable' }
-  return @{ models = @() }
+  throw 'Startup must not probe local models'
 }
 function Get-Command {
   param([string[]]$Name)
@@ -52,7 +51,7 @@ if ($global:invocation -contains 'VULNORA_CODEX_MODEL=other-model') { throw 'A p
 if ($global:started -or $global:stopped) { throw 'Existing service was touched' }
 $global:unavailable = $true; $global:exitCode = 130
 & (Join-Path $PSScriptRoot 'start.ps1') interactive
-if ($global:started -ne 1 -or $global:stopped -ne 1 -or $env:OLLAMA_HOST -ne 'preserved-host') { throw 'Owned service lifecycle failed' }
+if ($global:started -or $global:stopped -or $env:OLLAMA_HOST -ne 'preserved-host') { throw 'Local service was touched' }
 if ($global:invocation -notcontains 'Fixture-Arsenal' -or $global:invocation -notcontains '/home/fixture/release/scripts/start-linux-vulnora.sh') { throw 'Wrong runtime' }
 Write-Output 'WINDOWS_LAUNCHER_LIFECYCLE_OK'
 `);

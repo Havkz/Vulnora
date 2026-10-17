@@ -2,6 +2,7 @@ import { mkdir, open, rename, readFile, readdir, unlink } from 'node:fs/promises
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateProjectName, validateProjectTarget, type ProjectTarget } from './targets.js';
+import { acquireProjectLease } from './lease.js';
 
 export const PROJECT_STATUSES = ['ready', 'running', 'paused', 'completed', 'interrupted', 'failed'] as const;
 export type ProjectStatus = typeof PROJECT_STATUSES[number];
@@ -166,6 +167,45 @@ export class ProjectStore {
     }
     projects.sort((a, b) => b.lastActivity - a.lastActivity);
     return { projects, errors };
+  }
+
+  async renameProject(id: string, name: string): Promise<void> {
+    name = validateProjectName(name);
+    const release = await acquireProjectLease(this.directory, id);
+    try {
+      let project: ProjectRecord | undefined;
+      try { project = await this.load(id); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+      if (project) {
+        project.name = name; project.lastActivity = Date.now();
+        await this.save(project);
+      } else {
+        const draft = JSON.parse(await readFile(this.path(id, '.draft.json'), 'utf8')) as ProjectDraft;
+        validateDraft(draft);
+        if (draft.id !== id) throw new Error('Project draft ID does not match its file.');
+        draft.name = name; draft.lastActivity = Date.now(); await this.saveDraft(draft);
+      }
+    } finally { await release(); }
+  }
+
+  /** Remove from the project list while retaining the complete files in local trash. */
+  async deleteProject(id: string): Promise<void> {
+    const release = await acquireProjectLease(this.directory, id);
+    const moved: string[] = [];
+    const trash = join(this.directory, '.trash', `${id}-${randomUUID()}`);
+    try {
+      await this.flush(id);
+      const files = (await readdir(this.directory)).filter(file => file.startsWith(id + '.'));
+      if (!files.length) throw new Error('Project not found.');
+      await mkdir(trash, { recursive: true, mode: 0o700 });
+      try {
+        for (const file of files) { await rename(join(this.directory, file), join(trash, file)); moved.push(file); }
+      } catch (error) {
+        for (const file of moved.reverse()) await rename(join(trash, file), join(this.directory, file));
+        throw error;
+      }
+      this.journalsReady.delete(id);
+    } finally { await release(); }
   }
 
   async appendLog(id: string, event: unknown): Promise<void> {

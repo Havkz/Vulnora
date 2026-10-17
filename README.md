@@ -58,13 +58,13 @@ vulnora
 2. Review the target and press Enter at **READY** to begin.
 3. Inspect live output; use **Resume Project** to reopen saved work and results.
 
-`Esc` opens the project menu while work continues. Choose **Pause**, or press
-`Shift+Esc` in terminals that report modified keys (`Ctrl+P` is also supported),
-to stop active work and save progress. A red frame marks the paused state;
-**Resume** continues. The live view shows process runtimes and accumulated work
+`Esc` opens the project menu while work continues. `Ctrl+P` toggles pause/resume
+and saves progress. A red frame marks the paused state. Only `Ctrl+X` quits;
+**Manage Projects** renames projects or moves them and their files to local trash.
+The live view shows process runtimes and accumulated work
 time, excluding pauses; `Ctrl+T` expands command output.
 
-Select providers and scanning behavior in **Settings**. The selected primary provider is tried before the configured Ollama fallback. Startup checks actual inference; no Ollama model is downloaded automatically. The selected local model is held for the session and released on graceful exit.
+Select providers and scanning behavior in **Settings**. The selected primary provider is tried first. Local models are discovered on demand through Ollama or an OpenAI-compatible endpoint; endpoint and model ID can also be entered manually. Local inference is deferred until needed; `S` skips provider checks or model discovery. An Ollama model used by the session is retained until graceful exit. No model is downloaded automatically.
 
 Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` selects an alternative directory. Private CLI credential files remain owned by their providers and are neither copied nor modified.
 

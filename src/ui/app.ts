@@ -18,9 +18,9 @@ export interface InteractiveServices {
   store: ProjectStore;
   open: (id: string, llm: LLMConfig) => Promise<ProjectSession>;
   llm: () => LLMConfig;
-  installedModels: () => Promise<string[]>;
+  installedModels: (signal?: AbortSignal) => Promise<string[]>;
   installedAgents?: () => Promise<string[]>;
-  prepareProviders: () => Promise<string>;
+  prepareProviders: (signal?: AbortSignal) => Promise<string>;
 }
 
 /** Screens share the real durable project/session services and one input owner. */
@@ -35,12 +35,13 @@ export class InteractiveApp {
   async run(): Promise<void> {
     try {
       for (;;) {
-        const choice = await this.surface.menu('VULNORA', ['Create New Project', 'Resume Project', 'Settings']);
-        if (choice === undefined) return;
+        const choice = await this.surface.menu('VULNORA', ['Create New Project', 'Resume Project', 'Settings', 'Manage Projects']);
+        if (choice === undefined) continue;
         try {
           if (choice === 0) await this.create();
           else if (choice === 1) await this.resume();
-          else await this.settings();
+          else if (choice === 2) await this.settings();
+          else await this.resume(true);
         } catch (error) {
           if (error instanceof TerminalInterrupted) throw error;
           await this.notice('Unable to continue', error instanceof Error ? error.message : String(error));
@@ -158,7 +159,7 @@ export class InteractiveApp {
     }
   }
 
-  private async resume(): Promise<void> {
+  private async resume(manage = false): Promise<void> {
     const { projects, errors } = await this.services.store.list();
     const drafts = await this.services.store.listDrafts();
     if (errors.length || drafts.errors.length) await this.notice('Preserved project files requiring inspection', [...errors, ...drafts.errors].join('\n'));
@@ -174,6 +175,18 @@ export class InteractiveApp {
     });
     if (selected === undefined) return;
     const project = entries[selected];
+    if (manage) {
+      const action = await this.surface.menu(project.name, ['Rename project', 'Delete project', 'Back']);
+      if (action === 0) {
+        const name = await this.surface.prompt('Project name:', project.name);
+        if (name !== undefined) await this.services.store.renameProject(project.id, name);
+      } else if (action === 1) {
+        const confirmation = await this.surface.menu(`Delete ${project.name}?`, ['Cancel', 'Delete project'],
+          () => ['Saved progress, logs and reports will move to local .trash.']);
+        if (confirmation === 1) await this.services.store.deleteProject(project.id);
+      }
+      return;
+    }
     if (!('status' in project)) return this.create(project);
     if (project.status === 'ready') return this.ready(project);
     this.session = await this.services.open(project.id, this.services.llm());
@@ -290,8 +303,18 @@ export class InteractiveApp {
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
       footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
-        : this.surface.columns < 60 ? `Esc Menu ^P Pause ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
-        : `Esc Menu  Shift+Esc / Ctrl+P Pause  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
+        : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
+        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
+    };
+    const togglePause = async () => {
+      if (session.project.status === 'completed') return;
+      if (session.command.isRunning()) {
+        this.surface.paused = true;
+        this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
+        await session.pause();
+      } else {
+        this.issue = ''; await session.start();
+      }
     };
     try {
       this.surface.show(render);
@@ -304,27 +327,26 @@ export class InteractiveApp {
           this.surface.show(render); continue;
         }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }
-        if ((key.name === 'escape' && key.shift) || (key.ctrl && key.name === 'p')) {
-          if (session.project.status !== 'completed' && session.command.isRunning()) {
-            this.surface.paused = true;
-            this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
-            await session.pause();
-          }
+        if (key.ctrl && key.name === 'p') {
+          await togglePause();
           this.surface.show(render); continue;
         }
-        if (key.name === 'escape') {
+        if (key.name === 'escape' && !key.shift) {
           if (session.project.status === 'completed') return;
           if (this.issue && !session.command.isRunning()) return;
           for (;;) {
             const running = session.command.isRunning();
             this.surface.paused = !running;
-            const choices = running ? ['Continue', 'Pause', 'Settings (pause scan)', 'Beenden'] : ['Resume', 'Settings', 'Beenden'];
-            const selected = await this.surface.menu(running ? 'Project menu · Running' : 'Project menu · Paused', choices);
+            const choices = running ? ['Continue', 'Pause', 'Settings (pause scan)', 'Main menu (pause scan)'] : ['Resume', 'Settings', 'Main menu'];
+            let toggle = false;
+            const selected = await this.surface.menu(running ? 'Project menu · Running' : 'Project menu · Paused', choices, undefined,
+              key => { toggle = !!key.ctrl && key.name === 'p'; return toggle; });
+            if (toggle) { await togglePause(); this.surface.show(render); break; }
             const choice = selected === undefined ? 'Continue' : choices[selected];
-            if (choice === 'Beenden') throw new TerminalInterrupted();
             if (choice === 'Continue' || this.session?.project.status === 'completed') { this.surface.show(render); break; }
             if (choice === 'Resume') { await session.start(); this.surface.show(render); break; }
             if (session.command.isRunning()) await session.pause();
+            if (choice.startsWith('Main menu')) return;
             this.surface.paused = true;
             if (choice !== 'Pause') await this.settings();
           }
@@ -349,8 +371,8 @@ export class InteractiveApp {
   private async settings(): Promise<void> {
     const config = this.services.configuration;
     for (;;) {
-      const choice = await this.surface.menu('Settings', ['Scanning Behavior', 'Change Default Model / Provider', 'Change API Key', 'Back']);
-      if (choice === undefined || choice === 3) return;
+      const choice = await this.surface.menu('Settings', ['Scanning Behavior', 'Change Default Model / Provider', 'Change API Key', 'Local models / fallback', 'Back']);
+      if (choice === undefined || choice === 4) return;
       if (choice === 0) {
         const selected = await this.surface.menu('Scanning Behavior', ['Auto · adaptive', 'Stealth · low impact', 'Aggressive · bounded throughput']);
         if (selected !== undefined) {
@@ -363,19 +385,20 @@ export class InteractiveApp {
         const selected = await this.surface.menu('Provider', providers.map(provider => provider === 'local' ? 'Ollama / local' : provider === 'local-agent' ? 'Installed Codex / Claude CLI' : provider));
         if (selected === undefined) continue;
         const provider = providers[selected];
+        if (provider === 'local') { await this.selectLocalModel(true); continue; }
         let models: string[];
-        if (provider === 'local') models = await this.services.installedModels();
-        else if (provider === 'local-agent') models = await this.services.installedAgents?.() || [];
+        if (provider === 'local-agent') models = await this.services.installedAgents?.() || [];
         else models = (await import('../config/index.js')).AVAILABLE_MODELS[provider].map(model => model.id);
         if (!models.length) { await this.notice('Model unavailable', 'No installed models found. No model was downloaded.'); continue; }
-        const custom = provider !== 'local' && provider !== 'local-agent';
+        const custom = provider !== 'local-agent';
         const model = await this.surface.menu('Default model', [...models, ...(custom ? ['Enter model ID'] : [])]);
         if (model === undefined) continue;
         const id = model < models.length ? models[model] : await this.surface.prompt('Model ID:');
         if (!id?.trim()) continue;
-        if (provider === 'local' && !models.includes(id)) { await this.notice('Model unavailable', 'Select an installed model.'); continue; }
         config.setDefaultModel(provider, id); config.setDefaultProvider(provider);
         await this.refreshProviders();
+      } else if (choice === 3) {
+        await this.selectLocalModel(false);
       } else {
         const providers: ApiKeyProvider[] = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local'];
         const selected = await this.surface.menu('API key provider', providers);
@@ -389,8 +412,42 @@ export class InteractiveApp {
     }
   }
 
+  private async selectLocalModel(makePrimary: boolean): Promise<void> {
+    const config = this.services.configuration;
+    for (;;) {
+      let detail = 'Select a discovered model, or add a served model manually. No downloads.';
+      let models: string[] = [];
+      this.surface.show(() => ({ lines: this.surface.panel([`${this.surface.spinner} Discovering local models…`]), footer: 'S Skip discovery    Ctrl+X Save & Quit' }));
+      try { models = await this.surface.skippable(signal => this.services.installedModels(signal)) || []; }
+      catch (error) { detail = redactString(error instanceof Error ? error.message : String(error)); }
+      const selected = await this.surface.menu(makePrimary ? 'Local provider' : 'Local fallback', [...models, 'Add model manually', 'Change local endpoint', 'Back'], () => [detail]);
+      if (selected === undefined || selected === models.length + 2) return;
+      if (selected === models.length + 1) {
+        const endpoint = await this.surface.prompt('Local endpoint (/api or /v1):', config.getLLMConfig('local').baseUrl);
+        if (endpoint !== undefined) config.setLocalEndpoint(endpoint.trim());
+        continue;
+      }
+      let model: string | undefined = models[selected];
+      if (selected === models.length) {
+        const endpoint = await this.surface.prompt('Local endpoint (/api or /v1):', config.getLLMConfig('local').baseUrl);
+        if (endpoint === undefined) return;
+        model = await this.surface.prompt('Model ID:', config.getLLMConfig('local').model);
+        if (!model?.trim()) return;
+        config.setLocalEndpoint(endpoint.trim());
+      }
+      if (!model?.trim()) return;
+      config.setDefaultModel('local', model.trim());
+      if (makePrimary) config.setDefaultProvider('local');
+      await this.refreshProviders(); return;
+    }
+  }
+
   private async refreshProviders(): Promise<void> {
-    try { await this.notice('Provider availability', await this.services.prepareProviders()); }
+    try {
+      this.surface.show(() => ({ lines: this.surface.panel([`${this.surface.spinner} Checking selected provider…`]), footer: 'S Skip provider checks    Ctrl+X Save & Quit' }));
+      const description = await this.surface.skippable(signal => this.services.prepareProviders(signal));
+      await this.notice('Provider availability', description || 'Checks skipped; the selected provider will be tried on first use.');
+    }
     finally { if (this.session) this.session.command.llm.updateConfig(this.services.llm()); }
   }
 }
@@ -411,9 +468,9 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     if (!providers) throw new Error('Provider environment unavailable.');
     return providers.getConfig();
   };
-  const prepareProviders = async (): Promise<string> => {
+  const prepareProviders = async (signal?: AbortSignal): Promise<string> => {
     if (!providers) throw new Error('Provider environment unavailable.');
-    return providers.prepare();
+    return providers.prepare(undefined, signal);
   };
   try {
     const rows = await initializeTerminal(surface, [
@@ -432,6 +489,7 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
           if (!store) throw new Error('Project environment unavailable.');
           const session = await ProjectSession.open(store, id, { llm: config });
           try {
+            providers?.track(session.command.llm);
             await store.appendLog(id, { timestamp: Date.now(), category: 'provider:availability', data: providers?.readiness });
             return session;
           } catch (error) { await session.close(); throw error; }
@@ -440,7 +498,8 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
       },
       async report => {
         if (!providers) throw new Error('Provider environment unavailable.');
-        return providers.prepare(report);
+        const runtime = providers;
+        return await surface.skippable(signal => runtime.prepare(report, signal)) || 'Checks skipped; provider tried on first use';
       },
       async () => {
         if (!configuration) throw new Error('Configuration unavailable.');
@@ -460,7 +519,7 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     const runtime = providers;
     if (!runtime) throw new Error('Provider environment unavailable.');
     await new InteractiveApp(surface, { configuration, store, open, llm, prepareProviders,
-      installedModels: () => runtime.installedModels(), installedAgents: () => runtime.installedAgents() }).run();
+      installedModels: signal => runtime.installedModels(signal), installedAgents: () => runtime.installedAgents() }).run();
   } finally {
     try { await providers?.close(); }
     finally {

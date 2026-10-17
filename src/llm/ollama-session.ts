@@ -37,10 +37,14 @@ export function createOllamaSession(config: LLMConfig) {
   }
 
   return {
-    async start(): Promise<void> {
+    retain(): void {
       if (!enabled) return;
       active = true;
       process.env.VULNORA_LOCAL_KEEP_ALIVE = '-1';
+    },
+    async start(): Promise<void> {
+      if (!enabled) return;
+      this.retain();
       await request(-1, AbortSignal.any([controller.signal, AbortSignal.timeout(300000)]));
     },
     async stop(): Promise<void> {
