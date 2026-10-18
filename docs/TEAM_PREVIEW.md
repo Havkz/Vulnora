@@ -15,7 +15,7 @@ npm start
 
 In the CLI, choose **Settings** to configure the provider, then **Start New Operation**. Codex uses the existing `codex login` account. Use **View Status**, **Chat with AI**, and **Generate Report** during an operation, and **Exit** to finish.
 
-An Ollama primary or fallback is preloaded for the interactive session and unloaded on exit. The optional HTTP API remains available through `npm run server`; it does not serve a browser interface.
+An Ollama primary or fallback loads on first use, stays available for the interactive session and unloads on graceful exit. Model discovery does not load weights. The optional HTTP API remains available through `npm run server`; it does not serve a browser interface.
 
 Expected state on a fresh machine:
 

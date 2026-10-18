@@ -21,6 +21,7 @@ import { Agent as UndiciAgent } from 'undici';
 import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition, LLMToolCall, FallbackEntry } from '../types/index.js';
 import { config } from '../config/index.js';
 import { localAgentChat, type LocalAgentProgress } from '../agent/local-agents.js';
+import { fetchLocal } from './local-service.js';
 import { redactLedgerText, redactSecrets, redactString, registerSecret } from '../redact.js';
 
 // =============================================================================
@@ -29,6 +30,7 @@ import { redactLedgerText, redactSecrets, redactString, registerSecret } from '.
 
 export interface LLMEvents {
   'request:start': { messages: LLMMessage[] };
+  'request:end': undefined;
   'request:complete': { response: LLMResponse; durationMs: number };
   'request:error': { error: Error; messages: LLMMessage[] };
   'request:retry': { attempt: number; maxAttempts: number; error: Error };
@@ -962,7 +964,7 @@ class LocalAdapter implements LLMProviderAdapter {
     });
 
     try {
-      const response = await fetch(url, {
+      const response = await fetchLocal(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1485,6 +1487,11 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     const startTime = Date.now();
     const requestId = randomUUID();
     this.emit('request:start', { messages });
+    try { return await this.chatWithFallback(messages, options, startTime, requestId); }
+    finally { this.emit('request:end', undefined); }
+  }
+
+  private async chatWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string): Promise<LLMResponse> {
 
     // The model ladder: primary first, then each configured fallback hop. A hop is
     // tried when the rung above fails for ANY reason that model can't fix itself —

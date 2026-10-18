@@ -3,6 +3,11 @@ $runtimePath = Join-Path $env:USERPROFILE '.vulnora\sandbox\runtime.json'
 if (-not (Test-Path -LiteralPath $runtimePath)) { & (Join-Path $PSScriptRoot 'setup-windows-arsenal.ps1') }
 $runtime = Get-Content -LiteralPath $runtimePath -Raw | ConvertFrom-Json
 $providerEnvironment = @()
+$hostPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+if ($hostPowerShell -match '^([A-Za-z]):\\') {
+    $providerEnvironment += 'VULNORA_OLLAMA_HOST_POWERSHELL=/mnt/' + $Matches[1].ToLowerInvariant() + '/' + $hostPowerShell.Substring(3).Replace('\', '/')
+    $providerEnvironment += 'VULNORA_OLLAMA_HOST_HELPER=' + (Join-Path $PSScriptRoot 'serve-windows-ollama.ps1')
+}
 # WSL has a separate login store. Invoke the user's authenticated Windows executable instead.
 $codex = Get-Command codex.exe, codex.cmd -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($codex) {

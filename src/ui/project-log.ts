@@ -35,19 +35,25 @@ export function projectLogStyle(event: ProjectLogEvent, colors: TerminalTheme) {
   return colors.muted;
 }
 
-export function projectActivity(event: ProjectLogEvent): string | undefined {
-  const data = fields(event);
-  if (event.category === 'execution:started') return `Working · ${data.command}`;
-  if (event.category === 'execution:completed') return 'Working';
-  if (event.category === 'provider:progress' && data.type === 'turn.started') return `Thinking · ${data.agent || data.provider || 'AI'}`;
-  if (event.category === 'scan:progress') {
-    if (data.kind === 'thinking') return `Thinking · ${data.callsign || 'AI'}`;
-    if (data.kind === 'tool_call') return `Working · ${data.toolName || data.taskName || 'tool'}`;
-    if (data.kind === 'task_started') return `Working · ${data.taskName || 'scan'}`;
-    if (data.kind === 'tool_result' || data.kind === 'task_completed' || data.kind === 'task_failed') return 'Working';
+/** Running commands own the status until exit; background planning cannot replace them. */
+export class ProjectActivity {
+  private processes = new Map<string, string>();
+  private thinking = 0;
+
+  update(event: ProjectLogEvent): void {
+    const data = fields(event);
+    if (event.category === 'execution:started') this.processes.set(String(data.id), String(data.command));
+    if (event.category === 'execution:completed' || event.category === 'execution:cancelled') this.processes.delete(String(data.id));
+    if (event.category === 'provider:activity') this.thinking = Math.max(0, this.thinking + (data.state === 'started' ? 1 : -1));
+    if (event.category === 'project:paused' || event.category === 'project:completed' || event.category === 'project:closed') this.reset();
   }
-  if (event.category === 'provider:progress' && data.type === 'turn.completed') return 'Working';
-  return undefined;
+
+  get label(): string {
+    const command = this.processes.values().next().value;
+    return command ? `Working · ${command}` : this.thinking ? 'Thinking' : 'Working';
+  }
+
+  reset(): void { this.processes.clear(); this.thinking = 0; }
 }
 
 function toolInvocation(data: Record<string, unknown>): string {
@@ -83,7 +89,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
       return /Findings:/.test(detail) ? { title: 'Findings', body: detail.slice(detail.indexOf('Findings:') + 9).trim() } : undefined;
     }
   }
-  if (event.category === 'provider:progress' || event.category === 'provider:availability') return undefined;
+  if (event.category === 'provider:progress' || event.category === 'provider:availability' || event.category === 'provider:activity') return undefined;
   if (event.category === 'mission:phase_changed') {
     const outcome = data.previousOutcome === 'not_applicable' ? 'not applicable' : data.previousOutcome === 'incomplete' ? 'incomplete' : 'completed';
     return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} ${outcome}${data.reason ? ` · ${data.reason}` : ''}\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
@@ -123,7 +129,7 @@ export function formatProjectLog(event: ProjectLogEvent, transcript = false, col
       if (/^["']/.test(token)) return colors.success(token);
       if (token.startsWith('-')) {
         const equal = token.indexOf('=');
-        return equal < 0 ? colors.error(token) : colors.error(token.slice(0, equal)) + colors.muted(token.slice(equal));
+        return equal < 0 ? colors.argument(token) : colors.argument(token.slice(0, equal)) + colors.muted(token.slice(equal));
       }
       return colors.muted(token);
     }).join('');

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { stripVTControlCharacters } from 'node:util';
-import { formatDuration, formatProjectLog, formatSavedProjectLog, projectActivity } from '../ui/project-log.js';
+import { formatDuration, formatProjectLog, formatSavedProjectLog, ProjectActivity } from '../ui/project-log.js';
 import { createTheme } from '../ui/theme.js';
 import type { ProjectLogEvent } from '../projects/session.js';
 
@@ -27,7 +27,7 @@ describe('readable project logs', () => {
     event.category = 'execution:started';
     const text = formatProjectLog(event, false, colors);
     expect(text).toContain(colors.command('curl'));
-    expect(text).toContain(colors.error('--url'));
+    expect(text).toContain(colors.argument('--url'));
     expect(text).toContain(colors.muted('https://fixture.test/robots.txt'));
     expect(stripVTControlCharacters(text)).toContain('Ran curl --url');
     expect(text.endsWith('\n')).toBe(true);
@@ -49,7 +49,6 @@ describe('readable project logs', () => {
     const event = (type: string) => ({ timestamp: 1, category: 'provider:progress', data: { agent: 'codex', type, text: '{"tool_calls":[]}' } });
     expect(formatProjectLog(event('thread.started'))).toBe('');
     expect(formatProjectLog(event('turn.started'))).toBe('');
-    expect(projectActivity(event('turn.started'))).toBe('Thinking · codex');
     expect(formatProjectLog(event('item.completed'))).not.toContain('tool_calls');
     expect(formatProjectLog(event('item.completed'), true)).toBe('');
     expect(formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { kind: 'thinking', detail: '```json\n{"tool_calls":[]}\n```' } })).toBe('');
@@ -79,8 +78,9 @@ describe('readable project logs', () => {
     const brief = formatProjectLog(call, false, colors, 80, result(true));
     expect(brief).toContain(colors.foreground('Ran') + ' ' + colors.command('curl'));
     expect(brief).not.toContain('●');
-    expect(brief).toContain(colors.error('-u')); expect(brief).toContain(colors.muted('user'));
-    expect(brief).toContain(colors.error('--retry') + colors.muted('=2'));
+    expect(brief).toContain(colors.argument('-u')); expect(brief).toContain(colors.muted('user'));
+    expect(brief).toContain(colors.argument('--retry') + colors.muted('=2'));
+    expect(colors.argument('-u')).not.toBe(colors.error('-u'));
     expect(brief).toContain(colors.success("'Accept: application/json'"));
     expect(brief).toContain(colors.muted('https://fixture.test'));
     expect(brief).toContain('    ' + colors.muted('First'));
@@ -96,6 +96,25 @@ describe('readable project logs', () => {
     expect(formatProjectLog({ timestamp: 1, category: 'scan:progress', data: { kind: 'tool_result', executionTraced: true, detail: 'Already shown under actual argv' } })).toBe('');
     expect(formatProjectLog({ timestamp: 1, category: 'orchestration:event', data: { action: 'SKIPPED', reason: 'duplicate', toolName: 'technology_detect' } })).toBe('');
     expect(formatSavedProjectLog({ timestamp: 1, category: 'orchestration:event', data: { action: 'SKIPPED', reason: 'duplicate' } })).toContain('duplicate');
+  });
+
+  it('keeps the oldest running command ahead of concurrent planning and protocol noise', () => {
+    const activity = new ProjectActivity();
+    const emit = (category: string, data: Record<string, unknown> = {}) => activity.update({ timestamp: 1, category, data });
+    emit('provider:activity', { state: 'started' }); emit('provider:activity', { state: 'started' });
+    expect(activity.label).toBe('Thinking');
+    emit('execution:started', { id: 'first', command: 'curl' });
+    emit('execution:started', { id: 'second', command: 'nmap' });
+    emit('provider:progress', { agent: 'codex', type: 'turn.started' });
+    emit('scan:progress', { kind: 'thinking', callsign: 'Recon-2' });
+    emit('provider:activity', { state: 'completed' });
+    expect(activity.label).toBe('Working · curl');
+    emit('execution:completed', { id: 'first' }); expect(activity.label).toBe('Working · nmap');
+    emit('execution:cancelled', { id: 'second' }); expect(activity.label).toBe('Thinking');
+    emit('provider:activity', { state: 'completed' }); expect(activity.label).toBe('Working');
+    emit('provider:activity', { state: 'started' }); emit('project:paused');
+    expect(activity.label).toBe('Working');
+    expect(formatProjectLog({ timestamp: 1, category: 'provider:activity', data: { state: 'started' } })).toBe('');
   });
 
   it('labels incomplete and inapplicable phases truthfully', () => {

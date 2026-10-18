@@ -4,6 +4,7 @@ import { redactSecrets } from '../redact.js';
 import type { LLMConfig, LLMProvider } from '../types/index.js';
 import { LLMBackbone } from './index.js';
 import { createOllamaSession } from './ollama-session.js';
+import { fetchLocal, stopOwnedOllama } from './local-service.js';
 
 type Configuration = Pick<typeof settings, 'getLLMConfig' | 'get'>;
 export interface ProviderProgress { label: string; status: 'active' | 'completed' | 'failed' | 'skipped'; detail?: string }
@@ -68,7 +69,7 @@ export class ProviderSession {
     const base = (this.configuration.getLLMConfig('local').baseUrl || '').replace(/\/$/, '');
     const ollama = base.endsWith('/api');
     const key = this.configuration.getLLMConfig('local').apiKey;
-    const response = await fetch(`${base}/${ollama ? 'tags' : 'models'}`, {
+    const response = await fetchLocal(`${base}/${ollama ? 'tags' : 'models'}`, {
       headers: key ? { Authorization: `Bearer ${key}` } : undefined,
       signal: AbortSignal.any([this.signal, signal, AbortSignal.timeout(10000)]),
     });
@@ -149,6 +150,7 @@ export class ProviderSession {
 
   async close(): Promise<void> {
     this.signal.removeEventListener('abort', this.abort);
-    await this.stop();
+    try { await this.stop(); }
+    finally { await stopOwnedOllama(); }
   }
 }

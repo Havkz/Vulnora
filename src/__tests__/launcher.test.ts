@@ -47,6 +47,8 @@ if ($global:started -or $global:invocation[-1] -ne '--help') { throw 'Headless a
 if ($global:invocation -notcontains 'VULNORA_CODEX_MODEL=installed-host-model' -or
     -not ($global:invocation | Where-Object { $_ -like 'VULNORA_CODEX_HOST_COMMAND=/mnt/*/native cli/codex.exe' })) { throw 'Host Codex/model not shared as separate literal arguments' }
 if ($global:invocation -contains 'VULNORA_CODEX_MODEL=other-model') { throw 'A profile changed the selected model' }
+if ($global:invocation -notcontains ('VULNORA_OLLAMA_HOST_HELPER=' + (Join-Path $PSScriptRoot 'serve-windows-ollama.ps1')) -or
+    -not ($global:invocation | Where-Object { $_ -like 'VULNORA_OLLAMA_HOST_POWERSHELL=/mnt/*/powershell.exe' })) { throw 'On-demand host Ollama bridge missing' }
 & (Join-Path $PSScriptRoot 'start.ps1') interactive
 if ($global:started -or $global:stopped) { throw 'Existing service was touched' }
 $global:unavailable = $true; $global:exitCode = 130

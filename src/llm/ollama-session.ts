@@ -1,5 +1,6 @@
 import type { LLMConfig } from '../types/index.js';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fetchLocal } from './local-service.js';
 
 /** Hold the configured Ollama model for one CLI session, then release its memory. */
 export function createOllamaSession(config: LLMConfig) {
@@ -12,7 +13,7 @@ export function createOllamaSession(config: LLMConfig) {
   let stopping: Promise<void> | undefined;
 
   async function request(keepAlive: number, signal: AbortSignal): Promise<void> {
-    const response = await fetch(`${baseUrl}/generate`, {
+    const response = await (keepAlive < 0 ? fetchLocal : fetch)(`${baseUrl}/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

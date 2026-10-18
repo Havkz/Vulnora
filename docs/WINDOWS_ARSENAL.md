@@ -34,16 +34,18 @@ Kali packages provide common binaries; Go covers the remaining web tools. Nuclei
 and the directory-discovery wordlist are installed. The installer also installs Node and Codex.
 `node scripts/arsenal-doctor.mjs --offline --strict` checks all 23 adapters without an API server.
 
-The launcher starts native Windows Ollama bound to `127.0.0.1:11434` if needed. WSL mirrored
-networking lets the Linux application reach that same loopback address. Existing
+Local model discovery or the first local inference request starts installed Windows
+Ollama on `127.0.0.1:11434` when its service is offline. Normal CLI startup makes no
+local model request. Discovery lists installed models without loading their weights.
+WSL mirrored networking lets the Linux application reach that same loopback address. Existing
 Windows/WSL networking, kernel and memory settings are preserved by this installer.
 
 Saved provider/model choices remain effective. Codex/Claude reuse authentication
 through documented CLI invocation; their credential files are never copied or edited.
-Startup validates actual inference and shows failures honestly, permitting supported
-fallback, Settings and saved reports. The session holds the selected local model until
-graceful exit and unloads that model afterwards. The launcher stops only an Ollama
-service it started itself and does not unload an unrelated hardcoded model.
+Startup checks the primary provider; local inference is deferred until needed. `S`
+skips a provider check or model discovery. The session holds a local model after its
+first use until graceful exit and unloads it afterwards. It stops only an Ollama
+service it started itself. Existing services and unrelated models remain available.
 
 Linux legacy application data is migrated first; Windows Vulnora data fills missing
 files only. Destination files and original sources remain intact; migration records

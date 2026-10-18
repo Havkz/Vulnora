@@ -46,6 +46,26 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it('renders stable activity priority from real project process and model lifecycle events', async () => {
+    const f = await fixture(); const screens = vi.spyOn(f.surface, 'show'); const result = f.start();
+    f.input.write('\rActivity fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    const view = () => screens.mock.calls.at(-1)?.[0]().lines.map(stripVTControlCharacters).join('\n') || '';
+    session.command.llm.emit('request:start', { messages: [] });
+    expect(view()).toContain('Thinking · Work');
+    session.command.arsenal.emit('tool:process', { id: 'curl', type: 'started', command: 'curl', args: ['https://fixture.test'], toolName: 'http_request' });
+    session.command.arsenal.emit('tool:process', { id: 'nmap', type: 'started', command: 'nmap', args: ['fixture.test'], toolName: 'nmap_scan' });
+    session.command.llm.emit('request:progress', { agent: 'codex', type: 'turn.started', provider: 'codex', model: 'fixture' });
+    expect(view()).toContain('Working · curl · Work');
+    session.command.arsenal.emit('tool:process', { id: 'curl', type: 'completed', command: 'curl', args: [], exitCode: 0, toolName: 'http_request' });
+    expect(view()).toContain('Working · nmap · Work');
+    session.command.arsenal.emit('tool:process', { id: 'nmap', type: 'completed', command: 'nmap', args: [], exitCode: 0, toolName: 'nmap_scan' });
+    expect(view()).toContain('Thinking · Work');
+    session.command.llm.emit('request:end', undefined); expect(view()).not.toContain('Thinking · Work');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
   it('renames and deletes saved projects from Manage Projects with an explicit delete confirmation', async () => {
     const f = await fixture(); const project = await f.store.create('Before rename', 'https://fixture.test'); const result = f.start();
     f.input.write('\x1b[B\x1b[B\x1b[B\r\r\r'); await f.wait('Project name:');

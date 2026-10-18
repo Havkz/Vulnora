@@ -6,7 +6,7 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, projectActivity } from './project-log.js';
+import { formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, ProjectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
@@ -227,7 +227,7 @@ export class InteractiveApp {
       return undefined;
     };
     logs.forEach((_event, index) => linkResult(index));
-    let activity = 'Working';
+    const activity = new ProjectActivity();
     let recoveryDetails = '';
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
@@ -237,8 +237,7 @@ export class InteractiveApp {
         if (!tail) reflowAnchor = wrapped[offset];
         processed = changed; wrapped = wrapped.filter(line => line.event < changed);
       }
-      const next = projectActivity(event);
-      if (next) activity = next;
+      activity.update(event);
       this.surface.refresh();
     };
     const onError = (error: Error) => {
@@ -298,7 +297,7 @@ export class InteractiveApp {
       }
       const pausedLabel = this.surface.columns < 40 ? 'Paused · Enter Details' : 'Recovery paused · Enter Details · Esc Back';
       const progress = Math.max(0, Math.min(10, Math.floor(session.project.progress / 10)));
-      const animation = paused ? 'Paused' : `${this.surface.spinner} ${activity}`;
+      const animation = paused ? 'Paused' : `${this.surface.spinner} ${activity.label}`;
       const status = completed ? [] : [this.surface.colors.muted(fitTerminalText(blocked ? pausedLabel
         : `${animation} · Work ${formatDuration(session.workDurationMs)}${this.surface.panelColumns >= 65 ? `  [${'━'.repeat(progress)}${'─'.repeat(10 - progress)}]` : ''}`, this.surface.panelColumns))];
       const room = Math.max(1, this.surface.panelRows - heading.length - bottom.length - status.length - (dense ? 0 : 2));
@@ -315,6 +314,7 @@ export class InteractiveApp {
         this.surface.paused = true;
         this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
         await session.pause();
+        activity.reset();
       } else {
         this.issue = ''; await session.start();
       }
