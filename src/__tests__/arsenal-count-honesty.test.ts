@@ -9,13 +9,13 @@ const deps: AdapterToolDeps = {
 };
 
 describe('website/API arsenal registration', () => {
-  it('registers the advertised 32 default and 23 external tools without duplicates', () => {
+  it('registers 33 default and 23 external tools without duplicates', () => {
     const defaults = [...BUILTIN_TOOLS, ...EXTERNAL_TOOLS];
     const adapters = buildAdapterTools(TOOL_ADAPTERS, deps, new Set(defaults.map(tool => tool.name)));
     const tools = [...defaults, ...adapters];
-    expect(defaults).toHaveLength(32);
+    expect(defaults).toHaveLength(33);
     expect(adapters).toHaveLength(23);
-    expect(tools).toHaveLength(55);
+    expect(tools).toHaveLength(56);
     expect(new Set(tools.map(tool => tool.name)).size).toBe(tools.length);
     for (const tool of tools) expect(typeof tool.handler).toBe('function');
   });

@@ -198,7 +198,14 @@ export class InteractiveApp {
     if (!('status' in project)) return this.create(project);
     if (project.status === 'ready') return this.ready(project);
     this.session = await this.services.open(project.id, this.services.llm());
-    if (project.status === 'completed') await this.results();
+    if (project.status === 'completed') {
+      const mission = this.session.command.mission.getAllMissions().at(-1);
+      if (mission?.completionStatus && mission.completionStatus !== 'COMPLETED') {
+        const choice = await this.surface.menu(`${project.name} · ${mission.completionStatus}`, ['Continue incomplete assessment', 'View saved results', 'Back']);
+        if (choice === 0) { await this.session.continueIncomplete(); await this.scan(); }
+        else if (choice === 1) await this.results();
+      } else await this.results();
+    }
     else {
       const choice = await this.surface.menu(`${project.name} · ${project.status}`, ['Resume', 'View saved logs']);
       if (choice === 0) await this.scan();
@@ -239,6 +246,7 @@ export class InteractiveApp {
     let recoveryDetails = '';
     let recoveryTaskId: string | undefined;
     let recoveryCallId: string | undefined;
+    let authorizationRequired = false;
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
       logs.push(event);
@@ -257,10 +265,12 @@ export class InteractiveApp {
       const data = last?.category === 'recovery:blocked' && last.data && typeof last.data === 'object' ? last.data as Record<string, unknown> : {};
       recoveryTaskId = typeof data.taskId === 'string' ? data.taskId : undefined;
       recoveryCallId = typeof data.callId === 'string' ? data.callId : undefined;
+      authorizationRequired = data.recoveryAction === 'authorize';
       if (typeof data.toolName === 'string') {
         recoveryDetails += `\n\nInterrupted tool: ${data.toolName}\nRecorded arguments:\n${JSON.stringify(redactSecrets(data.parameters), null, 2)}`;
       }
       recoveryDetails += '\n\nThe saved checkpoint and completed results are retained. After inspecting the arguments and target state, press Ctrl+R to retry this interrupted task and continue. The interrupted call may run again. Esc returns to the scan; Ctrl+X saves and quits.';
+      if (authorizationRequired) recoveryDetails += `\n\nTarget: ${session.project.target.input}\nCtrl+A authorizes active impact validation for this project and resumes. Existing scope and individual tool approvals still apply.`;
       if ((logs.at(-1)?.data as { error?: string } | undefined)?.error !== this.issue) {
         onLog({ timestamp: Date.now(), category: 'project:error', data: { error: this.issue } });
       } else this.surface.refresh();
@@ -359,10 +369,13 @@ export class InteractiveApp {
         if (key.name === 'return' && this.issue && !session.command.isRunning()) {
           const taskId = recoveryTaskId; const callId = recoveryCallId;
           await this.document('Recovery paused', () => recoveryDetails,
-            'Ctrl+R Retry reviewed task    ↑/↓ Scroll    Esc Back    Ctrl+X Save & Quit', false, async key => {
-              if (!key.ctrl || key.name !== 'r' || !taskId) return false;
+            authorizationRequired ? 'Ctrl+A Authorize scoped validation & resume    Esc Back    Ctrl+X Quit'
+              : 'Ctrl+R Retry reviewed task    ↑/↓ Scroll    Esc Back    Ctrl+X Save & Quit', false, async key => {
+              const authorize = key.ctrl && key.name === 'a' && authorizationRequired;
+              if (!taskId || (!authorize && (!key.ctrl || key.name !== 'r' || authorizationRequired))) return false;
               try {
-                await session.recover(taskId, callId);
+                if (authorize) await session.authorizeActiveTesting(taskId);
+                else await session.recover(taskId, callId);
                 this.issue = ''; activity.reset();
                 return true;
               } catch (error) {

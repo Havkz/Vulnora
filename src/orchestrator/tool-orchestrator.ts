@@ -466,6 +466,10 @@ export class ToolOrchestrator {
     if (!this.metrics.incompleteAreas.includes(area)) this.metrics.incompleteAreas.push(area);
   }
 
+  resolveIncompleteArea(area: string): void {
+    this.metrics.incompleteAreas = this.metrics.incompleteAreas.filter(item => item !== area);
+  }
+
   abortTarget(target: string, reason = 'manual abort'): number {
     const host = targetKey(target);
     let aborted = 0;

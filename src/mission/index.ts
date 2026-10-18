@@ -351,7 +351,8 @@ export class MissionControl extends EventEmitter<MissionEvents> {
     }
 
     if (tasks.length > 0) {
-      this.taskQueue.addMany(tasks);
+      const existing = this.taskQueue.getForMission(mission.id);
+      this.taskQueue.addMany(tasks.filter(task => !existing.some(item => item.phase === task.phase && item.name === task.name && item.description === task.description)));
     }
   }
 

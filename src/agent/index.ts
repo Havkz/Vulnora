@@ -272,7 +272,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         .filter(record => !evidenceTarget || normalizeToolCall('http_request', { parameters: { url: record.target } }).host === evidenceTarget)
         .map(record => [record.normalizedSignature, record])).values()].slice(-profile.findingLimit);
       const content = 'SHARED SCAN STATE\n' + records.map(record =>
-        `Evidence ${record.id}: ${record.toolName} ${JSON.stringify(record.requestParameters).slice(0, profile.evidenceChars)} status=${record.errorType || record.executionStatus}; ${String(record.result.error || record.rawOutput).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}`)
+        `Evidence ${record.id}: ${record.toolName} ${JSON.stringify(record.requestParameters).slice(0, profile.evidenceChars)} status=${record.errorType || record.executionStatus}; ${String(record.result.error || record.rawOutput).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}`
+        + (record.result.metadata?.responseBody ? ` Body: ${String(record.result.metadata.responseBody).replace(/\s+/g, ' ').slice(0, profile.evidenceChars)}` : ''))
         .join('\n') + active.map(call => `\nIn progress: ${call.toolName} ${JSON.stringify(call.parameters).slice(0, profile.evidenceChars)}`).join('')
         + '\nUse these observations as existing results. Other operators own in-progress checks. Select the next unresolved test for this task; return RESULT when its objective is covered.';
       const previous = messages.find(message => message.role === 'user' && message.content.startsWith('SHARED SCAN STATE\n'));
@@ -850,6 +851,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     if (result.error) {
       parts.push(`Error: ${result.error}`);
     }
+    if (typeof result.metadata?.responseBody === 'string' && result.metadata.responseBody) {
+      const profile = resolveAgentPromptProfile(this.llm.getPromptProfile());
+      parts.push(`Response body (excerpt):\n${result.metadata.responseBody.slice(0, profile.evidenceChars)}`);
+    }
+    if (typeof result.metadata?.finalUrl === 'string') parts.push(`Final URL: ${result.metadata.finalUrl}`);
 
     if (result.findings?.length) {
       parts.push('\nFindings:');

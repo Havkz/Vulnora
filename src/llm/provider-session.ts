@@ -151,7 +151,8 @@ export class ProviderSession {
       } catch (error) {
         this.signal.throwIfAborted();
         state.primary.detail = checkSignal.aborted ? 'check skipped; retried on first request' : detail(error);
-        if (!checkSignal.aborted) throw new Error(this.description());
+        if (!checkSignal.aborted && !local) throw new Error(this.description());
+        if (!checkSignal.aborted && local) report?.({ label: `Primary unavailable; ${local.model} fallback will be tried on first request`, status: 'skipped' });
       }
     }
     report?.({ label: `Using ${state.active.provider}/${state.active.model}`, status: 'completed' });

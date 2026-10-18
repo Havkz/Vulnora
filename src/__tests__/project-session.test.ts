@@ -32,6 +32,49 @@ async function open(store: ProjectStore, id: string) {
 }
 
 describe('persistent project sessions', () => {
+  it('reopens an incomplete assessment durably while retaining completed results and regenerating its report later', async () => {
+    const { store, project } = await fixture(); const first = await open(store, project.id);
+    await first.start(); await first.pause();
+    const mission = first.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
+    const done = first.command.mission.createTask({ missionId: mission.id, name: 'Preserved check', description: project.target.input,
+      phase: KillChainPhase.RECON, operatorType: 'recon' });
+    first.command.mission.getTaskQueue().complete(done.id, { success: true, output: 'Completed evidence' });
+    const report = first.command.mission.createTask({ missionId: mission.id, name: 'Report', description: project.target.input,
+      phase: KillChainPhase.ACTIONS, operatorType: 'analyst' });
+    first.command.mission.getTaskQueue().complete(report.id, { success: true, output: 'Old report' });
+    first.command.mission.completeMission(mission.id, 'PARTIALLY_COMPLETED');
+    first.project.status = 'completed'; first.project.report = { markdown: 'Original report preserved in journal', generatedAt: 1 };
+    await first.close();
+    expect((await store.load(project.id)).progress).toBeLessThan(100);
+    const restored = await open(store, project.id); await restored.continueIncomplete();
+    expect(restored.project.status).toBe('paused'); expect(restored.project.report).toBeUndefined();
+    expect(restored.command.mission.getActiveMission()?.status).toBe('active');
+    expect(restored.command.mission.getTaskQueue().getTask(done.id)?.result?.output).toBe('Completed evidence');
+    expect(restored.command.mission.getTaskQueue().getTask(report.id)?.status).toBe('pending');
+    await restored.start(); expect(restored.command.isRunning()).toBe(true); await restored.pause();
+    const logs = (await store.readLogs(project.id)).events as ProjectLogEvent[];
+    expect(logs.find(event => event.category === 'report:superseded')?.data).toMatchObject({ markdown: 'Original report preserved in journal' });
+  });
+
+  it('pauses for project-scoped active validation authorization and persists the explicit approval before resuming', async () => {
+    const { store, project } = await fixture(); const session = await open(store, project.id);
+    const command = session.command; const target = command.targetEnv.getAllTargets()[0];
+    const mission = command.mission.createMission({ name: 'Validation', objectives: [], phases: [KillChainPhase.DELIVER, KillChainPhase.ACTIONS] });
+    command.mission.startMission(mission.id);
+    target.vulnerabilities = [{ id: 'finding', name: 'Validated input issue', description: 'Fixture', severity: 'high', evidenceStatus: 'validated' }];
+    const task = command.mission.createTask({ missionId: mission.id, name: 'Validate impact', description: target.address, phase: KillChainPhase.DELIVER, operatorType: 'exploiter' });
+    const scope = command.arsenal.getScope();
+    await session.start();
+    (command as unknown as { taskSeeded: boolean }).taskSeeded = true;
+    await (command as unknown as { tick(): Promise<void> }).tick();
+    expect(command.isRunning()).toBe(false); expect(task.status).toBe('pending'); expect(session.project.status).toBe('paused');
+    expect(command.mission.getActiveMission()?.currentPhase).toBe(KillChainPhase.DELIVER);
+    await session.authorizeActiveTesting(task.id);
+    expect(command.isRunning()).toBe(true); expect(command.arsenal.getScope()).toEqual(scope); expect(command.approval.approvedTools()).toEqual([]);
+    const saved = (await store.load(project.id)).checkpoint as EngineCheckpoint;
+    expect(saved.targets[0].metadata?.authorizationReceipt).toMatch(/^project-review:/);
+    await session.pause();
+  });
   it('recovers a reviewed interrupted call after reopening without resetting completed tasks or bypassing scope', async () => {
     const { store, project } = await fixture(); const first = await open(store, project.id);
     await first.start(); await first.pause();

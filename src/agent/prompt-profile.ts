@@ -66,7 +66,7 @@ const TOOL_PRIORITY: Record<string, string[]> = {
     'api_endpoint_discovery', 'waybackurls_tool',
   ],
   scanner: [
-    'nuclei_scan', 'http_request', 'header_analysis', 'ssl_scan', 'csp_analysis',
+    'nuclei_scan', 'web_surface_review', 'http_request', 'header_analysis', 'ssl_scan', 'csp_analysis',
     'cors_check', 'cookie_analysis', 'http_methods_test', 'clickjacking_test',
     'technology_detect', 'version_detect', 'api_endpoint_discovery', 'open_redirect_test',
   ],
@@ -88,7 +88,7 @@ const TOOL_PRIORITY: Record<string, string[]> = {
 
 const CREDENTIAL_TOOLS = /^(?:password_spray|hash_crack|hydra_tool)$/;
 const INTRUSIVE_TOOLS = /(?:exploit|metasploit|msf|sqlmap|password_spray|hydra|command_exec|shell)/i;
-const NETWORK_TOOLS = /(?:nmap|port_scan|naabu|http|curl|dns|whois|subdomain|subfinder|amass|nuclei|ffuf|gobuster|ferox|katana|ssl|testssl|technology|whatweb|header|version|cors|csp|cookie|clickjack|redirect|sqli|xss|ssti|lfi|trace|robots|api_endpoint)/i;
+const NETWORK_TOOLS = /(?:nmap|port_scan|naabu|http|curl|dns|whois|subdomain|subfinder|amass|nuclei|ffuf|gobuster|ferox|katana|ssl|testssl|technology|whatweb|header|version|cors|csp|cookie|clickjack|redirect|sqli|xss|ssti|lfi|trace|robots|api_endpoint|web_surface)/i;
 
 function groupForTool(name: string): string {
   return FUNCTION_GROUPS.find(entry => entry.matches.test(name))?.group || name;

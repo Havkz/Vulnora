@@ -15,11 +15,19 @@ const servers: Server[] = [];
 const commands: VulnoraCommand[] = [];
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   for (const command of commands.splice(0)) { command.stop(); command.opsec.cleanup(); }
   for (const server of servers.splice(0)) { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 });
 
 describe('website execution repairs', () => {
+  it.each(['xss_scan', 'sqli_scan'])('keeps %s failures retryable instead of reporting a successful negative scan', async name => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('fixture network unavailable'); }));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === name));
+    const result = await arsenal.execute(name, { parameters: { url: 'https://fixture.test/search?q=hello', param: 'q' } });
+    expect(result.success).toBe(false); expect(result.error).toContain('inspection incomplete');
+    expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('error');
+  });
   it('rejects redirects to a raw IP unless that IP was explicitly scoped', async () => {
     const paths: string[] = [];
     const server = createServer((request, response) => {

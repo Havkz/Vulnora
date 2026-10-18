@@ -1055,6 +1055,35 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.mission.getTaskQueue().updateStatus(task.id, 'pending');
   }
 
+  public authorizeActiveTask(taskId: string): void {
+    const task = this.mission.getTaskQueue().getTask(taskId);
+    if (this.isRunning() || !task || task.status !== 'pending' || task.phase !== this.mission.getActiveMission()?.currentPhase
+      || ![KillChainPhase.DELIVER, KillChainPhase.EXPLOIT].includes(task.phase)) throw new Error('No paused impact-validation task is awaiting authorization.');
+    const target = this.targetEnv.getAllTargets().find(item => task.description.includes(item.address)) || this.targetEnv.getAllTargets()[0];
+    if (!target) throw new Error('Recovery target is unavailable.');
+    target.metadata = { ...target.metadata, authorizationReceipt: `project-review:${randomUUID()}` };
+  }
+
+  public reopenIncompleteMission(): void {
+    if (this.running || this.activeDispatches.size) throw new Error('Close active work before reopening an incomplete assessment.');
+    const state = this.mission.exportCheckpoint();
+    const mission = state.missions.at(-1);
+    if (!mission || mission.status !== 'completed' || mission.completionStatus === 'COMPLETED') throw new Error('No incomplete assessment is available.');
+    const snapshots = this.targetEnv.getAllTargets().map(target => evaluateCoverage(target.address, this.arsenal.getOrchestrator().getEvidence()));
+    mission.currentPhase = snapshots.some(snapshot => openCoverage(snapshot, RECON_COVERAGE).length) ? KillChainPhase.RECON
+      : snapshots.some(snapshot => openCoverage(snapshot, VALIDATION_COVERAGE).length) ? KillChainPhase.WEAPONIZE : KillChainPhase.DELIVER;
+    mission.status = 'active'; delete mission.completionStatus; delete mission.completedAt;
+    mission.progress = Math.max(0, mission.phases.indexOf(mission.currentPhase)) / mission.phases.length * 100;
+    state.activeMissionId = mission.id;
+    for (const task of state.tasks) {
+      if (task.missionId === mission.id && (task.phase === KillChainPhase.ACTIONS || task.result?.skipReason === 'not_authorized')) {
+        task.status = 'pending'; delete task.result; delete task.checkpoint; delete task.completedAt; delete task.assignedTo;
+      }
+    }
+    this.mission.restoreCheckpoint(state); this.restoredCompleted = false;
+    this.coverageTerminalized.clear(); this.coverageRecoveryAttempts.clear(); this.stallReason = null;
+  }
+
   /** Resume saved read-only dispatch failures without replaying writes or scripts. */
   private retryInterruptedReads(): void {
     const mission = this.mission.getActiveMission();
@@ -1157,6 +1186,12 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       const terminalKey = `${mission.id}:${target.address}`;
       const terminalized = this.coverageTerminalized.get(terminalKey) || new Set<CoverageCapability>();
       this.coverageTerminalized.set(terminalKey, terminalized);
+      for (const capability of required) {
+        if (['completed', 'completed_negative', 'not_applicable'].includes(snapshot.entries[capability].status)) {
+          terminalized.delete(capability);
+          this.arsenal.getOrchestrator().resolveIncompleteArea(`${target.address}: ${capability}`);
+        }
+      }
       const open = openCoverage(snapshot, required, terminalized);
       if (!open.length) continue;
 
@@ -1263,7 +1298,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     // ── Check for phase advancement ──
     const allMissionTasks = taskQueue.getForMission(mission.id);
     const pendingOrActive = allMissionTasks.filter(
-      t => t.status === 'pending' || t.status === 'assigned' || t.status === 'in_progress'
+      t => t.phase === mission.currentPhase && (t.status === 'pending' || t.status === 'assigned' || t.status === 'in_progress')
     );
     const inFlight = allMissionTasks.filter(t => this.activeDispatches.has(t.id));
     const infrastructureFailures = allMissionTasks.filter(task => task.phase === mission.currentPhase
@@ -1320,7 +1355,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     }
 
     // ── Dispatch pending tasks to idle operators ──
-    const pendingTasks = taskQueue.getPending();
+    const pendingTasks = taskQueue.getPending().filter(task => task.missionId === mission.id && task.phase === mission.currentPhase);
     if (pendingTasks.length === 0) return;
 
     for (const task of pendingTasks) {
@@ -1405,10 +1440,14 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
           requiredToolAvailable,
         });
         this.phaseStatuses.set(`${mission.id}:${task.phase}:${target.id}`, gate.phaseStatus);
+        if (gate.phaseStatus === 'not_authorized') {
+          const error = new ToolRecoveryRequiredError('Active impact validation needs authorization for this project. Inspect Recovery details and use Ctrl+A to authorize scoped active checks, then continue.');
+          error.name = 'ActiveTestingAuthorizationRequired';
+          this.pause(); this.emit('recovery:blocked', { task, error }); return;
+        }
         if (!gate.allowed) {
           const skipReason = gate.phaseStatus === 'no_validated_targets' ? 'no_validated_targets'
-            : gate.phaseStatus === 'not_authorized' ? 'not_authorized'
-              : gate.phaseStatus === 'unavailable' ? 'dependency_missing'
+            : gate.phaseStatus === 'unavailable' ? 'dependency_missing'
                 : this.arsenal.getOrchestrator().getNetworkContext(target.address).blockState === 'probable_edge_block' ? 'waf_blocked'
                   : /budget/i.test(gate.reason) ? 'budget_exceeded' : 'configuration_error';
           taskQueue.updateStatus(task.id, 'skipped', { success: false, error: `${gate.phaseStatus}: ${gate.reason}`, skipReason, executionStatus: 'blocked', outcomeStatus: 'inconclusive' });

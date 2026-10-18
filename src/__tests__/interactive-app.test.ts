@@ -158,6 +158,23 @@ describe('durable interactive project flow', () => {
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
 
+  it('authorizes scoped active validation from its recovery screen without granting unrelated tools', async () => {
+    const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
+    f.input.write('\rAuthorization fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
+    const session = f.session(); if (!session) throw new Error('Missing session');
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission'); mission.currentPhase = KillChainPhase.DELIVER;
+    const task = session.command.mission.createTask({ missionId: mission.id, name: 'Impact validation', description: 'https://fixture.test', phase: KillChainPhase.DELIVER, operatorType: 'exploiter' });
+    const error = new Error('Project authorization required'); error.name = 'ActiveTestingAuthorizationRequired';
+    session.command.pause(); session.command.emit('recovery:blocked', { task, error });
+    f.input.write('\r'); await f.wait('Ctrl+A Authorize scoped validation');
+    expect(session.command.targetEnv.getAllTargets()[0].metadata?.authorizationReceipt).toBeUndefined();
+    f.input.write('\x01'); await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('Esc Menu');
+    expect(session.command.isRunning()).toBe(true); expect(session.command.targetEnv.getAllTargets()[0].metadata?.authorizationReceipt).toMatch(/^project-review:/);
+    expect(session.command.approval.approvedTools()).toEqual([]);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
   it('pins the current stage, pairs concurrent command results, and separates command blocks', async () => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rStage fixture\r'); await f.wait('Target URL or IP:');

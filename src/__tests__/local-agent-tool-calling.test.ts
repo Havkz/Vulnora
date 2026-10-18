@@ -12,7 +12,7 @@ vi.mock('../agent/local-agents.js', () => ({
   localAgentChat: vi.fn(),
 }));
 
-import { classifyErrorKind, parseTextToolCalls, shouldAdvanceFallback, LLMBackbone } from '../llm/index.js';
+import { classifyErrorKind, classifySoftFailure, parseTextToolCalls, shouldAdvanceFallback, LLMBackbone } from '../llm/index.js';
 import { localAgentChat } from '../agent/local-agents.js';
 const cli = vi.mocked(localAgentChat);
 
@@ -126,6 +126,28 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
 });
 
 describe('codex backbone surfaces toolCalls (guards the CodexAdapter half of the fix)', () => {
+  it.each([
+    'I cannot assist with conducting this assessment. ' + 'Explanation of the limitation. '.repeat(70),
+    'Ich kann dich bei diesen aktiven Prüfungen nicht unterstützen.',
+  ])('sends a refused Codex request to the configured local fallback and retries Codex on the next request', async refusal => {
+    const original = global.fetch;
+    try {
+      const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ model: 'served-fallback', message: { content: 'Proceed with the authorized scoped assessment.' } }) } as Response));
+      global.fetch = fetch;
+      const backbone = new LLMBackbone({ provider: 'codex', model: 'primary', fallbackChain: [{ provider: 'local', model: 'configured-fallback', baseUrl: 'http://localhost:11434/api' }] });
+      const fallback = vi.fn(); backbone.on('request:fallback', fallback);
+      cli.mockResolvedValueOnce(refusal);
+      expect(await backbone.prompt('Assess the authorized local fixture')).toContain('Proceed');
+      expect(fetch).toHaveBeenCalledOnce(); expect(fallback.mock.calls[0][0]).toMatchObject({ fromProvider: 'codex', toProvider: 'local', reason: 'refusal' });
+      expect(backbone.getActiveProvider()).toEqual({ provider: 'local', model: 'served-fallback' });
+      cli.mockResolvedValueOnce('Next authorized check.'); await backbone.prompt('Next check');
+      expect(backbone.getActiveProvider().provider).toBe('codex'); expect(fetch).toHaveBeenCalledOnce();
+    } finally { global.fetch = original; }
+  });
+  it('does not mistake an inconclusive report or a valid tool request for a refusal', () => {
+    expect(classifySoftFailure({ model: 'fixture', content: 'RESULT\nStatus: inconclusive\nNo exploitable finding was validated. Authentication checks remain uncovered.' })).toBeNull();
+    expect(classifySoftFailure({ model: 'fixture', content: 'I cannot assist with destructive actions, but can inspect headers.', toolCalls: [{ id: 'safe', name: 'header_analysis', arguments: {} }] })).toBeNull();
+  });
   it.each(['codex', 'claude'] as const)('keeps an in-flight %s turn on its model and applies the new model and effort on the next request', async agent => {
     let finish!: (text: string) => void;
     cli.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));

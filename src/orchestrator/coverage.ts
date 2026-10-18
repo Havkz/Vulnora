@@ -2,6 +2,7 @@ import { isIP } from 'node:net';
 import { DEFAULT_WEB_WORDLIST } from '../arsenal/catalog.js';
 import type { EvidenceRecord, NetworkContext, TargetBudgets } from './tool-orchestrator.js';
 import { websiteEdgeProvider } from './tool-orchestrator.js';
+import type { WebsiteSurface } from '../arsenal/website-surface.js';
 
 export type CoverageCapability =
   | 'dns_enumeration' | 'http_probe' | 'tls_analysis' | 'header_analysis'
@@ -110,6 +111,23 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
     if (entries.authentication_testing.status === 'not_started') entries.authentication_testing = { ...entries.authentication_testing, status: 'not_applicable', reason: 'No authentication surface identified.' };
     if (entries.input_surface.status === 'not_started') entries.input_surface = { ...entries.input_surface, status: 'not_applicable', reason: 'No testable input surface identified.' };
   }
+  const review = [...hostRecords].reverse().find(record => record.toolName === 'web_surface_review'
+    && record.executionStatus === 'executed' && record.status === 'success')?.result?.metadata?.websiteSurface as WebsiteSurface | undefined;
+  if (review?.reviewedUrls?.length && Array.isArray(review.inputTargets) && Array.isArray(review.authentication)) {
+    if (entries.authentication_testing.status === 'not_started') entries.authentication_testing = {
+      ...entries.authentication_testing, status: review.authentication.length ? 'completed_negative' : 'not_applicable',
+      reason: review.authentication.length ? 'Anonymous authentication boundaries inspected; credentialed flows are outside this public assessment.' : 'No authentication entry point identified in reviewed public pages.',
+    };
+    const inputRecords = hostRecords.filter(record => /^(?:xss_scan|sqli_scan)$/.test(record.toolName));
+    const pending = review.inputTargets.some(input => ['xss_scan', 'sqli_scan'].some(toolName => !inputRecords.some(record =>
+      record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param
+      && record.executionStatus === 'executed' && ['positive', 'negative', 'empty', 'inconclusive'].includes(record.resultType))));
+    if (pending) entries.input_surface = { ...entries.input_surface, status: 'not_started', reason: 'Observed GET inputs still need targeted XSS and SQL injection checks.' };
+    else if (!review.inputTargets.length) entries.input_surface = { ...entries.input_surface,
+      status: review.postForms ? 'blocked' : 'not_applicable',
+      reason: review.postForms ? 'Only POST forms were found; testing requires separately authorized form submissions and test data.' : 'No query parameters, GET-form inputs or OpenAPI GET query parameters found in reviewed public responses.',
+    };
+  }
   // A successful HTTP/TLS observation is sufficient to seed the corresponding web port.
   if (entries.port_discovery.status === 'not_started' && (httpAvailable || ['completed', 'completed_negative'].includes(entries.tls_analysis.status))) {
     entries.port_discovery = { ...entries.port_discovery, status: 'completed', reason: 'Known web port inferred from successful HTTP/TLS evidence.' };
@@ -182,6 +200,26 @@ export function planCoverageRecovery(params: {
   }
   if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: url, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };
   if (params.includeValidation && open('targeted_validation') && count('targeted_validation') < 1 && availableTools.has('http_methods_test')) return { capability: 'targeted_validation', toolName: 'http_methods_test', parameters: { url }, description: 'Low-impact targeted HTTP validation' };
+  if (params.includeValidation && (open('authentication_testing') || open('input_surface'))) {
+    const review = [...params.records].reverse().find(record => record.toolName === 'web_surface_review'
+      && record.executionStatus === 'executed' && record.status === 'success' && targetUrl(record.target).origin === address.origin)?.result?.metadata?.websiteSurface as WebsiteSurface | undefined;
+    if (!review && availableTools.has('web_surface_review')) return {
+      capability: open('authentication_testing') ? 'authentication_testing' : 'input_surface', toolName: 'web_surface_review', parameters: { url },
+      description: 'Inspect existing public responses and observed routes for authentication boundaries and concrete GET inputs',
+    };
+    for (const input of review?.inputTargets || []) {
+      for (const toolName of ['xss_scan', 'sqli_scan']) {
+        if (new URL(input.url).origin !== address.origin || !availableTools.has(toolName)) continue;
+        const checked = params.records.some(record => record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param
+          && record.executionStatus === 'executed' && ['positive', 'negative', 'empty', 'inconclusive'].includes(record.resultType));
+        if (!checked) {
+          return { capability: 'input_surface', toolName, parameters: { url: input.url, param: input.param },
+            repeatReason: params.records.some(record => record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param) ? 'previous_failure' : undefined,
+            description: `Validate observed GET parameter ${input.param} with ${toolName}` };
+        }
+      }
+    }
+  }
   return undefined;
 }
 

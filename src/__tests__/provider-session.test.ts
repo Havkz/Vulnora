@@ -82,7 +82,7 @@ describe('lazy local provider initialization', () => {
   });
   it('keeps Codex first after a failed check and redacts diagnostics', async () => {
     const { runtime } = fixture(); probe.mockRejectedValue(new Error('token=secret-fixture-value-1234567890'));
-    await expect(runtime.prepare()).rejects.toThrow('active codex/configured-primary');
+    expect(await runtime.prepare()).toContain('active codex/configured-primary');
     expect(runtime.getConfig().provider).toBe('codex'); expect(runtime.description()).not.toContain('secret-fixture-value'); await runtime.close();
   });
   it('skips a pending primary check while retaining the selection', async () => {

@@ -5,6 +5,7 @@ import { redactSecrets } from '../redact.js';
 import { validateEngineCheckpoint, type EngineCheckpoint } from './engine-checkpoint.js';
 import { acquireProjectLease } from './lease.js';
 import { ProjectStore, type ProjectRecord } from './store.js';
+import { evaluateCoverage } from '../orchestrator/coverage.js';
 
 export interface ProjectLogEvent { timestamp: number; category: string; data: unknown }
 interface SessionEvents { log: ProjectLogEvent; status: ProjectRecord; error: Error }
@@ -52,7 +53,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.on('recovery:blocked', ({ task, error }) => {
       this.project.status = 'paused';
       const call = task.checkpoint?.activeCall || (task.executionPlan ? { name: task.executionPlan.toolName, arguments: task.executionPlan.parameters } : undefined);
-      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message, callId: task.checkpoint?.activeCall?.id, toolName: call?.name, parameters: call?.arguments });
+      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message, recoveryAction: error.name === 'ActiveTestingAuthorizationRequired' ? 'authorize' : 'retry', callId: task.checkpoint?.activeCall?.id, toolName: call?.name, parameters: call?.arguments });
       this.emit('error', error);
     });
     this.command.llm.on('request:fallback', event => this.record('provider:fallback', event));
@@ -111,6 +112,11 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.project.checkpoint = this.command.exportCheckpoint();
     const mission = this.command.mission.getActiveMission() || this.command.mission.getAllMissions().at(-1);
     this.project.progress = mission?.progress || 0;
+    if (mission?.status === 'completed' && mission.completionStatus !== 'COMPLETED') {
+      const entries = this.command.targetEnv.getAllTargets().flatMap(target => Object.values(evaluateCoverage(target.address, this.command.arsenal.getOrchestrator().getEvidence(), true).entries));
+      const completed = entries.filter(entry => ['completed', 'completed_negative', 'not_applicable'].includes(entry.status)).length;
+      this.project.progress = Math.min(99.9, entries.length ? completed / entries.length * 100 : 0);
+    }
     this.project.lastActivity = Date.now();
     await this.store.save(this.project);
     this.emit('status', this.project);
@@ -143,6 +149,24 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.record('recovery:reviewed', { taskId, callId });
     await this.persist();
     await this.start();
+  }
+
+  async authorizeActiveTesting(taskId: string): Promise<void> {
+    if (this.closing || this.fatalError || this.command.isRunning()) throw new Error('Authorization requires an open, paused project.');
+    await this.command.pauseAndDrain();
+    this.command.authorizeActiveTask(taskId);
+    this.record('project:authorization', { taskId, target: this.project.target.input, scope: 'active impact validation; existing scope and tool approval gates remain enforced' });
+    await this.persist(); await this.start();
+  }
+
+  async continueIncomplete(): Promise<void> {
+    if (this.closing || this.fatalError || this.project.status !== 'completed') throw new Error('Open a completed, incomplete assessment before continuing.');
+    this.command.reopenIncompleteMission();
+    if (this.project.report) this.record('report:superseded', this.project.report);
+    delete this.project.report;
+    this.project.status = 'paused';
+    this.record('project:continued', { reason: 'Recover missing coverage while preserving completed checks and evidence.' });
+    await this.persist();
   }
 
   async setScanningBehavior(behavior: ProjectRecord['behavior']): Promise<void> {

@@ -7,6 +7,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { commandPath } from '../command-path.js';
 import { DEFAULT_WEB_WORDLIST } from './catalog.js';
+import { reviewWebsiteSurface } from './website-surface.js';
 import { EventEmitter } from 'eventemitter3';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
 import { createHash, randomUUID, X509Certificate } from 'crypto';
@@ -1276,6 +1277,20 @@ export const BUILTIN_TOOLS: CustomTool[] = [
   // WEB TESTING TOOLS
   // =============================================================================
   {
+    name: 'web_surface_review',
+    description: 'Review observed public pages, login boundaries, GET forms and API query parameters; never submit login or POST forms.',
+    category: 'web',
+    parameters: [{ name: 'url', type: 'string', description: 'Original website URL', required: true }],
+    handler: async context => {
+      try {
+        return await reviewWebsiteSurface(String(context.parameters.url), fetchContext.getStore()?.orchestrator?.getEvidence() || [], async url => {
+          const response = await targetFetch(url, { method: 'GET', signal: requestTimeoutSignal(webRequestTimeoutMs()) });
+          return { status: response.status, body: await response.text() };
+        });
+      } catch (error) { return { success: false, error: `Website surface review failed: ${error instanceof Error ? error.message : String(error)}` }; }
+    },
+  },
+  {
     name: 'http_request',
     description: 'Make an HTTP request to a target',
     category: 'web',
@@ -1598,6 +1613,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
 
       const results: { payload: string; name: string; reflected: boolean; encoded: boolean }[] = [];
       const vulnerable: string[] = [];
+      const requestErrors: string[] = [];
 
       for (const { payload, name } of payloads) {
         try {
@@ -1620,7 +1636,9 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           if (reflected) {
             vulnerable.push(name);
           }
-        } catch {
+        } catch (error) {
+          context.abortSignal?.throwIfAborted();
+          requestErrors.push(error instanceof Error ? error.message : String(error));
           results.push({ payload, name, reflected: false, encoded: false });
         }
       }
@@ -1632,7 +1650,8 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }).join('\n');
 
       return {
-        success: true,
+        success: requestErrors.length === 0,
+        error: requestErrors.length ? `XSS inspection incomplete: ${requestErrors.join('; ')}` : undefined,
         output: `XSS scan on ${baseUrl} (param: ${param}):\n${output}`,
         findings: vulnerable.length > 0 ? [{
           title: 'Potential XSS Vulnerability',
@@ -1676,6 +1695,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
 
       const results: { payload: string; name: string; type: string; vulnerable: boolean; indicator: string }[] = [];
       const vulnerabilities: string[] = [];
+      const requestErrors: string[] = [];
 
       // First, get a baseline response
       let baselineLength = 0;
@@ -1685,8 +1705,9 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         const baselineResp = await targetFetch(baselineUrl.toString(), { signal: requestTimeoutSignal(5000) });
         const baselineBody = await baselineResp.text();
         baselineLength = baselineBody.length;
-      } catch {
-        // Continue anyway
+      } catch (error) {
+        context.abortSignal?.throwIfAborted();
+        requestErrors.push(error instanceof Error ? error.message : String(error));
       }
 
       for (const { payload, name, type } of payloads) {
@@ -1731,7 +1752,9 @@ export const BUILTIN_TOOLS: CustomTool[] = [
           if (vulnerable) {
             vulnerabilities.push(name);
           }
-        } catch {
+        } catch (error) {
+          context.abortSignal?.throwIfAborted();
+          requestErrors.push(error instanceof Error ? error.message : String(error));
           results.push({ payload, name, type, vulnerable: false, indicator: 'Request failed' });
         }
       }
@@ -1742,7 +1765,8 @@ export const BUILTIN_TOOLS: CustomTool[] = [
       }).join('\n');
 
       return {
-        success: true,
+        success: requestErrors.length === 0,
+        error: requestErrors.length ? `SQL injection inspection incomplete: ${requestErrors.join('; ')}` : undefined,
         output: `SQL Injection scan on ${baseUrl} (param: ${param}):\n${output}`,
         findings: vulnerabilities.length > 0 ? [{
           title: 'Potential SQL Injection Vulnerability',

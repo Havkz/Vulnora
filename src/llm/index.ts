@@ -1299,15 +1299,16 @@ export function isLikelyRefusal(content?: string, finishReason?: string): boolea
   if (finishReason === 'content_filter') return true;
   const raw = (content || '').trim();
   if (!raw) return false;
-  if (raw.length > 1200) return false; // long substantive output is not a refusal
-  const t = raw.toLowerCase();
+  const prose = raw.replace(/```[\s\S]*?```/g, '').split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
+  const t = (prose.slice(0, 2400) + '\n' + prose.slice(-1200)).toLowerCase();
   // A decline verb bound to a help-class object: "I can't help", "I'm sorry, but I
   // cannot assist", "I won't provide", "I must decline to participate". Crucially
   // NOT "I can't find the flag" / "I cannot reach the host" (technical progress).
   const declineToHelp = /\bi\s*(?:'?m|am)?\s*(?:(?:so\s+)?sorry|afraid)?[,.: ]*\s*(?:but\s+)?(?:i\s+)?(?:can'?t|cannot|can\s?not|could\s?not|won'?t|will\s+not|am\s+not\s+able\s+to|'?m\s+not\s+able\s+to|am\s+unable\s+to|unable\s+to|not\s+able\s+to|not\s+going\s+to|must\s+decline|have\s+to\s+decline|refuse\s+to|do\s+not\s+feel\s+comfortable|don'?t\s+feel\s+comfortable)\s+(?:to\s+)?(?:further\s+)?(?:you\s+)?(?:with\s+|in\s+)?(?:help|assist|compl|provid|creat|generat|engag|participat|writ|aid|enabl|fulfil|do\s+that|do\s+this)\w*/;
   // Explicit policy / values language.
   const policyLang = /(?:against\s+(?:my|our|the)\s+(?:guidelines|policy|policies|programming|principles|values)|violat\w*[^.]{0,25}(?:polic\w*|guideline)|i'?m\s+not\s+going\s+to\s+(?:help|assist|provide)|not\s+something\s+i\s+(?:can|will)\s+(?:help|assist|do))/;
-  return declineToHelp.test(t) || policyLang.test(t);
+  const germanRefusal = /\bich\s+(?:kann|werde|darf)\b[^.!?\n]{0,100}\b(?:nicht|keine)\b[^.!?\n]{0,100}\b(?:helfen|unterstützen|durchführen|bereitstellen|anleiten)/;
+  return declineToHelp.test(t) || policyLang.test(t) || germanRefusal.test(t);
 }
 
 /**
@@ -1336,6 +1337,7 @@ export function reframeWithAuthorizedContext(messages: LLMMessage[]): LLMMessage
  * no tool calls). Returns null when the response is good.
  */
 export function classifySoftFailure(r: LLMResponse): 'refusal' | 'empty' | null {
+  if (r.toolCalls?.length) return null;
   if (isLikelyRefusal(r.content, r.finishReason)) return 'refusal';
   const hasContent = (r.content || '').trim().length > 0;
   const hasToolCalls = (r.toolCalls?.length || 0) > 0;

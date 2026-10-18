@@ -32,6 +32,14 @@ function fixture(options: AgentLoopOptions = {}) {
 }
 
 describe('granular agent recovery', () => {
+  it('passes a bounded HTTP body and final URL to the next model turn instead of headers alone', async () => {
+    const run = fixture();
+    run.chatWithTools.mockResolvedValueOnce({ content: '', model: 'fixture', toolCalls: [call('body')] });
+    run.execute.mockResolvedValue({ success: true, output: 'HTTP 200', metadata: { responseBody: '<form action="/search"><input name="q"></form>', finalUrl: target.address + '/body' } });
+    await run.loop.run(newTask(), '', target);
+    const messages = run.chatWithTools.mock.calls.at(-1)?.[0];
+    expect(JSON.stringify(messages)).toContain('Response body (excerpt)'); expect(JSON.stringify(messages)).toContain('input name='); expect(JSON.stringify(messages)).toContain('Final URL:');
+  });
   it('evaluates completed observations instead of looping on identical requests', async () => {
     const run = fixture(); const task = newTask(); const request = call('repeat');
     run.chatWithTools.mockResolvedValue({ content: 'Check again', model: 'fixture', toolCalls: [request] });
