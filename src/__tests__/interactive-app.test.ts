@@ -97,6 +97,22 @@ describe('durable interactive project flow', () => {
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
 
+  it('retries failed local discovery and displays the installed model without changing the primary', async () => {
+    const f = await fixture();
+    f.services.configuration = { getLLMConfig: () => ({ provider: 'local', baseUrl: 'http://127.0.0.1:11434/api' }) } as InteractiveServices['configuration'];
+    const discover = vi.fn().mockRejectedValueOnce(new Error('Service still starting'))
+      .mockResolvedValueOnce(['detected:7b']);
+    f.services.installedModels = discover;
+    const result = f.start();
+    f.input.write('\x1b[B\x1b[B\r\x1b[B\x1b[B\x1b[B\r');
+    await f.wait('Discovery failed: Service still starting');
+    await f.wait('http://127.0.0.1:11434/api');
+    f.input.write('\x1b[B\x1b[B\r');
+    await f.wait('detected:7b');
+    expect(discover).toHaveBeenCalledTimes(2);
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
   it.each([[80, 30], [24, 12], [16, 8]])('shows paused recovery at %s × %s and opens details without replaying a write', async (columns, rows) => {
     const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
     f.input.write('\rBlocked fixture\r'); await f.wait('Target URL or IP:');

@@ -103,6 +103,25 @@ describe('lazy local provider initialization', () => {
     expect(await runtime.installedModels()).toEqual(['served-model']);
     expect(fetch).toHaveBeenLastCalledWith('http://127.0.0.1:1234/v1/models', expect.any(Object)); await runtime.close();
   });
+  it('allows discovery to finish after a cold daemon start longer than ten seconds', async () => {
+    const { runtime } = fixture();
+    vi.useFakeTimers();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), milliseconds);
+      return controller.signal;
+    });
+    try {
+      vi.mocked(fetch).mockImplementationOnce((_url, init) => new Promise((resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+        setTimeout(() => resolve(new Response('{"models":[{"name":"cold-start:7b"}]}')), 11000);
+      }));
+      const pending = expect(runtime.installedModels()).resolves.toEqual(['cold-start:7b']);
+      await vi.advanceTimersByTimeAsync(11000);
+      await pending;
+      expect(probe).not.toHaveBeenCalled();
+    } finally { timeout.mockRestore(); vi.useRealTimers(); await runtime.close(); }
+  });
   it('releases a replaced model without eagerly loading the replacement', async () => {
     const { runtime, selectedLocal } = fixture(); await runtime.prepare(); selectedLocal.model = 'replacement:7b'; await runtime.prepare();
     expect(held).toHaveLength(2); expect(held[0].stop).toHaveBeenCalledOnce(); expect(held[1].start).not.toHaveBeenCalled(); await runtime.close();

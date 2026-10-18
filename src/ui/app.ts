@@ -528,11 +528,18 @@ export class InteractiveApp {
     for (;;) {
       let detail = 'Select a discovered model, or add a served model manually. No downloads.';
       let models: string[] = [];
-      this.surface.show(() => ({ lines: this.surface.panel([`${this.surface.spinner} Discovering local models…`]), footer: 'S Skip discovery    Ctrl+X Save & Quit' }));
-      try { models = await this.surface.skippable(signal => this.services.installedModels(signal)) || []; }
-      catch (error) { detail = redactString(error instanceof Error ? error.message : String(error)); }
-      const selected = await this.surface.menu(makePrimary ? 'Local provider' : 'Local fallback', [...models, 'Add model manually', 'Change local endpoint', 'Back'], () => [detail]);
-      if (selected === undefined || selected === models.length + 2) return;
+      const endpoint = config.getLLMConfig('local').baseUrl || '';
+      this.surface.show(() => ({ lines: this.surface.panel([`${this.surface.spinner} Discovering local models…`, endpoint, 'Starting Ollama if needed; no model weights are loaded.']), footer: 'S Skip discovery    Ctrl+X Save & Quit' }));
+      try {
+        const discovered = await this.surface.skippable(signal => this.services.installedModels(signal));
+        models = discovered || [];
+        if (!discovered) detail = 'Discovery skipped. Retry to list installed models, or add one manually.';
+        else if (!models.length) detail = 'Server reachable, but it returned no installed models. Check the endpoint or install a model in Ollama.';
+      }
+      catch (error) { detail = `Discovery failed: ${redactString(error instanceof Error ? error.message : String(error))}`; }
+      const selected = await this.surface.menu(makePrimary ? 'Local provider' : 'Local fallback', [...models, 'Add model manually', 'Change local endpoint', 'Retry discovery', 'Back'], () => [detail, endpoint]);
+      if (selected === undefined || selected === models.length + 3) return;
+      if (selected === models.length + 2) continue;
       if (selected === models.length + 1) {
         const endpoint = await this.surface.prompt('Local endpoint (/api or /v1):', config.getLLMConfig('local').baseUrl);
         if (endpoint !== undefined) config.setLocalEndpoint(endpoint.trim());
