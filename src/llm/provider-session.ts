@@ -71,8 +71,8 @@ export class ProviderSession {
     const key = this.configuration.getLLMConfig('local').apiKey;
     const response = await fetchLocal(`${base}/${ollama ? 'tags' : 'models'}`, {
       headers: key ? { Authorization: `Bearer ${key}` } : undefined,
-      // Allow the on-demand daemon startup (15s) before the model-list request.
-      signal: AbortSignal.any([this.signal, signal, AbortSignal.timeout(30000)]),
+      // Allow the on-demand daemon startup (30s) before the model-list request.
+      signal: AbortSignal.any([this.signal, signal, AbortSignal.timeout(45000)]),
     });
     if (!response.ok) throw new Error(`Local model discovery failed: HTTP ${response.status}`);
     const data = await response.json() as { models?: { name?: unknown }[]; data?: { id?: unknown }[] };

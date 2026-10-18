@@ -21,7 +21,7 @@ async function startOllama(signal?: AbortSignal | null): Promise<void> {
     child.on('error', error => { failure = error; });
     child.stderr?.resume(); child.stdout?.resume();
     try {
-      const deadline = AbortSignal.any([AbortSignal.timeout(15000), ...(signal ? [signal] : [])]);
+      const deadline = AbortSignal.any([AbortSignal.timeout(30000), ...(signal ? [signal] : [])]);
       for (;;) {
         deadline.throwIfAborted();
         if (failure) throw failure;

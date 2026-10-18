@@ -65,6 +65,24 @@ describe('on-demand local Ollama service', () => {
     expect(launch.mock.calls[0].slice(0, 2)).toEqual(['/mnt/c/powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', 'C:\\fixture path\\serve.ps1']]);
     await stopOwnedOllama(); expect(child.stdin.writableEnded).toBe(true); expect(child.kill).not.toHaveBeenCalled();
   });
+  it('waits for a cold daemon that needs more than fifteen seconds to serve its model list', async () => {
+    processFixture(); vi.useFakeTimers();
+    const started = Date.now();
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException('Timed out', 'TimeoutError')), milliseconds);
+      return controller.signal;
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      if (Date.now() - started < 17000) throw refused();
+      return new Response('{"models":[{"name":"slow-start:7b"}]}');
+    }));
+    try {
+      const pending = expect(fetchLocal(tags).then(response => response.json())).resolves.toEqual({ models: [{ name: 'slow-start:7b' }] });
+      await vi.advanceTimersByTimeAsync(17200); await pending;
+      expect(launch).toHaveBeenCalledOnce();
+    } finally { timeout.mockRestore(); vi.useRealTimers(); }
+  });
   it('leaves an existing service alone, including HTTP failures', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 503 })));
     expect((await fetchLocal(tags)).status).toBe(503);
