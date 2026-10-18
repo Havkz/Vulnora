@@ -180,7 +180,8 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       record.attemptId === saved.activeAttempt?.attemptId && record.sourceToolCallId === saved.activeAttempt?.sourceToolCallId
       && record.executionStatus === 'executed' && saved.activeCall
       && record.normalizedSignature === normalizeToolCall(saved.activeCall.name, { target, parameters: saved.activeCall.arguments }).normalizedSignature) : undefined;
-    if (saved?.activeCall && !savedReceipt && !canReplayInterruptedCall(saved.activeCall)) throw new UnsafeResumeError(saved.activeCall);
+    if (saved?.activeCall && !savedReceipt && !canReplayInterruptedCall(saved.activeCall)
+      && saved.replayApproval !== JSON.stringify(saved.activeCall)) throw new UnsafeResumeError(saved.activeCall);
     const startTime = Date.now() - (saved?.elapsedMs || 0);
     const steps: AgentStep[] = saved?.steps || [];
     const allFindings: ToolFinding[] = saved?.findings || [];

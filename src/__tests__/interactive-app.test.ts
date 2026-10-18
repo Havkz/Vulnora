@@ -10,7 +10,7 @@ import { TerminalInterrupted, TerminalSurface } from '../ui/terminal.js';
 import * as projectLog from '../ui/project-log.js';
 import { visibleWidth } from '../ui/theme.js';
 import { ProjectStore } from '../projects/store.js';
-import { ProjectSession } from '../projects/session.js';
+import { ProjectSession, type ProjectLogEvent } from '../projects/session.js';
 import { KillChainPhase, type LLMConfig } from '../types/index.js';
 import { UnsafeResumeError } from '../agent/checkpoint.js';
 
@@ -132,6 +132,29 @@ describe('durable interactive project flow', () => {
     await expect.poll(() => view().lines.map(stripVTControlCharacters).join('\n')).toContain('Create New Project');
     expect(execute).not.toHaveBeenCalled();
     expect((await f.store.load(session.project.id)).checkpoint).toBeDefined();
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
+  it('retries a blocked task only through the reviewed recovery details action', async () => {
+    const f = await fixture(); const result = f.start(); const screens = vi.spyOn(f.surface, 'show');
+    f.input.write('\rRecovery fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
+    const session = f.session(); if (!session) throw new Error('Missing session');
+    const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
+    const task = session.command.mission.createTask({ missionId: mission.id, name: 'Interrupted nuclei', description: 'Inspect fixture',
+      phase: mission.currentPhase, operatorType: 'scanner' });
+    task.executionPlan = { toolName: 'nuclei_scan', parameters: { target: 'https://fixture.test', severity: 'critical,high', tags: 'cve' } };
+    session.command.pause(); session.command.emit('recovery:blocked', { task, error: new Error('Inspect interrupted scan') });
+    const recover = vi.spyOn(session, 'recover'); const execute = vi.spyOn(session.command.arsenal, 'execute');
+    f.input.write('\x12'); await new Promise(resolve => setTimeout(resolve, 20)); expect(recover).not.toHaveBeenCalled();
+    f.input.write('\r'); await f.wait('Interrupted tool: nuclei_scan'); await f.wait('Ctrl+R Retry reviewed task');
+    expect(recover).not.toHaveBeenCalled();
+    f.input.write('\x12');
+    await expect.poll(() => recover.mock.calls.length).toBe(1);
+    await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('Esc Menu');
+    expect(recover).toHaveBeenCalledWith(task.id, undefined); expect(session.command.isRunning()).toBe(true);
+    expect(((await f.store.readLogs(session.project.id)).events as ProjectLogEvent[]).some(event => event.category === 'recovery:reviewed')).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
 

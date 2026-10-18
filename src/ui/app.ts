@@ -236,6 +236,8 @@ export class InteractiveApp {
     logs.forEach((_event, index) => linkResult(index));
     const activity = new ProjectActivity();
     let recoveryDetails = '';
+    let recoveryTaskId: string | undefined;
+    let recoveryCallId: string | undefined;
     this.issue = '';
     const onLog = (event: ProjectLogEvent) => {
       logs.push(event);
@@ -252,10 +254,12 @@ export class InteractiveApp {
       recoveryDetails = this.issue;
       const last = logs.at(-1);
       const data = last?.category === 'recovery:blocked' && last.data && typeof last.data === 'object' ? last.data as Record<string, unknown> : {};
+      recoveryTaskId = typeof data.taskId === 'string' ? data.taskId : undefined;
+      recoveryCallId = typeof data.callId === 'string' ? data.callId : undefined;
       if (typeof data.toolName === 'string') {
         recoveryDetails += `\n\nInterrupted tool: ${data.toolName}\nRecorded arguments:\n${JSON.stringify(redactSecrets(data.parameters), null, 2)}`;
       }
-      recoveryDetails += '\n\nThe saved checkpoint is retained. Automatic replay was stopped. Esc returns to the main menu; Ctrl+X saves and quits.';
+      recoveryDetails += '\n\nThe saved checkpoint and completed results are retained. After inspecting the arguments and target state, press Ctrl+R to retry this interrupted task and continue. The interrupted call may run again. Esc returns to the scan; Ctrl+X saves and quits.';
       if ((logs.at(-1)?.data as { error?: string } | undefined)?.error !== this.issue) {
         onLog({ timestamp: Date.now(), category: 'project:error', data: { error: this.issue } });
       } else this.surface.refresh();
@@ -351,7 +355,19 @@ export class InteractiveApp {
         if (key.ctrl && key.name === 'y') { await showAIHistory(); continue; }
         if (key.ctrl && key.name === 't') { this.transcript = !this.transcript; processed = 0; wrapped = []; tail = true; }
         if (key.name === 'return' && this.issue && !session.command.isRunning()) {
-          await this.document('Recovery paused', recoveryDetails);
+          const taskId = recoveryTaskId; const callId = recoveryCallId;
+          await this.document('Recovery paused', () => recoveryDetails,
+            'Ctrl+R Retry reviewed task    ↑/↓ Scroll    Esc Back    Ctrl+X Save & Quit', false, async key => {
+              if (!key.ctrl || key.name !== 'r' || !taskId) return false;
+              try {
+                await session.recover(taskId, callId);
+                this.issue = ''; activity.reset();
+                return true;
+              } catch (error) {
+                onError(error instanceof Error ? error : new Error(String(error)));
+                return false;
+              }
+            });
           this.surface.show(render); continue;
         }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }

@@ -277,7 +277,7 @@ import { normalizeToolCall } from './orchestrator/tool-orchestrator.js';
 import { LLMBackbone } from './llm/index.js';
 import { getLLMConfig } from './config/index.js';
 import { AgentLoop } from './agent/index.js';
-import { canReplayInterruptedCall, CheckpointRestoreError, CheckpointWriteError, ToolRecoveryRequiredError, UnsafeResumeError } from './agent/checkpoint.js';
+import { canReplayInterruptedCall, restoreAgentCheckpoint, CheckpointRestoreError, CheckpointWriteError, ToolRecoveryRequiredError, UnsafeResumeError } from './agent/checkpoint.js';
 import { validateEngineCheckpoint, type EngineCheckpoint } from './projects/engine-checkpoint.js';
 import { redactString, redactSecrets } from './redact.js';
 import { redactConfiguredSecrets } from './arsenal/target-headers.js';
@@ -1035,6 +1035,24 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.paused = false;
     this.stallReason = null;
     this.emit('command:resumed');
+  }
+
+  /** Authorize only the interrupted call explicitly inspected in the recovery screen. */
+  public retryReviewedTask(taskId: string, callId?: string): void {
+    if (this.isRunning() || this.activeDispatches.size) throw new Error('Pause and drain the project before reviewing recovery.');
+    const mission = this.mission.getActiveMission();
+    const task = this.mission.getTaskQueue().getTask(taskId);
+    if (!task || task.missionId !== mission?.id || !['pending', 'failed'].includes(task.status)) throw new Error('This recovery task is no longer pending.');
+    const target = this.targetEnv.getAllTargets().find(item => task.description.includes(item.address)) || this.targetEnv.getAllTargets()[0];
+    const checkpoint = task.checkpoint === undefined ? undefined : restoreAgentCheckpoint(task.checkpoint, task, target);
+    if (checkpoint?.activeCall) {
+      if (checkpoint.activeCall.id !== callId) throw new Error('The interrupted call changed; inspect its current checkpoint first.');
+      // Consumed by the next pre-execution checkpoint; another interruption needs a new review.
+      checkpoint.replayApproval = JSON.stringify(checkpoint.activeCall);
+      task.checkpoint = checkpoint;
+    } else if (callId !== undefined) throw new Error('The interrupted call changed; inspect its current checkpoint first.');
+    delete task.result; delete task.assignedTo; delete task.completedAt;
+    this.mission.getTaskQueue().updateStatus(task.id, 'pending');
   }
 
   /** Resume saved read-only dispatch failures without replaying writes or scripts. */

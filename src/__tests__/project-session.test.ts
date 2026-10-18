@@ -6,6 +6,8 @@ import { ProjectStore } from '../projects/store.js';
 import { ProjectSession, type ProjectLogEvent } from '../projects/session.js';
 import { KillChainPhase, type VulnoraConfig } from '../types/index.js';
 import type { EngineCheckpoint } from '../projects/engine-checkpoint.js';
+import { AgentLoop } from '../agent/index.js';
+import { UnsafeResumeError } from '../agent/checkpoint.js';
 
 const directories: string[] = [];
 const sessions: ProjectSession[] = [];
@@ -30,6 +32,43 @@ async function open(store: ProjectStore, id: string) {
 }
 
 describe('persistent project sessions', () => {
+  it('recovers a reviewed interrupted call after reopening without resetting completed tasks or bypassing scope', async () => {
+    const { store, project } = await fixture(); const first = await open(store, project.id);
+    await first.start(); await first.pause();
+    const mission = first.command.mission.getActiveMission(); const target = first.command.targetEnv.getAllTargets()[0];
+    if (!mission) throw new Error('Missing mission');
+    const completed = first.command.mission.createTask({ missionId: mission.id, name: 'Previous result', description: target.address,
+      phase: mission.currentPhase, operatorType: 'recon' });
+    first.command.mission.getTaskQueue().complete(completed.id, { success: true, output: 'Keep this evidence' });
+    const task = first.command.mission.createTask({ missionId: mission.id, name: 'Interrupted check', description: target.address,
+      phase: mission.currentPhase, operatorType: 'recon' });
+    task.executionPlan = { toolName: 'http_request', parameters: { url: `${target.address}&review=1`, method: 'POST', body: 'fixture' } };
+    vi.spyOn(first.command.arsenal, 'getReadyToolDefinitions').mockResolvedValue([{ name: 'http_request', description: 'Fixture', parameters: { type: 'object', properties: {} } }]);
+    const controller = new AbortController();
+    const loop = new AgentLoop(first.command.llm, first.command.arsenal, { onCheckpoint: async checkpoint => {
+      task.checkpoint = checkpoint;
+      if (checkpoint.activeCall) controller.abort(new Error('simulated crash'));
+    } });
+    await expect(loop.run(task, '', target, undefined, undefined, controller.signal)).rejects.toThrow('simulated crash');
+    const callId = task.checkpoint?.activeCall?.id; if (!callId) throw new Error('Missing active call');
+    await first.close();
+    const restored = await open(store, project.id);
+    const restoredTask = restored.command.mission.getTaskQueue().getTask(task.id);
+    if (!restoredTask) throw new Error('Missing restored task');
+    const restoredTarget = restored.command.targetEnv.getAllTargets()[0];
+    await expect(new AgentLoop(restored.command.llm, restored.command.arsenal).run(restoredTask, '', restoredTarget)).rejects.toBeInstanceOf(UnsafeResumeError);
+    await expect(restored.recover(task.id, 'stale-call')).rejects.toThrow('changed');
+    expect(restored.command.isRunning()).toBe(false);
+    const scope = restored.command.arsenal.getScope();
+    await restored.recover(task.id, callId);
+    expect(restored.command.isRunning()).toBe(true);
+    const saved = (await store.load(project.id)).checkpoint as EngineCheckpoint;
+    expect(saved.mission.tasks.find(item => item.id === task.id)?.checkpoint?.replayApproval).toBe(JSON.stringify(restoredTask.checkpoint?.activeCall));
+    expect(saved.mission.tasks.find(item => item.id === completed.id)?.result?.output).toBe('Keep this evidence');
+    expect(restored.command.arsenal.getScope()).toEqual(scope);
+    expect(((await store.readLogs(project.id)).events as ProjectLogEvent[]).some(event => event.category === 'recovery:reviewed')).toBe(true);
+    await restored.pause();
+  });
   it('persists the actual partial completion outcome in the project journal', async () => {
     const { store, project } = await fixture(); const session = await open(store, project.id);
     await session.start();

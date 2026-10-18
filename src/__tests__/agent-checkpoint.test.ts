@@ -169,6 +169,35 @@ describe('granular agent recovery', () => {
     expect(run.chat).not.toHaveBeenCalled();
   });
 
+  it.each(['http_request', 'nuclei_scan'])('consumes a reviewed %s approval before execution and blocks another interrupted replay', async name => {
+    const task = newTask(); const controller = new AbortController();
+    const request: LLMToolCall = name === 'http_request' ? call('reviewed', 'POST')
+      : { id: 'reviewed', name, arguments: { target: target.address, severity: 'critical,high', tags: 'cve' } };
+    const definitions = [{ name, description: 'Review fixture', parameters: { type: 'object', properties: {} } }];
+    const first = fixture();
+    first.getReadyToolDefinitions.mockResolvedValue(definitions);
+    first.chatWithTools.mockResolvedValueOnce({ content: '', model: 'fixture', toolCalls: [request] });
+    first.execute.mockImplementationOnce(async () => { controller.abort(new Error('crash')); throw controller.signal.reason; });
+    await expect(first.loop.run(task, '', target, undefined, undefined, controller.signal)).rejects.toThrow('crash');
+    if (!task.checkpoint?.activeCall) throw new Error('Missing interrupted checkpoint');
+    task.checkpoint.replayApproval = JSON.stringify(task.checkpoint.activeCall);
+    const secondController = new AbortController();
+    const resumed = fixture({ onCheckpoint: async checkpoint => {
+      if (checkpoint.activeCall) expect(checkpoint.replayApproval).toBeUndefined();
+    } });
+    resumed.getReadyToolDefinitions.mockResolvedValue(definitions);
+    resumed.execute.mockImplementationOnce(async () => { secondController.abort(new Error('second crash')); throw secondController.signal.reason; });
+    await expect(resumed.loop.run(task, '', target, undefined, undefined, secondController.signal)).rejects.toThrow('second crash');
+    expect(resumed.execute).toHaveBeenCalledOnce(); expect(resumed.chatWithTools).not.toHaveBeenCalled();
+    const blocked = fixture();
+    await expect(blocked.loop.run(task, '', target)).rejects.toBeInstanceOf(UnsafeResumeError);
+    expect(blocked.execute).not.toHaveBeenCalled();
+    if (!task.checkpoint?.activeCall) throw new Error('Missing second checkpoint');
+    task.checkpoint.replayApproval = JSON.stringify(task.checkpoint.activeCall);
+    task.checkpoint.activeCall.arguments.url = 'https://changed.test';
+    await expect(blocked.loop.run(task, '', target)).rejects.toBeInstanceOf(CheckpointRestoreError);
+  });
+
   it('returns a completed result on restart without models, tools, or availability probes', async () => {
     const task = newTask();
     const result = await fixture().loop.run(task, '', target);

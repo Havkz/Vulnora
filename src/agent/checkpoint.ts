@@ -23,6 +23,7 @@ export interface AgentCheckpoint {
   pendingCalls: LLMToolCall[];
   findingsBeforeBatch: number;
   activeCall?: LLMToolCall;
+  replayApproval?: string;
   activeAttempt?: { attemptId: string; sourceToolCallId: string };
   result?: AgentResult;
 }
@@ -113,6 +114,7 @@ export function restoreAgentCheckpoint(value: unknown, task: Task, target?: Targ
   if (value.activeAttempt !== undefined && (!isRecord(value.activeAttempt) || !value.activeCall
     || typeof value.activeAttempt.attemptId !== 'string' || !value.activeAttempt.attemptId
     || typeof value.activeAttempt.sourceToolCallId !== 'string' || !value.activeAttempt.sourceToolCallId)) return fail();
+  if (value.replayApproval !== undefined && (!value.activeCall || value.replayApproval !== JSON.stringify(value.activeCall))) return fail();
   if (value.phase !== 'tool_batch' && value.pendingCalls.length > 0) return fail();
   if (value.phase === 'completed') {
     if (!isRecord(value.result) || typeof value.result.success !== 'boolean' || typeof value.result.summary !== 'string'

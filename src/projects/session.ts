@@ -52,7 +52,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.on('recovery:blocked', ({ task, error }) => {
       this.project.status = 'paused';
       const call = task.checkpoint?.activeCall || (task.executionPlan ? { name: task.executionPlan.toolName, arguments: task.executionPlan.parameters } : undefined);
-      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message, toolName: call?.name, parameters: call?.arguments });
+      this.record('recovery:blocked', { taskId: task.id, taskName: task.name, error: error.message, callId: task.checkpoint?.activeCall?.id, toolName: call?.name, parameters: call?.arguments });
       this.emit('error', error);
     });
     this.command.llm.on('request:fallback', event => this.record('provider:fallback', event));
@@ -133,6 +133,16 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     await this.command.pauseAndDrain();
     this.record('project:paused', { projectId: this.project.id });
     await this.persist();
+  }
+
+  async recover(taskId: string, callId?: string): Promise<void> {
+    if (this.closing || this.project.status === 'completed' || this.command.isRunning()) throw new Error('Recovery requires an open, paused project.');
+    if (this.fatalError) throw this.fatalError;
+    await this.command.pauseAndDrain();
+    this.command.retryReviewedTask(taskId, callId);
+    this.record('recovery:reviewed', { taskId, callId });
+    await this.persist();
+    await this.start();
   }
 
   async setScanningBehavior(behavior: ProjectRecord['behavior']): Promise<void> {
