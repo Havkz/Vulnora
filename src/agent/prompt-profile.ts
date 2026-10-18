@@ -198,9 +198,9 @@ function toolPreference(tools: LLMToolDefinition[]): string {
   const hints: string[] = [];
   if (names.has('http_request')) hints.push('Prefer HTTP for a single read-only request.');
   if (names.has('curl_request')) hints.push('Prefer Curl for one exact request or payload validation.');
-  if (names.has('nmap_scan')) hints.push('Use Nmap only when service or port evidence is needed.');
+  if (names.has('nmap_scan')) hints.push('Nmap discovery: -sT --top-ports 1000 without -sV. Service detection: -sV with explicit observed-open ports. Service detection cannot expand discovery coverage; timing changes do not add coverage.');
   if (names.has('nuclei_scan')) hints.push('Use Nuclei only for a focused template check.');
-  return hints.slice(0, 2).join(' ');
+  return hints.join(' ');
 }
 
 export function buildMissionPrompt(args: {

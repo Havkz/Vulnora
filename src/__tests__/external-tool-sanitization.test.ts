@@ -46,6 +46,11 @@ describe('external tool argument sanitization', () => {
 });
 
 describe('scanner timeout normalization', () => {
+  it('removes broad port selectors when the actual scan is narrowed to explicit ports', () => {
+    expect(normalizeNmapRuntimeFlags(['-sV', '--top-ports', '1000', '-F'], '80,443')).toEqual(['-sV']);
+    expect(normalizeNmapRuntimeFlags(['--top-ports=1000', '-sT'], '443')).toEqual(['-sT']);
+    expect(normalizeNmapRuntimeFlags(['-sT', '--top-ports', '1000'])).toEqual(['-sT', '--top-ports', '1000']);
+  });
   it('enables IPv6 for Nmap without duplicating a supplied flag or changing IPv4 requests', () => {
     expect(normalizeNmapRuntimeFlags(['-sV'], '8443', '::1')).toEqual(['-sV', '-6']);
     expect(normalizeNmapRuntimeFlags(['-sV', '-6'], '8443', '[::1]')).toEqual(['-sV', '-6']);

@@ -58,6 +58,7 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     this.command.llm.on('request:fallback', event => this.record('provider:fallback', event));
     this.command.llm.on('request:start', () => this.record('provider:activity', { state: 'started' }));
     this.command.llm.on('request:end', () => this.record('provider:activity', { state: 'completed' }));
+    this.command.llm.on('request:trace', ({ stage, ...event }) => this.record(`provider:${stage}`, event));
     this.command.llm.on('request:progress', event => this.record('provider:progress', event));
     this.command.llm.on('request:retry', ({ error, ...event }) => this.record('provider:retry', { ...event, error: error.message }));
     this.command.llm.on('request:error', ({ error }) => this.record('provider:error', { error: error.message }));

@@ -31,6 +31,8 @@ import { redactLedgerText, redactSecrets, redactString, registerSecret } from '.
 export interface LLMEvents {
   'request:start': { messages: LLMMessage[] };
   'request:end': undefined;
+  'request:trace': { requestId: string; stage: 'request' | 'response'; provider: LLMProvider; model: string;
+    messages?: LLMMessage[]; tools?: LLMToolDefinition[]; response?: LLMResponse; error?: string };
   'request:complete': { response: LLMResponse; durationMs: number };
   'request:error': { error: Error; messages: LLMMessage[] };
   'request:retry': { attempt: number; maxAttempts: number; error: Error };
@@ -1487,7 +1489,15 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     const startTime = Date.now();
     const requestId = randomUUID();
     this.emit('request:start', { messages });
-    try { return await this.chatWithFallback(messages, options, startTime, requestId); }
+    this.emit('request:trace', { requestId, stage: 'request', ...providerIdentity(this.config), messages: structuredClone(messages), tools: options?.tools });
+    try {
+      const response = await this.chatWithFallback(messages, options, startTime, requestId);
+      this.emit('request:trace', { requestId, stage: 'response', ...this.activeProvider, response });
+      return response;
+    } catch (error) {
+      this.emit('request:trace', { requestId, stage: 'response', ...this.activeProvider, error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
     finally { this.emit('request:end', undefined); }
   }
 

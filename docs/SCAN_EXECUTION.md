@@ -14,6 +14,12 @@ Vulnora continues an assessment while distinct, applicable checks remain. A succ
 
 HTTP method checks use GET, HEAD, OPTIONS and TRACE. A 404 does not confirm method support. Advertised methods do not prove unauthorized access; write/delete probes are not performed by this check. A TRACE observation requires a successful response containing the reflected request, and does not establish exploitable impact by itself.
 
+If an entire proposed batch reuses successful observations, the agent evaluates
+those full results once without tools and hands remaining coverage back to the
+scheduler. This does not apply to failed checks or distinct new observations.
+Nmap port discovery and service detection are separate: service detection is
+restricted to observed-open ports, and changing timing does not expand coverage.
+
 ## Basis
 
 - [Nuclei execution options](https://docs.projectdiscovery.io/opensource/nuclei/running) separate request timeouts, request retries, statistics and scan rate limits.

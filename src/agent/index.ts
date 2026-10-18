@@ -186,6 +186,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     const allFindings: ToolFinding[] = saved?.findings || [];
     let tokensUsed = saved?.tokensUsed || 0;
     let hitLimit = false;
+    let reusedOnly = saved?.phase === 'summary' && saved.messages.at(-1)?.content.startsWith('The proposed checks already have successful results;') || false;
     // Cache completed observations, never transient tool failures.
     const seenCalls = new Map<string, string>(saved?.seenCalls);
     for (const key of seenCalls.keys()) {
@@ -432,6 +433,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           // Execute each tool call
           if (!replayingBatch) findingsBeforeBatch = allFindings.length;
           pendingCalls = [...requestedCalls];
+          let newObservations = 0;
           await publish('tool_batch');
           for (const toolCall of requestedCalls) {
             signal?.throwIfAborted();
@@ -439,11 +441,10 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
             const callHash = `${toolCall.name}:${JSON.stringify(toolCall.arguments || {})}`;
             let toolStep: AgentStep;
             if (seenCalls.has(callHash)) {
-              const dup: ToolResult = {
-                success: false,
-                error: `Duplicate call — you already ran ${toolCall.name} with these exact arguments. ` +
-                  `Prior result: ${seenCalls.get(callHash)}. Do NOT repeat it — change the arguments, pick a different tool, or move to your final debrief.`,
-              };
+              const prior = [...steps].reverse().find(step => step.toolResult?.success
+                && `${step.toolName}:${JSON.stringify(step.toolArgs || {})}` === callHash)?.toolResult;
+              const dup: ToolResult = { ...prior, success: true, output: prior?.output || seenCalls.get(callHash),
+                metadata: { ...prior?.metadata, cacheHit: true } };
               toolStep = { iteration: i, type: 'tool_call', toolName: toolCall.name, toolArgs: toolCall.arguments, toolResult: dup, timestamp: Date.now() };
             } else {
               const limit = maxToolCallsPerTask(toolCall.name);
@@ -470,6 +471,7 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
             }
             totalToolCalls++;
             steps.push(toolStep);
+            if (!toolStep.toolResult?.success || !toolStep.toolResult.metadata?.cacheHit) newObservations++;
 
             // Collect findings — tag with REAL tool provenance (the output that backs them)
             if (toolStep.toolResult?.findings) {
@@ -508,6 +510,11 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           }
 
           noProgress = 0;
+          if (newObservations === 0) {
+            reusedOnly = true;
+            iteration = i + 1;
+            break;
+          }
         } else {
           if (isContextCompactionNotice(response.content || '')) {
             messages.push({
@@ -586,11 +593,13 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
 
     signal?.throwIfAborted();
     // Hit iteration or token limit — ask LLM for a final summary
-    hitLimit = !deterministic;
+    hitLimit = !deterministic && !reusedOnly;
     if (phase !== 'summary') {
       messages.push({
         role: 'user',
-        content: modelUnavailable
+        content: reusedOnly
+          ? 'The proposed checks already have successful results; no new scan ran. Evaluate the complete stored observations now and return RESULT without tools. State uncovered objectives explicitly and recommend the distinct missing check (port discovery and service detection are different); do not claim those checks completed. The scheduler will recover remaining coverage.'
+          : modelUnavailable
           ? 'AI planning is unavailable. Preserve completed tools and evidence; do not infer unverified vulnerabilities.'
           : 'The step budget is exhausted. Return the required RESULT format now. Use only collected evidence; do not add claims or request tools.',
       });

@@ -3646,6 +3646,8 @@ function portCountFromSpec(ports?: string): number | undefined {
 
 /** Keep broad single-host scans finite on filtered networks without changing targeted scans. */
 export function normalizeNmapRuntimeFlags(flags: string[], ports?: string, target?: string): string[] {
+  if (ports) flags = flags.filter((flag, index) => flag !== '-F' && flag !== '--top-ports'
+    && !flag.startsWith('--top-ports=') && flags[index - 1] !== '--top-ports');
   if (target && net.isIP(hostFromTargetValue(target) || '') === 6 && !flags.includes('-6')) flags = [...flags, '-6'];
   const portCount = portCountFromSpec(ports);
   if ((portCount || 0) <= 10_000) return [...flags];
@@ -3692,7 +3694,7 @@ export const EXTERNAL_TOOLS: CustomTool[] = [
     category: 'recon',
     parameters: [
       { name: 'target', type: 'string', description: 'Target IP or hostname', required: true },
-      { name: 'flags', type: 'string', description: 'nmap flags (e.g., "-sV -sC -T4")', required: false, default: '-sV -T4' },
+      { name: 'flags', type: 'string', description: 'Discovery: -sT --top-ports 1000 (no -sV). Service detection: -sV, with ports restricted to observed-open ports. Timing flags are enforced by scan policy; changing them does not expand coverage.', required: false, default: '-sV -T4' },
       { name: 'ports', type: 'string', description: 'Port specification (e.g., "1-1000" or "22,80,443")', required: false },
     ],
     handler: async (context) => {

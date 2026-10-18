@@ -6,7 +6,7 @@ const locate = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn: launch }));
 vi.mock('../command-path.js', () => ({ commandPath: locate }));
 import { fetchLocal, stopOwnedOllama } from '../llm/local-service.js';
-import { LLMBackbone } from '../llm/index.js';
+import { LLMBackbone, type LLMEvents } from '../llm/index.js';
 
 const tags = 'http://127.0.0.1:11434/api/tags';
 const refused = () => new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } });
@@ -24,6 +24,25 @@ beforeEach(() => {
 afterEach(async () => { await stopOwnedOllama(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
 describe('on-demand local Ollama service', () => {
+  it('records paired model requests even when concurrent replies arrive in reverse order', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      const question = JSON.parse(init.body).messages.at(-1).content;
+      if (question === 'first') await gate;
+      return new Response(JSON.stringify({ message: { content: `answer ${question}` }, done: true }));
+    }));
+    const llm = new LLMBackbone({ provider: 'local', model: 'selected:7b', baseUrl: 'http://127.0.0.1:11434/api' });
+    const trace: LLMEvents['request:trace'][] = []; llm.on('request:trace', event => trace.push(event));
+    const messages = [{ role: 'user' as const, content: 'first' }];
+    const first = llm.chat(messages); await llm.chat([{ role: 'user', content: 'second' }]);
+    release(); await first; messages[0].content = 'changed after request';
+    const questions = trace.filter(event => event.stage === 'request');
+    expect(questions[0].messages?.[0].content).toBe('first');
+    expect(questions[0].requestId).not.toBe(questions[1].requestId);
+    for (const question of questions) expect(trace.find(event => event.stage === 'response' && event.requestId === question.requestId)?.response?.content)
+      .toBe(`answer ${question.messages?.[0].content}`);
+  });
   it('starts an installed daemon only on refusal, lists models without loading, then stops its own daemon', async () => {
     const child = processFixture();
     const request = vi.fn().mockRejectedValueOnce(refused()).mockImplementation(async () => new Response('{"models":[{"name":"installed:7b"}]}'));

@@ -3,6 +3,45 @@ import { redactSecrets } from '../redact.js';
 import { terminalText, wrapTerminalText } from './terminal.js';
 import type { TerminalTheme } from './theme.js';
 
+const WEBSITE_STAGES = ['reconnaissance', 'weaponization', 'delivery', 'actions_on_objectives'];
+
+export function phasePath(phase: string | undefined, colors: TerminalTheme): string {
+  const stages = WEBSITE_STAGES.includes(phase || '') || !phase ? WEBSITE_STAGES
+    : ['reconnaissance', 'weaponization', 'delivery', 'exploitation', 'installation', 'command_and_control', 'actions_on_objectives'];
+  const styles = [colors.command, colors.active, colors.warning, colors.secondary, colors.success, colors.detail, colors.bright];
+  return stages.map((stage, index) => {
+    const label = stage === phase ? `[${phaseLabel(stage)}]` : phaseLabel(stage);
+    return (stage === phase ? colors.emphasis : (text: string) => text)(styles[index](label));
+  }).join(colors.muted(' -> '));
+}
+
+export function formatAIHistory(events: ProjectLogEvent[]): string {
+  const requests = new Map<string, { timestamp: number; data: Record<string, unknown>; answer?: Record<string, unknown> }>();
+  for (const event of events) {
+    const data = fields(event);
+    if (event.category === 'provider:request') requests.set(String(data.requestId), { timestamp: event.timestamp, data });
+    if (event.category === 'provider:response') {
+      const request = requests.get(String(data.requestId));
+      if (request) request.answer = data;
+    }
+  }
+  if (!requests.size) {
+    const legacy = events.filter(event => event.category === 'provider:progress' && typeof fields(event).text === 'string');
+    return 'Earlier versions saved responses only; their questions were not recorded. Full question/answer history begins with this version.\n\n'
+      + (legacy.map(event => {
+        const data = fields(event);
+        return terminalText(String(redactSecrets(`ANSWER · ${data.provider || data.agent}/${data.model || 'unknown model'}\n${data.text}`)));
+      }).join('\n\n') || 'No recorded AI questions or answers yet.');
+  }
+  return [...requests.values()].map(({ timestamp, data, answer }, index) => {
+    const messages = Array.isArray(data.messages) ? data.messages as { role: string; content: string; toolCalls?: unknown }[] : [];
+    const question = messages.map(message => `${message.role.toUpperCase()}\n${message.content}${message.toolCalls ? `\nTool calls: ${JSON.stringify(message.toolCalls)}` : ''}`).join('\n\n');
+    const response = answer?.response as { content?: string; toolCalls?: unknown } | undefined;
+    return `Request ${index + 1} · ${new Date(timestamp).toLocaleTimeString('de-DE')} · ${data.provider}/${data.model}\n\nQUESTION\n${question}\n\nTOOLS\n${JSON.stringify(data.tools || [], null, 2)}\n\nANSWER · ${answer?.provider || data.provider}/${answer?.model || data.model}\n`
+      + (response ? `${response.content || ''}${response.toolCalls ? `\nTool calls: ${JSON.stringify(response.toolCalls, null, 2)}` : ''}` : String(answer?.error || (answer ? 'Request ended without a response.' : 'Awaiting response…')));
+  }).map(text => terminalText(String(redactSecrets(text)))).join('\n\n────────────────────\n\n');
+}
+
 export function phaseLabel(phase?: string): string {
   const names: Record<string, string> = { reconnaissance: 'Recon', weaponization: 'Scanning', delivery: 'Impact validation',
     exploitation: 'Exploitation', installation: 'Verification', command_and_control: 'Connection checks', actions_on_objectives: 'Reporting' };
@@ -89,7 +128,7 @@ function logContent(event: ProjectLogEvent): { title: string; body?: string; com
       return /Findings:/.test(detail) ? { title: 'Findings', body: detail.slice(detail.indexOf('Findings:') + 9).trim() } : undefined;
     }
   }
-  if (event.category === 'provider:progress' || event.category === 'provider:availability' || event.category === 'provider:activity') return undefined;
+  if (['provider:progress', 'provider:availability', 'provider:activity', 'provider:request', 'provider:response'].includes(event.category)) return undefined;
   if (event.category === 'mission:phase_changed') {
     const outcome = data.previousOutcome === 'not_applicable' ? 'not applicable' : data.previousOutcome === 'incomplete' ? 'incomplete' : 'completed';
     return { title: `${data.previousPhase ? `${phaseLabel(String(data.previousPhase))} ${outcome}${data.reason ? ` · ${data.reason}` : ''}\n\n` : ''}Stage: ${phaseLabel(String(data.phase || ''))}` };
@@ -147,9 +186,14 @@ export function formatProjectLog(event: ProjectLogEvent, transcript = false, col
     }
   }
   if (content.body) {
-    const body = outputPreview(terminalText(content.body), transcript, columns);
+    // Normalize scanner padding before adding the same hanging indent to every output line.
+    const raw = terminalText(content.body).split('\n');
+    const margin = raw.find(line => line.trim())?.match(/^ */)?.[0].length || 0;
+    const text = raw.map(line => line.slice(Math.min(margin, line.match(/^ */)?.[0].length || 0))).join('\n');
+    const body = outputPreview(text, transcript, columns);
     const style = colors ? transcript ? colors.bright : colors.muted : (text: string) => text;
-    lines.push(...body.split('\n').map(line => '    ' + style(line)));
+    const indent = '    ';
+    lines.push(...body.split('\n').map(line => indent + style(line)));
   }
   if (content.command || content.body) lines.push('');
   return lines.join('\n');

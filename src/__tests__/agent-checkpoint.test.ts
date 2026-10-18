@@ -32,6 +32,32 @@ function fixture(options: AgentLoopOptions = {}) {
 }
 
 describe('granular agent recovery', () => {
+  it('evaluates completed observations instead of looping on identical requests', async () => {
+    const run = fixture(); const task = newTask(); const request = call('repeat');
+    run.chatWithTools.mockResolvedValue({ content: 'Check again', model: 'fixture', toolCalls: [request] });
+    const result = await run.loop.run(task, '', target);
+    expect(run.execute).toHaveBeenCalledOnce(); expect(run.chatWithTools).toHaveBeenCalledTimes(2);
+    expect(run.chat).toHaveBeenCalledOnce(); expect(result.hitLimit).toBe(false);
+    expect(result.steps.filter(step => step.toolName).at(-1)?.toolResult).toMatchObject({ success: true, output: 'Complete unshortened fixture evidence', metadata: { cacheHit: true } });
+    expect(run.chat.mock.calls[0][0].at(-1).content).toContain('State uncovered objectives explicitly');
+  });
+  it('evaluates equivalent cached Nmap evidence without repeatedly asking for timing variants', async () => {
+    const run = fixture();
+    run.chatWithTools.mockResolvedValue({ content: 'Different timing', model: 'fixture', toolCalls: [call('cached')] });
+    run.execute.mockResolvedValue({ success: true, output: 'Complete Nmap result', metadata: { cacheHit: true } });
+    const result = await run.loop.run(newTask(), '', target);
+    expect(run.chatWithTools).toHaveBeenCalledOnce(); expect(run.chat).toHaveBeenCalledOnce(); expect(result.hitLimit).toBe(false);
+  });
+  it('resumes evaluation of reused evidence without replaying scans or inventing a budget limit', async () => {
+    const controller = new AbortController(); const task = newTask();
+    const run = fixture({ onCheckpoint: async checkpoint => { if (checkpoint.phase === 'summary') controller.abort(new Error('pause evaluation')); } });
+    run.chatWithTools.mockResolvedValue({ content: '', model: 'fixture', toolCalls: [call('cached')] });
+    run.execute.mockResolvedValue({ success: true, output: 'Prior evidence', metadata: { cacheHit: true } });
+    await expect(run.loop.run(task, '', target, undefined, undefined, controller.signal)).rejects.toThrow('pause evaluation');
+    const resumed = fixture(); const result = await resumed.loop.run(task, '', target);
+    expect(resumed.chatWithTools).not.toHaveBeenCalled(); expect(resumed.execute).not.toHaveBeenCalled();
+    expect(resumed.chat).toHaveBeenCalledOnce(); expect(result.hitLimit).toBe(false);
+  });
   it('continues beyond the former token, step and zero-finding limits while distinct checks return useful negatives', async () => {
     const run = fixture(); run.llm.getPromptProfile = () => 'small_model_30b';
     for (let index = 0; index < 22; index++) run.chatWithTools.mockResolvedValueOnce({

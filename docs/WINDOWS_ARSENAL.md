@@ -61,5 +61,12 @@ Reporting uses supplied findings, stored observations and explicit coverage gaps
 advertising new scan tools. Uniform catch-all responses do not count as discovered paths.
 
 This is a separate Linux execution environment, not a hardened hostile-code sandbox.
+The live header shows the website assessment stages as a colored path; brackets mark
+the current stage. `Ctrl+Y` opens the live AI question/answer history without pausing
+the scan; `Ctrl+P` pauses or resumes from either view. Questions, supplied schemas,
+responses and errors are paired by request ID in the local project journal with
+credential redaction. Older journals retain responses but cannot reconstruct unsaved
+questions. `Ctrl+T` expands command output; wrapped output retains its indentation.
+
 To check the installer manifest locally, run `npm run build` and `npm run arsenal:test-linux`.
 Installed-command and interactive checks are tracked separately in the milestone ledger.

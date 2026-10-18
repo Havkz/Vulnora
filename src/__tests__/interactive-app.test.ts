@@ -171,14 +171,15 @@ describe('durable interactive project flow', () => {
     expect(journal.events.filter(event => (event as { data?: { taskId?: string } }).data?.taskId === 'pair-fixture')).toHaveLength(1);
   });
 
-  it('rounds displayed progress, keeps Esc and Ctrl+C inside the app, and exits only with Ctrl+X', async () => {
+  it('shows the phase path instead of percentages, keeps Esc and Ctrl+C inside the app, and exits only with Ctrl+X', async () => {
     const f = await fixture(); const result = f.start();
     f.input.write('\rQuit menu fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r');
     await expect.poll(() => f.session()?.command.isRunning()).toBe(true);
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
     session.project.progress = 100 / 7;
-    f.output.emit('resize'); await f.wait('14.3%');
+    f.output.emit('resize'); await f.wait('[Recon] -> Scanning');
+    expect(f.transcript()).not.toContain('14.3%');
     expect(f.transcript()).not.toContain('14.285714');
     f.input.write('\x1b'); await f.wait('Project menu · Running');
     expect(stripVTControlCharacters(f.transcript())).not.toContain('Beenden');
@@ -192,6 +193,24 @@ describe('durable interactive project flow', () => {
     expect(session.command.isRunning()).toBe(false);
     const saved = await f.store.load(session.project.id);
     expect(saved.status).toBe('paused'); expect(saved.checkpoint).toBeDefined();
+  });
+
+  it('opens live AI questions and answers with Ctrl+Y while scanning continues, and pauses with Ctrl+P', async () => {
+    const f = await fixture(); const screens = vi.spyOn(f.surface, 'show'); const result = f.start();
+    f.input.write('\rAI fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
+    const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    session.command.llm.emit('request:trace', { requestId: 'one', stage: 'request', provider: 'mock', model: 'fixture', messages: [{ role: 'user', content: 'WHY_THIS_CHECK' }] });
+    f.input.write('\x19'); await f.wait('WHY_THIS_CHECK'); expect(session.command.isRunning()).toBe(true);
+    const view = () => screens.mock.calls.at(-1)?.[0]().lines.map(stripVTControlCharacters).join('\n') || '';
+    session.command.llm.emit('request:trace', { requestId: 'one', stage: 'response', provider: 'mock', model: 'fixture', response: { content: 'BECAUSE_EVIDENCE', model: 'fixture' } });
+    await expect.poll(view).toContain('BECAUSE_EVIDENCE');
+    f.input.write('\x10'); await expect.poll(() => session.project.status).toBe('paused');
+    expect(view()).toContain('Questions & Answers');
+    f.input.write('\x19'); await expect.poll(view).toContain('Stage: Recon');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    const logs = (await f.store.readLogs(session.project.id)).events as { category: string; data: { requestId?: string } }[];
+    expect(logs.filter(event => event.data?.requestId === 'one').map(event => event.category)).toEqual(['provider:request', 'provider:response']);
   });
 
   it.each(['running', 'paused'])('saves and exits with Ctrl+X from a %s project', async status => {

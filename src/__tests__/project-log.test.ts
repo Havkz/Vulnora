@@ -1,10 +1,38 @@
 import { describe, expect, it } from 'vitest';
 import { stripVTControlCharacters } from 'node:util';
-import { formatDuration, formatProjectLog, formatSavedProjectLog, ProjectActivity } from '../ui/project-log.js';
+import { formatAIHistory, formatDuration, formatProjectLog, formatSavedProjectLog, phasePath, ProjectActivity } from '../ui/project-log.js';
 import { createTheme } from '../ui/theme.js';
 import type { ProjectLogEvent } from '../projects/session.js';
 
 describe('readable project logs', () => {
+  it('shows a colored website phase path with the active stage identified without percentages', () => {
+    const colors = createTheme(2);
+    const path = phasePath('weaponization', colors);
+    expect(stripVTControlCharacters(path)).toBe('Recon -> [Scanning] -> Impact validation -> Reporting');
+    expect(path).toContain(colors.command('Recon')); expect(path).toContain(colors.active('[Scanning]'));
+    expect(path).toContain(colors.warning('Impact validation')); expect(path).not.toContain('%');
+  });
+  it('aligns scanner padding, wrapped output and the expansion hint at four spaces', () => {
+    const result = { timestamp: 1, category: 'execution:completed', data: { command: 'whois', args: ['fixture.test'],
+      output: '            Domain Name: FIXTURE.TEST\n            Registry Domain ID: fixture\n            Registrar WHOIS Server: fixture\nFourth' } };
+    const lines = formatProjectLog(result).split('\n');
+    expect(lines.slice(1, 4).every(line => line.startsWith('    ') && line[4] !== ' ')).toBe(true);
+    expect(lines[4]).toBe('    + 1 lines (Ctrl+T full output)');
+    expect(formatProjectLog(result, true).split('\n').slice(1, -1).every(line => line.startsWith('    '))).toBe(true);
+  });
+  it('pairs overlapping AI questions and answers by request ID and redacts private content', () => {
+    const event = (category: string, data: Record<string, unknown>) => ({ timestamp: 1, category, data });
+    const events = [event('provider:request', { requestId: 'one', provider: 'codex', model: 'primary', messages: [{ role: 'user', content: 'QUESTION_ONE token=private-fixture' }] }),
+      event('provider:request', { requestId: 'two', provider: 'codex', model: 'primary', messages: [{ role: 'user', content: 'QUESTION_TWO' }] }),
+      event('provider:response', { requestId: 'two', provider: 'local', model: 'fallback', response: { content: 'ANSWER_TWO' } }),
+      event('provider:response', { requestId: 'one', provider: 'codex', model: 'primary', response: { content: 'ANSWER_ONE' } })];
+    const history = formatAIHistory(events);
+    expect(history.indexOf('QUESTION_ONE')).toBeLessThan(history.indexOf('ANSWER_ONE'));
+    expect(history.indexOf('ANSWER_ONE')).toBeLessThan(history.indexOf('QUESTION_TWO'));
+    expect(history).toContain('ANSWER · local/fallback'); expect(history).not.toContain('private-fixture');
+    expect(formatAIHistory(events.slice(0, 1))).toContain('Awaiting response');
+    expect(formatProjectLog(events[0], true)).toBe('');
+  });
   it('uses readable units and shows measured process duration beside every exit code', () => {
     expect([59000, 60000, 754000, 3600000, 90000000].map(formatDuration)).toEqual(['59s', '1m 0s', '12m 34s', '1h 0m', '1d 1h']);
     const event = { timestamp: 1, category: 'execution:completed', data: { command: 'nmap', args: ['fixture.test'], durationMs: 125000, exitCode: 0, success: true } };

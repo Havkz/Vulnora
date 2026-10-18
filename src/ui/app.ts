@@ -6,7 +6,7 @@ import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
-import { formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, ProjectActivity } from './project-log.js';
+import { formatAIHistory, formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, phasePath, ProjectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
 import { formatTerminalReport } from '../terminal-report.js';
 import wrapAnsi from 'wrap-ansi';
@@ -63,13 +63,19 @@ export class InteractiveApp {
     await this.document(title, text, 'Enter Continue    Esc Back    Ctrl+X Save & Quit');
   }
 
-  private async document(title: string, text: string, footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+X Save & Quit', markdown = false): Promise<void> {
+  private async document(title: string, text: string | (() => string), footer = '↑/↓ Scroll    PgUp/PgDn Page    Esc Back    Ctrl+X Save & Quit', markdown = false, shortcut?: (key: { name?: string; ctrl?: boolean }) => Promise<boolean>): Promise<void> {
     let offset = 0;
-    const safeText = terminalText(text);
-    const content = markdown ? formatTerminalReport(safeText, this.surface.colors) : safeText;
+    let content = ''; let previousText: string | undefined;
     let width = 0; let lines: string[] = [];
     this.surface.show(() => {
-      if (width !== this.surface.columns - 4) {
+      const next = typeof text === 'function' ? text() : text;
+      const changed = next !== previousText;
+      if (changed) {
+        previousText = next;
+        const safeText = terminalText(next);
+        content = markdown ? formatTerminalReport(safeText, this.surface.colors) : safeText;
+      }
+      if (width !== this.surface.columns - 4 || changed) {
         width = this.surface.columns - 4;
         lines = wrapAnsi(content, Math.max(1, width), { hard: true, wordWrap: false, trim: false }).split('\n');
       }
@@ -79,6 +85,7 @@ export class InteractiveApp {
     });
     for (;;) {
       const { key } = await this.surface.nextKey();
+      if (await shortcut?.(key)) return;
       if (key.name === 'escape' || key.name === 'return') return;
       if (key.name === 'up') offset--;
       if (key.name === 'down') offset++;
@@ -266,12 +273,13 @@ export class InteractiveApp {
       const completionLabel = outcome === 'PARTIALLY_COMPLETED' ? 'Partially completed'
         : outcome === 'COMPLETED_WITH_WARNINGS' ? 'Completed with warnings' : outcome === 'BLOCKED' ? 'Blocked' : outcome === 'FAILED' ? 'Failed' : 'Completed';
       const header = [`Stage: ${completed ? completionLabel : phaseLabel(mission?.currentPhase)}${blocked ? ' · Paused' : ''}`,
-        dense ? `${session.project.status} · ${session.project.progress.toFixed(1)}% · ${session.project.name}` : `${session.project.name} · ${session.project.status} · ${session.project.progress.toFixed(1)}%`,
+        `${session.project.name} · ${session.project.status}`,
+        phasePath(mission?.currentPhase, this.surface.colors),
         session.project.target.input, `Provider: ${active.provider} · ${active.model}`];
       const bottom = [...(this.issue ? [this.surface.colors.error(fitTerminalText(this.issue, this.surface.panelColumns))] : []),
         ...(completed ? wrapAnsi('Press Enter to view results', this.surface.panelColumns, { hard: true, trim: true }).split('\n').map(line => this.surface.colors.muted(line)) : [])];
       const headroom = Math.max(1, this.surface.panelRows - bottom.length - (completed ? 0 : 1) - (dense ? 1 : 3));
-      const fullHeading = header.flatMap(line => wrapTerminalText(line, this.surface.panelColumns));
+      const fullHeading = header.flatMap(line => wrapAnsi(line, this.surface.panelColumns, { hard: true, trim: false }).split('\n'));
       const heading = fullHeading.length <= headroom ? fullHeading :
         (headroom >= 3 ? header : [header[0], `${active.provider} · ${active.model}`]).slice(0, headroom)
           .map(line => fitTerminalText(line, this.surface.panelColumns));
@@ -282,12 +290,16 @@ export class InteractiveApp {
       for (; processed < logs.length; processed++) {
         if (resultEvents.has(processed)) continue;
         const formatted = formatProjectLog(logs[processed], this.transcript, this.surface.colors, width, results.get(processed));
-        const clean = terminalText(formatted);
         let character = 0;
-        for (const line of formatted ? wrapAnsi(formatted, width, { hard: true, wordWrap: false, trim: false }).split('\n') : []) {
-          wrapped.push({ text: line, event: processed, character });
-          character += terminalText(line).length;
-          if (clean[character] === '\n') character++;
+        for (const logical of formatted ? formatted.split('\n') : []) {
+          const indent = logical.startsWith('    ') ? '    ' : '';
+          const parts = wrapAnsi(logical.slice(indent.length), Math.max(1, width - indent.length), { hard: true, wordWrap: false, trim: false }).split('\n');
+          let consumed = 0;
+          for (const [index, part] of parts.entries()) {
+            wrapped.push({ text: indent + part, event: processed, character: character + (index ? indent.length + consumed : 0) });
+            consumed += terminalText(part).length;
+          }
+          character += terminalText(logical).length + 1;
         }
       }
       if (anchor) {
@@ -305,14 +317,26 @@ export class InteractiveApp {
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
       footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
-        : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^X Quit ^T ${this.transcript ? 'Brief' : 'Full'}`
-        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+X Quit  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  PgUp/PgDn Logs  End Live` };
+        : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^Y AI ^T ${this.transcript ? 'Brief' : 'Full'} ^X Quit`
+        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+Y AI history  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  Ctrl+X Quit  PgUp/PgDn Logs` };
     };
-    const togglePause = async () => {
+    let historySize = -1; let aiText = '';
+    const showAIHistory = async () => {
+      await this.document('AI history · Questions & Answers', () => {
+        if (historySize !== logs.length) { historySize = logs.length; aiText = formatAIHistory(logs); }
+        return aiText;
+      }, 'Ctrl+Y / Esc Back    Ctrl+P Pause / Resume    ↑/↓ Scroll    End Latest    Ctrl+X Quit', false, async key => {
+        if (key.ctrl && key.name === 'y') return true;
+        if (key.ctrl && key.name === 'p') await togglePause(false);
+        return false;
+      });
+      this.surface.show(render);
+    };
+    const togglePause = async (showProgress = true) => {
       if (session.project.status === 'completed') return;
       if (session.command.isRunning()) {
         this.surface.paused = true;
-        this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
+        if (showProgress) this.surface.show(() => ({ lines: this.surface.panel(['Pausing · saving progress and stopping active work…']), footer: 'Ctrl+X Save & Quit' }));
         await session.pause();
         activity.reset();
       } else {
@@ -324,6 +348,7 @@ export class InteractiveApp {
       await session.start();
       for (;;) {
         const { key } = await this.surface.nextKey();
+        if (key.ctrl && key.name === 'y') { await showAIHistory(); continue; }
         if (key.ctrl && key.name === 't') { this.transcript = !this.transcript; processed = 0; wrapped = []; tail = true; }
         if (key.name === 'return' && this.issue && !session.command.isRunning()) {
           await this.document('Recovery paused', recoveryDetails);
@@ -341,9 +366,10 @@ export class InteractiveApp {
             const running = session.command.isRunning();
             this.surface.paused = !running;
             const choices = running ? ['Continue', 'Pause', 'Settings (pause scan)', 'Main menu (pause scan)'] : ['Resume', 'Settings', 'Main menu'];
-            let toggle = false;
+            let toggle = false; let history = false;
             const selected = await this.surface.menu(running ? 'Project menu · Running' : 'Project menu · Paused', choices, undefined,
-              key => { toggle = !!key.ctrl && key.name === 'p'; return toggle; });
+              key => { toggle = !!key.ctrl && key.name === 'p'; history = !!key.ctrl && key.name === 'y'; return toggle || history; });
+            if (history) { await showAIHistory(); break; }
             if (toggle) { await togglePause(); this.surface.show(render); break; }
             const choice = selected === undefined ? 'Continue' : choices[selected];
             if (choice === 'Continue' || this.session?.project.status === 'completed') { this.surface.show(render); break; }
