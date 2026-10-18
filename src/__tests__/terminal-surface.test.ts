@@ -21,6 +21,10 @@ function terminal(columns = 80, rows = 30) {
 }
 
 describe('terminal surface', () => {
+  it('recognizes the enhanced Ctrl+M model shortcut', async () => {
+    const { surface, input } = terminal(); input.write('\x1b[109;5u');
+    expect((await surface.nextKey()).key).toMatchObject({ name: 'm', ctrl: true });
+  });
   it('distinguishes enhanced Shift+Esc and Ctrl+P from plain Esc', async () => {
     const { surface, input } = terminal();
     input.write('\x1b[27;2u');

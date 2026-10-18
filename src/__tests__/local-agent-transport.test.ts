@@ -52,6 +52,20 @@ process.stdin.on('end', () => {
 }
 
 describe('authenticated local CLI transport', () => {
+  it.each(['codex', 'claude'] as const)('passes Vulnora-only model and reasoning overrides to %s without changing its settings', async id => {
+    const f = fixture(id);
+    const settings = join(f.home, 'settings.json'); writeFileSync(settings, '{"keep":"native defaults"}');
+    await localAgentChat(id, 'hello', { command: f.command, timeoutMs: 4000, model: 'fixture-selected-model', reasoningEffort: 'high' });
+    const { args } = JSON.parse(readFileSync(f.invocation, 'utf8'));
+    expect(args.slice(args.indexOf(id === 'codex' ? '-m' : '--model') + 1)[0]).toBe('fixture-selected-model');
+    if (id === 'codex') expect(args).toContain('model_reasoning_effort="high"');
+    else expect(args.slice(args.indexOf('--effort'), args.indexOf('--effort') + 2)).toEqual(['--effort', 'high']);
+    expect(readFileSync(settings, 'utf8')).toBe('{"keep":"native defaults"}');
+    await localAgentChat(id, 'default effort', { command: f.command, timeoutMs: 4000 });
+    const defaults = JSON.parse(readFileSync(f.invocation, 'utf8')).args as string[];
+    expect(defaults.some(arg => arg.startsWith('model_reasoning_effort='))).toBe(false);
+    expect(defaults).not.toContain('--effort');
+  });
   it('uses the installed Codex model by default and respects an explicit model selection', async () => {
     const f = fixture('codex'); const events: LocalAgentProgress[] = [];
     vi.stubEnv('VULNORA_CODEX_MODEL', 'installed-model');

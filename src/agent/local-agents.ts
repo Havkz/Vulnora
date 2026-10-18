@@ -17,6 +17,29 @@ import { accessSync, constants, existsSync, mkdtempSync, readdirSync, readFileSy
 import { homedir, tmpdir, userInfo } from 'os';
 import { join, dirname, resolve } from 'path';
 import { StringDecoder } from 'node:string_decoder';
+import type { CLIReasoningEffort } from '../types/index.js';
+
+export interface CLIModelOption { id: string; label: string; efforts: CLIReasoningEffort[] }
+export const CLI_REASONING_LEVELS: Record<'codex' | 'claude', CLIReasoningEffort[]> = {
+  codex: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+};
+
+/** Read public model metadata only; discovery never invokes inference or changes CLI settings. */
+export function cliModelOptions(agent: 'codex' | 'claude'): CLIModelOption[] {
+  if (agent === 'claude') return ['', 'sonnet', 'opus', 'haiku'].map(id => ({ id, label: id || 'CLI default', efforts: CLI_REASONING_LEVELS.claude }));
+  const options: CLIModelOption[] = [{ id: 'codex-default', label: 'CLI default', efforts: CLI_REASONING_LEVELS.codex }];
+  try {
+    const path = process.env.VULNORA_CODEX_MODELS_CACHE || join(process.env.CODEX_HOME || join(agentHome(), '.codex'), 'models_cache.json');
+    const data = JSON.parse(readFileSync(path, 'utf8')) as { models?: { slug?: unknown; display_name?: unknown; visibility?: unknown; supported_reasoning_levels?: { effort?: unknown }[] }[] };
+    for (const model of Array.isArray(data.models) ? data.models : []) {
+      if (typeof model.slug !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,199}$/.test(model.slug) || model.visibility === 'hide' || options.some(option => option.id === model.slug)) continue;
+      const efforts = (Array.isArray(model.supported_reasoning_levels) ? model.supported_reasoning_levels : [])
+        .map(level => level.effort).filter((effort): effort is CLIReasoningEffort => CLI_REASONING_LEVELS.codex.includes(effort as CLIReasoningEffort));
+      options.push({ id: model.slug, label: typeof model.display_name === 'string' ? model.display_name : model.slug, efforts });
+    }
+  } catch { /* Manual model entry remains available when the CLI has no public cache. */ }
+  return options;
+}
 
 // vulnora injects its OWN provider keys (from .env) into the server process. If we let those leak into
 // a spawned CLI, the CLI uses vulnora's key instead of the user's native login → 401. The entire point
@@ -498,7 +521,7 @@ export function pingLocalAgent(id: string, prompt?: string, timeoutMs?: number):
 export interface LocalAgentProgress { agent: string; type: string; text?: string; model?: string }
 
 export function localAgentChat(id: string, prompt: string, opts: {
-  model?: string; command?: string; timeoutMs?: number; signal?: AbortSignal;
+  model?: string; reasoningEffort?: CLIReasoningEffort; command?: string; timeoutMs?: number; signal?: AbortSignal;
   onProgress?: (event: LocalAgentProgress) => void;
 } = {}): Promise<string> {
   const spec = getSpec(id);
@@ -506,6 +529,7 @@ export function localAgentChat(id: string, prompt: string, opts: {
   if (opts.signal?.aborted) return Promise.reject(opts.signal.reason ?? new Error('Agent request cancelled'));
   // child env: provider keys stripped + HOME pinned to the real agent home (see childEnv).
   const env = childEnv();
+  if (opts.reasoningEffort && (id === 'codex' || id === 'claude') && !CLI_REASONING_LEVELS[id].includes(opts.reasoningEffort)) return Promise.reject(new Error(`Invalid ${id} reasoning effort`));
   const model = opts.model && opts.model !== 'codex-default' && opts.model !== id ? opts.model
     : id === 'codex' ? process.env.VULNORA_CODEX_MODEL?.trim() || undefined : undefined;
   const timeoutMs = opts.timeoutMs ?? envTimeoutMs('VULNORA_LOCAL_AGENT_TIMEOUT_MS', 600000);
@@ -518,13 +542,13 @@ export function localAgentChat(id: string, prompt: string, opts: {
     workDir = mkdtempSync(join(tmpdir(), 'vulnora-claudellm-'));
     args = ['--safe-mode', '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--tools', '', '--disallowedTools', 'mcp__*', '--no-session-persistence', '--max-turns', '1',
-      ...(model ? ['--model', model] : [])];
+      ...(model ? ['--model', model] : []), ...(opts.reasoningEffort ? ['--effort', opts.reasoningEffort] : [])];
   } else if (id === 'codex') {
     workDir = mkdtempSync(join(tmpdir(), 'vulnora-codexllm-'));
     outFile = join(workDir, 'reply.txt');
     args = ['--ask-for-approval', 'never',
       ...['shell_tool', 'unified_exec', 'apps', 'plugins', 'hooks', 'browser_use', 'computer_use', 'in_app_browser'].flatMap(feature => ['--disable', feature]),
-      'exec', '-c', 'model_reasoning_effort="low"', '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
+      'exec', ...(opts.reasoningEffort ? ['-c', `model_reasoning_effort=${JSON.stringify(opts.reasoningEffort)}`] : []), '-c', 'web_search="disabled"', '-c', 'mcp_servers={}',
       '--ephemeral', '--skip-git-repo-check', '--json', '--color', 'never', '--sandbox', 'read-only',
       '-C', workDir, '--output-last-message', outFile, ...(model ? ['-m', model] : []), '-'];
   } else { // hermes — takes the prompt as an arg

@@ -90,6 +90,15 @@ export class ProviderSession {
     return { ...this.effective, fallbackChain: this.effective.fallbackChain?.map(entry => ({ ...entry })) };
   }
 
+  updateSelection(): void {
+    const primary = this.configuration.getLLMConfig();
+    const local = this.configuration.getLLMConfig('local');
+    this.effective = { ...primary, fallbackChain: [
+      ...(primary.provider !== 'local' && local.model?.trim() ? [local] : []),
+      { provider: 'deterministic', model: 'evidence-only' },
+    ] };
+  }
+
   description(): string {
     const state = this.readiness;
     if (!state) return 'Provider initialization pending';

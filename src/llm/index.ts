@@ -1214,7 +1214,7 @@ class CodexAdapter implements LLMProviderAdapter {
     const timeoutMs = this.config.timeout ?? Number(process.env.VULNORA_CODEX_TIMEOUT_MS || 600000);
     let model = providerIdentity(this.config).model;
     const content = (await localAgentChat('codex', this.formatPrompt(messages, options), {
-      command: config.get('codex').command || 'codex', model: this.config.model,
+      command: config.get('codex').command || 'codex', model: this.config.model, reasoningEffort: this.config.reasoningEffort,
       timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 600000,
       signal: options?.signal, onProgress: event => { model = event.model || model; options?.onProgress?.(event); },
     })).trim();
@@ -1256,7 +1256,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
     const timeoutMs = typeof this.config.timeout === 'number' && this.config.timeout > 0 ? this.config.timeout : undefined;
     const command = agentId === 'codex' ? config.get('codex').command : undefined;
     let model = providerIdentity(this.config).model;
-    const content = (await localAgentChat(agentId, prompt, { command, timeoutMs, signal: options?.signal,
+    const content = (await localAgentChat(agentId, prompt, { command, timeoutMs, model: this.config.cliModel, reasoningEffort: this.config.reasoningEffort, signal: options?.signal,
       onProgress: event => { model = event.model || model; options?.onProgress?.(event); } })).trim();
     // Tool-calling over text: if the Arsenal was offered, parse the agent's tool requests so the
     // ReAct loop EXECUTES them instead of treating this planning turn as the (abstaining) final answer.
@@ -1386,10 +1386,11 @@ export function shouldAdvanceFallback(primaryProvider: LLMProvider, rung: number
   return true;
 }
 
-function providerIdentity(entry: Pick<LLMConfig, 'provider' | 'model'>): { provider: LLMProvider; model: string } {
+function providerIdentity(entry: Pick<LLMConfig, 'provider' | 'model' | 'cliModel'>): { provider: LLMProvider; model: string } {
   const codex = entry.provider === 'codex' || (entry.provider === 'local-agent' && entry.model === 'codex');
-  return codex ? { provider: 'codex', model: !entry.model || ['codex', 'codex-default'].includes(entry.model)
-    ? process.env.VULNORA_CODEX_MODEL?.trim() || 'codex-default' : entry.model } : { provider: entry.provider, model: entry.model };
+  const model = entry.provider === 'local-agent' ? entry.cliModel || entry.model : entry.model;
+  return codex ? { provider: 'codex', model: !model || ['codex', 'codex-default'].includes(model)
+    ? process.env.VULNORA_CODEX_MODEL?.trim() || 'codex-default' : model } : { provider: entry.provider, model };
 }
 
 export class LLMBackbone extends EventEmitter<LLMEvents> {
@@ -1398,6 +1399,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   private conversationHistory: LLMMessage[] = [];
   private retryAttempts: number = 3;
   private retryDelayMs: number = 1000;
+  private activeRequests = 0;
   private activeProvider: { provider: LLMProvider; model: string };
 
   constructor(config: LLMConfig) {
@@ -1488,33 +1490,36 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   ): Promise<LLMResponse> {
     const startTime = Date.now();
     const requestId = randomUUID();
+    const requestConfig = this.config; const requestAdapter = this.adapter; const retryAttempts = this.retryAttempts;
+    this.activeRequests++;
     this.emit('request:start', { messages });
-    this.emit('request:trace', { requestId, stage: 'request', ...providerIdentity(this.config), messages: structuredClone(messages), tools: options?.tools });
+    this.emit('request:trace', { requestId, stage: 'request', ...providerIdentity(requestConfig), messages: structuredClone(messages), tools: options?.tools });
     try {
-      const response = await this.chatWithFallback(messages, options, startTime, requestId);
+      const response = await this.chatWithFallback(messages, options, startTime, requestId, requestConfig, requestAdapter, retryAttempts);
       this.emit('request:trace', { requestId, stage: 'response', ...this.activeProvider, response });
       return response;
     } catch (error) {
       this.emit('request:trace', { requestId, stage: 'response', ...this.activeProvider, error: error instanceof Error ? error.message : String(error) });
       throw error;
     }
-    finally { this.emit('request:end', undefined); }
+    finally { this.activeRequests--; this.emit('request:end', undefined); }
   }
 
-  private async chatWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string): Promise<LLMResponse> {
+  private async chatWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string,
+    requestConfig: LLMConfig, requestAdapter: LLMProviderAdapter, retryAttempts: number): Promise<LLMResponse> {
 
     // The model ladder: primary first, then each configured fallback hop. A hop is
     // tried when the rung above fails for ANY reason that model can't fix itself —
     // hard errors that survive same-model retries (rate-limit, 5xx, timeout, auth,
     // 404, context-length) OR soft failures on a 200 (a refusal, or empty output).
     const ladder: FallbackEntry[] = [
-      { provider: this.config.provider, model: this.config.model, apiKey: this.config.apiKey, baseUrl: this.config.baseUrl },
-      ...(this.config.fallbackChain || []),
+      requestConfig,
+      ...(requestConfig.fallbackChain || []),
     ];
     const question = [...messages].reverse().find(message => message.role === 'user')?.content;
     const auditContext = {
       requestId,
-      primary: { provider: this.config.provider, model: this.config.model },
+      primary: { provider: requestConfig.provider, model: requestConfig.model },
       question: question ? redactLedgerText(question, 12000) : undefined,
       conversation: fallbackConversation(messages),
       messageCount: messages.length,
@@ -1529,12 +1534,12 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       this.activeProvider = providerIdentity(hop);
       const onFallback = rung > 0;
       const hasNext = rung < ladder.length - 1;
-      const adapter = onFallback ? this.createAdapter({ ...this.config, ...hop }) : this.adapter;
+      const adapter = onFallback ? this.createAdapter({ ...requestConfig, ...hop, cliModel: hop.cliModel, reasoningEffort: hop.reasoningEffort }) : requestAdapter;
       const msgs = reframeNext ? reframeWithAuthorizedContext(messages) : messages;
 
       // ── same-model retry loop: only transient hard errors retry in place ──
       let response: LLMResponse | null = null;
-      for (let attempt = 1; attempt <= this.retryAttempts; attempt++) {
+      for (let attempt = 1; attempt <= retryAttempts; attempt++) {
         try {
           options?.signal?.throwIfAborted();
           response = await adapter.chat(msgs, { ...options, onProgress: event => {
@@ -1554,14 +1559,14 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
           const permanent = error instanceof LLMUnavailableError || (error instanceof LLMApiError &&
             (error.status === 401 || error.status === 403 || error.status === 404));
-          if (permanent || attempt >= this.retryAttempts) break;
+          if (permanent || attempt >= retryAttempts) break;
           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
           if (error instanceof LLMApiError && error.retryAfterMs) {
             // Honor Retry-After but CAP it (2 min) so a hostile/oversized header can't pin the
             // call for a long time; a normal Retry-After (seconds) is honored unchanged.
             delayMs = Math.max(delayMs, Math.min(error.retryAfterMs, 120_000));
           }
-          this.emit('request:retry', { attempt, maxAttempts: this.retryAttempts, error: lastError });
+          this.emit('request:retry', { attempt, maxAttempts: retryAttempts, error: lastError });
           await delay(delayMs, undefined, { signal: options?.signal });
         }
       }
@@ -1583,7 +1588,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           });
         }
         reframeNext = false;
-        if (hasNext && shouldAdvanceFallback(this.config.provider, rung, reason)) {
+        if (hasNext && shouldAdvanceFallback(requestConfig.provider, rung, reason)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1620,7 +1625,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           this.emit('request:refusal', { provider: hop.provider, model: hop.model, preview: (response.content || '').slice(0, 160) });
         }
         reframeNext = soft === 'refusal';
-        if (hasNext && shouldAdvanceFallback(this.config.provider, rung, soft)) {
+        if (hasNext && shouldAdvanceFallback(requestConfig.provider, rung, soft)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1652,8 +1657,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           fallbackResponse: redactLedgerText(response.content || '', 30000),
           durationMs: Date.now() - startTime,
         });
-        this.emit('request:fallback', { fromModel: this.config.model, toModel: hop.model,
-          fromProvider: this.config.provider, toProvider: hop.provider, engaged: true, reason: `recovered_after:${trail.join('>')}` });
+        this.emit('request:fallback', { fromModel: requestConfig.model, toModel: hop.model,
+          fromProvider: requestConfig.provider, toProvider: hop.provider, engaged: true, reason: `recovered_after:${trail.join('>')}` });
       }
       return response;
     }
@@ -1771,7 +1776,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
       this.retryAttempts = ['codex', 'local-agent', 'deterministic'].includes(newConfig.provider) ? 1 : 3;
     }
     this.config = { ...this.config, ...newConfig };
-    this.activeProvider = providerIdentity(this.config);
+    if (!this.activeRequests) this.activeProvider = providerIdentity(this.config);
     this.adapter = this.createAdapter(this.config);
   }
 

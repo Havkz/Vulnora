@@ -126,6 +126,25 @@ describe('local-agent backbone surfaces toolCalls (keyless-path fix)', () => {
 });
 
 describe('codex backbone surfaces toolCalls (guards the CodexAdapter half of the fix)', () => {
+  it.each(['codex', 'claude'] as const)('keeps an in-flight %s turn on its model and applies the new model and effort on the next request', async agent => {
+    let finish!: (text: string) => void;
+    cli.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const backbone = new LLMBackbone(agent === 'codex'
+      ? { provider: 'codex', model: 'old-model', reasoningEffort: 'low' }
+      : { provider: 'local-agent', model: 'claude', cliModel: 'old-model', reasoningEffort: 'low' });
+    const old = backbone.prompt('first');
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+    expect(cli.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'old-model', reasoningEffort: 'low' });
+    backbone.updateConfig(agent === 'codex' ? { model: 'new-model', reasoningEffort: 'high' } : { cliModel: 'new-model', reasoningEffort: 'high' });
+    expect(backbone.getActiveProvider().model).toBe('old-model');
+    finish('First turn completed.'); await expect(old).resolves.toBe('First turn completed.');
+    cli.mockResolvedValueOnce('Next turn completed.');
+    await backbone.prompt('second');
+    expect(cli.mock.calls.at(-1)?.[0]).toBe(agent);
+    expect(cli.mock.calls.at(-1)?.[2]).toMatchObject({ model: 'new-model', reasoningEffort: 'high' });
+    expect(backbone.getActiveProvider().model).toBe('new-model');
+  });
+
   it('shows the installed CLI model, the actual fallback response model, and tries Codex again on the next request', async () => {
     vi.stubEnv('VULNORA_CODEX_MODEL', 'installed-codex-model');
     const backbone = new LLMBackbone({ provider: 'local-agent', model: 'codex',

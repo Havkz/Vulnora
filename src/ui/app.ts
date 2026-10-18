@@ -4,7 +4,7 @@ import type { config as settings, ApiKeyProvider } from '../config/index.js';
 import type { ProjectSession, ProjectLogEvent } from '../projects/session.js';
 import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from '../projects/store.js';
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
-import type { LLMConfig } from '../types/index.js';
+import type { LLMConfig, CLIReasoningEffort } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
 import { formatAIHistory, formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, phasePath, ProjectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
@@ -21,6 +21,7 @@ export interface InteractiveServices {
   installedModels: (signal?: AbortSignal) => Promise<string[]>;
   installedAgents?: () => Promise<string[]>;
   prepareProviders: (signal?: AbortSignal, check?: 'primary' | 'local') => Promise<string>;
+  updateModels?: () => void;
 }
 
 /** Screens share the real durable project/session services and one input owner. */
@@ -321,16 +322,17 @@ export class InteractiveApp {
       return { lines: this.surface.panel([...heading.map((line, index) => index === 0 ? this.surface.colors.emphasis(this.surface.colors.border(line)) : this.surface.colors.foreground(line)), ...(dense ? [] : ['']),
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
       footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
-        : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^Y AI ^T ${this.transcript ? 'Brief' : 'Full'} ^X Quit`
-        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+Y Latest AI  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  Ctrl+X Quit  PgUp/PgDn Logs` };
+        : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^M Model ^Y AI ^T ${this.transcript ? 'Brief' : 'Full'} ^X Quit`
+        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+M Model  Ctrl+Y Latest AI  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  Ctrl+X Quit  PgUp/PgDn Logs` };
     };
     let historySize = -1; let aiText = '';
     const showAIHistory = async () => {
       await this.document('Latest AI exchange · Question & Answer', () => {
         if (historySize !== logs.length) { historySize = logs.length; aiText = formatAIHistory(logs); }
         return aiText;
-      }, 'Ctrl+Y / Esc Back    Ctrl+P Pause / Resume    ↑/↓ Scroll    End Latest    Ctrl+X Quit', false, async key => {
+      }, 'Ctrl+Y / Esc Back    Ctrl+M Model    Ctrl+P Pause / Resume    ↑/↓ Scroll    Ctrl+X Quit', false, async key => {
         if (key.ctrl && key.name === 'y') return true;
+        if (key.ctrl && key.name === 'm') { await this.changeModel(); return true; }
         if (key.ctrl && key.name === 'p') await togglePause(false);
         return false;
       });
@@ -371,6 +373,10 @@ export class InteractiveApp {
           this.surface.show(render); continue;
         }
         if (key.name === 'return' && session.project.status === 'completed') { await this.results(); return; }
+        // Legacy terminals encode Ctrl+M exactly like Enter; Enter is free on the live scan.
+        if ((key.ctrl && key.name === 'm') || key.name === 'return') {
+          await this.changeModel(); this.surface.show(render); continue;
+        }
         if (key.ctrl && key.name === 'p') {
           await togglePause();
           this.surface.show(render); continue;
@@ -382,9 +388,10 @@ export class InteractiveApp {
             const running = session.command.isRunning();
             this.surface.paused = !running;
             const choices = running ? ['Continue', 'Pause', 'Settings (pause scan)', 'Main menu (pause scan)'] : ['Resume', 'Settings', 'Main menu'];
-            let toggle = false; let history = false;
+            let toggle = false; let history = false; let model = false;
             const selected = await this.surface.menu(running ? 'Project menu · Running' : 'Project menu · Paused', choices, undefined,
-              key => { toggle = !!key.ctrl && key.name === 'p'; history = !!key.ctrl && key.name === 'y'; return toggle || history; });
+              key => { toggle = !!key.ctrl && key.name === 'p'; history = !!key.ctrl && key.name === 'y'; model = !!key.ctrl && key.name === 'm'; return toggle || history || model; });
+            if (model) { await this.changeModel(); this.surface.show(render); break; }
             if (history) { await showAIHistory(); break; }
             if (toggle) { await togglePause(); this.surface.show(render); break; }
             const choice = selected === undefined ? 'Continue' : choices[selected];
@@ -426,22 +433,7 @@ export class InteractiveApp {
           if (this.session) await this.session.setScanningBehavior(behavior);
         }
       } else if (choice === 1) {
-        const providers = ['codex', 'local-agent', 'local', 'openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek'] as const;
-        const selected = await this.surface.menu('Provider', providers.map(provider => provider === 'local' ? 'Ollama / local' : provider === 'local-agent' ? 'Installed Codex / Claude CLI' : provider));
-        if (selected === undefined) continue;
-        const provider = providers[selected];
-        if (provider === 'local') { await this.selectLocalModel(true); continue; }
-        let models: string[];
-        if (provider === 'local-agent') models = await this.services.installedAgents?.() || [];
-        else models = (await import('../config/index.js')).AVAILABLE_MODELS[provider].map(model => model.id);
-        if (!models.length) { await this.notice('Model unavailable', 'No installed models found. No model was downloaded.'); continue; }
-        const custom = provider !== 'local-agent';
-        const model = await this.surface.menu('Default model', [...models, ...(custom ? ['Enter model ID'] : [])]);
-        if (model === undefined) continue;
-        const id = model < models.length ? models[model] : await this.surface.prompt('Model ID:');
-        if (!id?.trim()) continue;
-        config.setDefaultModel(provider, id); config.setDefaultProvider(provider);
-        await this.refreshProviders();
+        await this.selectProvider();
       } else if (choice === 3) {
         await this.selectLocalModel(false);
       } else {
@@ -455,6 +447,67 @@ export class InteractiveApp {
         }
       }
     }
+  }
+
+  private async selectProvider(): Promise<void> {
+    const config = this.services.configuration;
+    const providers = ['codex', 'local-agent', 'local', 'openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek'] as const;
+    const selected = await this.surface.menu('Provider', providers.map(provider => provider === 'local' ? 'Ollama / local' : provider === 'local-agent' ? 'Installed Codex / Claude CLI' : provider));
+    if (selected === undefined) return;
+    const provider = providers[selected];
+    if (provider === 'codex') { await this.selectCLIModel('codex', true); return; }
+    if (provider === 'local') { await this.selectLocalModel(true); return; }
+    if (provider === 'local-agent') {
+      const agents = await this.services.installedAgents?.() || [];
+      if (!agents.length) { await this.notice('Model unavailable', 'No installed agent CLI found.'); return; }
+      const selected = await this.surface.menu('Agent CLI', agents);
+      if (selected === undefined) return;
+      const agent = agents[selected];
+      if (agent === 'codex' || agent === 'claude') { await this.selectCLIModel(agent, true); return; }
+      config.setDefaultModel('local-agent', agent); config.setDefaultProvider('local-agent');
+    } else {
+      const models = (await import('../config/index.js')).AVAILABLE_MODELS[provider].map(model => model.id);
+      const selected = await this.surface.menu('Default model', [...models, 'Enter model ID']);
+      if (selected === undefined) return;
+      const id = selected < models.length ? models[selected] : await this.surface.prompt('Model ID:');
+      if (!id?.trim()) return;
+      config.setDefaultModel(provider, id); config.setDefaultProvider(provider);
+    }
+    await this.refreshProviders();
+  }
+
+  private async changeModel(): Promise<void> {
+    const selected = this.services.configuration.getLLMConfig();
+    if (selected.provider === 'codex' || (selected.provider === 'local-agent' && selected.model === 'codex')) await this.selectCLIModel('codex');
+    else if (selected.provider === 'local-agent' && selected.model === 'claude') await this.selectCLIModel('claude');
+    else await this.selectProvider();
+  }
+
+  private async selectCLIModel(agent: 'codex' | 'claude', makePrimary = false): Promise<void> {
+    const config = this.services.configuration;
+    const { cliModelOptions, CLI_REASONING_LEVELS } = await import('../agent/local-agents.js');
+    const current = agent === 'codex' ? config.get('codex') : config.get('claudeCode');
+    const models = cliModelOptions(agent);
+    if (current.defaultModel && !models.some(model => model.id === current.defaultModel)) {
+      models.push({ id: current.defaultModel, label: current.defaultModel, efforts: CLI_REASONING_LEVELS[agent] });
+    }
+    const selected = await this.surface.menu(`${agent === 'codex' ? 'Codex' : 'Claude Code'} model · Vulnora only`,
+      [...models.map(model => `${model.label}${model.id === current.defaultModel ? ' (current)' : ''}`), 'Enter model ID'],
+      () => ['Applies from the next AI request. Running requests continue.', 'Saved only in Vulnora; CLI defaults are unchanged.']);
+    if (selected === undefined) return;
+    const model = selected < models.length ? models[selected].id : (await this.surface.prompt('Model ID:', current.defaultModel))?.trim();
+    if (model === undefined) return;
+    const levels = selected < models.length ? models[selected].efforts : CLI_REASONING_LEVELS[agent];
+    const efforts: (CLIReasoningEffort | undefined)[] = [undefined, ...levels];
+    const effort = await this.surface.menu('Reasoning effort · Vulnora only', efforts.map(value => `${value || 'CLI default'}${value === current.reasoningEffort ? ' (current)' : ''}`));
+    if (effort === undefined) return;
+    config.setCLIModel(agent, model, efforts[effort]);
+    if (makePrimary) {
+      if (agent === 'codex') config.setDefaultProvider('codex');
+      else { config.setDefaultModel('local-agent', 'claude'); config.setDefaultProvider('local-agent'); }
+    }
+    this.services.updateModels?.();
+    if (this.session) this.session.command.llm.updateConfig(this.services.llm());
   }
 
   private async selectLocalModel(makePrimary: boolean): Promise<void> {
@@ -563,7 +616,7 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     }
     const runtime = providers;
     if (!runtime) throw new Error('Provider environment unavailable.');
-    await new InteractiveApp(surface, { configuration, store, open, llm, prepareProviders,
+    await new InteractiveApp(surface, { configuration, store, open, llm, prepareProviders, updateModels: () => runtime.updateSelection(),
       installedModels: signal => runtime.installedModels(signal), installedAgents: () => runtime.installedAgents() }).run();
   } finally {
     try { await providers?.close(); }

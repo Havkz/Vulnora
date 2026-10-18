@@ -9,7 +9,7 @@ import Conf from 'conf';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
+import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel, CLIReasoningEffort } from '../types/index.js';
 import { configDirectory, migrateEnvironment, protectConfigSecrets } from './migration.js';
 import { registerSecret } from '../redact.js';
 
@@ -42,6 +42,7 @@ export interface VulnoraSettings {
   scanningBehavior: 'auto' | 'stealth' | 'aggressive';
   local: { baseUrl: string; defaultModel: string };
   localAgent: { defaultModel: string };
+  claudeCode: { defaultModel: string; reasoningEffort?: CLIReasoningEffort };
 
   // OpenRouter specific
   openrouter: {
@@ -97,6 +98,7 @@ export interface VulnoraSettings {
   codex: {
     command: string;
     defaultModel: string;
+    reasoningEffort?: CLIReasoningEffort;
   };
 
   // General settings
@@ -136,6 +138,7 @@ const DEFAULT_SETTINGS: VulnoraSettings = {
   scanningBehavior: 'auto',
   local: { baseUrl: 'http://127.0.0.1:11434/api', defaultModel: '' },
   localAgent: { defaultModel: 'codex' },
+  claudeCode: { defaultModel: '' },
 
   openrouter: {
     baseUrl: 'https://openrouter.ai/api/v1',
@@ -185,6 +188,7 @@ const DEFAULT_SETTINGS: VulnoraSettings = {
   codex: {
     command: 'codex',
     defaultModel: 'codex-default',
+    reasoningEffort: 'low',
   },
 
   maxTokens: 4096,
@@ -876,6 +880,13 @@ class ConfigManager {
     return {
       provider: actualProvider,
       model: actualModel,
+      ...(actualProvider === 'codex' ? { reasoningEffort: this.config.get('codex').reasoningEffort } : {}),
+      ...(actualProvider === 'local-agent' && actualModel === 'codex' ? {
+        cliModel: this.config.get('codex').defaultModel, reasoningEffort: this.config.get('codex').reasoningEffort,
+      } : {}),
+      ...(actualProvider === 'local-agent' && actualModel === 'claude' ? {
+        cliModel: this.config.get('claudeCode').defaultModel, reasoningEffort: this.config.get('claudeCode').reasoningEffort,
+      } : {}),
       apiKey,
       baseUrl,
       maxTokens: this.config.get('maxTokens'),
@@ -953,6 +964,17 @@ class ConfigManager {
     }
     if (this.config.get('defaultProvider') === provider) changes.defaultModel = model;
     this.config.set(changes);
+  }
+
+  setCLIModel(agent: 'codex' | 'claude', model: string, reasoningEffort?: CLIReasoningEffort): void {
+    if (model && !/^[a-zA-Z0-9][a-zA-Z0-9_.:/[\]-]{0,199}$/.test(model)) throw new Error('Invalid CLI model ID.');
+    if (agent === 'codex' && !model) throw new Error('Select a Codex model or codex-default.');
+    const efforts = agent === 'codex' ? ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] : ['low', 'medium', 'high', 'xhigh', 'max'];
+    if (reasoningEffort !== undefined && !efforts.includes(reasoningEffort)) throw new Error('Invalid reasoning effort for this CLI.');
+    if (agent === 'codex') {
+      this.setDefaultModel('codex', model);
+      this.config.set('codex', { ...this.config.get('codex'), reasoningEffort });
+    } else this.config.set('claudeCode', { defaultModel: model, reasoningEffort });
   }
 
   setLocalEndpoint(baseUrl: string): void {

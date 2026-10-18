@@ -35,6 +35,14 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('lazy local provider initialization', () => {
+  it('updates the selected CLI model and effort without inference, detection, or local loading', () => {
+    const primary: LLMConfig = { provider: 'codex', model: 'old', reasoningEffort: 'low' };
+    const { runtime } = fixture(primary);
+    primary.model = 'next'; primary.reasoningEffort = 'high'; runtime.updateSelection();
+    expect(runtime.getConfig()).toMatchObject({ provider: 'codex', model: 'next', reasoningEffort: 'high',
+      fallbackChain: [{ provider: 'local', model: 'installed:7b' }, { provider: 'deterministic' }] });
+    expect(probe).not.toHaveBeenCalled(); expect(detection).not.toHaveBeenCalled(); expect(held).toHaveLength(0);
+  });
   it('tests only the selected local fallback even when primary Codex is unavailable', async () => {
     const { runtime } = fixture();
     probe.mockImplementation(async config => { if (config.provider !== 'local') throw new Error('Codex usage limit'); return 'VULNORA_READY'; });

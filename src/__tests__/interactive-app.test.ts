@@ -262,19 +262,50 @@ describe('durable interactive project flow', () => {
     const { config } = await import('../config/index.js');
     f.services.configuration = config;
     f.services.installedAgents = async () => ['codex'];
-    const prepare = vi.fn(async () => {
-      expect(config.getLLMConfig()).toMatchObject({ provider: 'local-agent', model: 'codex' });
-      return 'Installed Codex CLI ready';
-    });
+    const prepare = vi.fn(async () => 'Installed Codex CLI ready');
+    const update = vi.fn(); f.services.updateModels = update;
     f.services.prepareProviders = prepare;
     const result = f.start();
     f.input.write('\x1b[B\x1b[B\r'); await f.wait('Change Default Model / Provider');
     f.input.write('\x1b[B\r'); await f.wait('Installed Codex / Claude CLI');
-    f.input.write('\x1b[B\r'); await f.wait('Default model');
-    f.input.write('\r'); await f.wait('Installed Codex CLI ready');
-    expect(prepare).toHaveBeenCalledTimes(1);
+    f.input.write('\x1b[B\r'); await f.wait('Agent CLI');
+    f.input.write('\r'); await f.wait('Codex model · Vulnora only');
+    f.input.write('\r'); await f.wait('Reasoning effort · Vulnora only'); f.input.write('\r');
+    await expect.poll(() => update.mock.calls.length).toBe(1);
+    expect(config.getLLMConfig()).toMatchObject({ provider: 'codex', model: 'codex-default' });
+    expect(prepare).not.toHaveBeenCalled();
     expect(stripVTControlCharacters(f.transcript())).not.toContain('Environment override');
     expect(process.env.VULNORA_DEFAULT_PROVIDER).toBe('codex');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+  it.each([['codex', '\x1b[109;5u'], ['claude', '\x1b[109;5u'], ['codex', '\r']] as const)('switches the live %s model through Ctrl+M without pausing or probing', async (agent, shortcut) => {
+    const f = await fixture(); const directory = await mkdtemp(join(tmpdir(), 'vulnora-live-model-')); directories.push(directory);
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory); vi.stubEnv('VULNORA_CODEX_MODELS_CACHE', join(directory, 'no-cache'));
+    vi.resetModules(); const { config } = await import('../config/index.js');
+    config.setCLIModel(agent, 'old-model', 'low');
+    if (agent === 'codex') config.setDefaultProvider('codex');
+    else { config.setDefaultModel('local-agent', 'claude'); config.setDefaultProvider('local-agent'); }
+    f.services.configuration = config; f.services.llm = () => config.getLLMConfig();
+    const update = vi.fn(); f.services.updateModels = update;
+    const prepare = vi.fn(async () => 'No probe'); f.services.prepareProviders = prepare;
+    const screens = vi.spyOn(f.surface, 'show'); const result = f.start();
+    f.input.write('\rModel fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
+    const session = f.session(); if (!session) throw new Error('Missing session');
+    const pause = vi.spyOn(session, 'pause');
+    f.input.write(shortcut); await f.wait('model · Vulnora only'); expect(session.command.isRunning()).toBe(true);
+    f.input.write('\x1b[A\r'); await f.wait('Model ID:'); f.input.write('\x15new-model\r');
+    await f.wait('Reasoning effort · Vulnora only'); f.input.write('\x1b[B\x1b[B\x1b[B\r');
+    await expect.poll(() => update.mock.calls.length).toBe(1);
+    expect(session.command.isRunning()).toBe(true); expect(pause).not.toHaveBeenCalled(); expect(prepare).not.toHaveBeenCalled();
+    expect(config.getLLMConfig()).toMatchObject(agent === 'codex'
+      ? { provider: 'codex', model: 'new-model', reasoningEffort: 'high' }
+      : { provider: 'local-agent', model: 'claude', cliModel: 'new-model', reasoningEffort: 'high' });
+    expect(session.command.llm.getActiveProvider().model).toBe('new-model');
+    await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('Ctrl+M Model');
+    f.input.write(shortcut); await f.wait('new-model (current)'); f.input.write('\x1b');
+    await expect.poll(() => screens.mock.calls.at(-1)?.[0]().footer).toContain('Esc Menu');
+    expect(update).toHaveBeenCalledOnce();
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
   it.each([[24, 12], [16, 8]])('keeps READY and completion visible at %s × %s with a long original target and preserves all scrollable metadata', async (columns, rows) => {

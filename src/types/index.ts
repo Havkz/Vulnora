@@ -9,6 +9,7 @@ import type { AgentCheckpoint } from '../agent/checkpoint.js';
 // =============================================================================
 
 export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'codex' | 'mock' | 'local' | 'local-agent' | 'deterministic';
+export type CLIReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface LLMConfig {
   provider: LLMProvider;
@@ -18,6 +19,9 @@ export interface LLMConfig {
   maxTokens?: number;
   temperature?: number;
   timeout?: number;
+  /** In local-agent mode, model identifies the CLI; cliModel identifies its inference model. */
+  cliModel?: string;
+  reasoningEffort?: CLIReasoningEffort;
   /**
    * Ordered model/provider ladder to fall back to when the PRIMARY model fails for
    * ANY reason it can't self-recover from — hard errors after same-model retries
@@ -39,6 +43,8 @@ export interface FallbackEntry {
   model: string;
   apiKey?: string;
   baseUrl?: string;
+  cliModel?: string;
+  reasoningEffort?: CLIReasoningEffort;
 }
 
 export interface LLMMessage {

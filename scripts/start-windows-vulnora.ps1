@@ -22,6 +22,10 @@ if ($codex) {
         $hostCommand = '/mnt/' + $Matches[1].ToLowerInvariant() + '/' + $codexPath.Substring(3).Replace('\', '/')
         $providerEnvironment += "VULNORA_CODEX_HOST_COMMAND=$hostCommand"
         $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE '.codex' }
+        $modelCache = Join-Path $codexHome 'models_cache.json'
+        if ((Test-Path -LiteralPath $modelCache) -and $modelCache -match '^([A-Za-z]):\\') {
+            $providerEnvironment += 'VULNORA_CODEX_MODELS_CACHE=/mnt/' + $Matches[1].ToLowerInvariant() + '/' + $modelCache.Substring(3).Replace('\', '/')
+        }
         $publicConfig = Join-Path $codexHome 'config.toml'
         if (Test-Path -LiteralPath $publicConfig) {
             foreach ($line in [IO.File]::ReadLines($publicConfig)) {
