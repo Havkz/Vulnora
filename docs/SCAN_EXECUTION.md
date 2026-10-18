@@ -20,6 +20,18 @@ scheduler. This does not apply to failed checks or distinct new observations.
 Nmap port discovery and service detection are separate: service detection is
 restricted to observed-open ports, and changing timing does not expand coverage.
 
+Domain scope includes its subdomains; resolving that domain does not authorize raw
+IP targets or redirects to them. A website hostname assessment checks HTTP/TLS
+first and limits supporting Nmap checks to its web ports. Evidenced CDN/proxy
+frontends make origin port scanning inapplicable; origin IPs require explicit
+scope. HTTP proxy detection uses HTTP headers or technology evidence, rather than
+DNS nameserver/registrar strings. Cloudflare documents that its [proxied addresses
+are shared infrastructure](https://developers.cloudflare.com/fundamentals/concepts/cloudflare-ip-addresses/).
+
+A negative Nuclei result does not replace targeted website validation. Impact
+validation requires a confirmed candidate and authorization; if those prerequisites
+are absent, its result remains explicitly inapplicable or blocked, never executed.
+
 ## Basis
 
 - [Nuclei execution options](https://docs.projectdiscovery.io/opensource/nuclei/running) separate request timeouts, request retries, statistics and scan rate limits.

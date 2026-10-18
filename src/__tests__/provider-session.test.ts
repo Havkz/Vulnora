@@ -35,6 +35,14 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 describe('lazy local provider initialization', () => {
+  it('tests only the selected local fallback even when primary Codex is unavailable', async () => {
+    const { runtime } = fixture();
+    probe.mockImplementation(async config => { if (config.provider !== 'local') throw new Error('Codex usage limit'); return 'VULNORA_READY'; });
+    expect(await runtime.prepare(undefined, undefined, 'local')).toContain('Local installed:7b: inference ready');
+    expect(probe).toHaveBeenCalledOnce(); expect(probe.mock.calls[0][0]).toMatchObject({ provider: 'local', fallbackChain: [] });
+    expect(detection).not.toHaveBeenCalled(); expect(runtime.getConfig().provider).toBe('codex');
+    expect(runtime.readiness?.local.ready).toBe(true); expect(held[0].retain).toHaveBeenCalledOnce(); await runtime.close();
+  });
   it('validates only the primary with no local discovery, loading or inference at startup', async () => {
     const { runtime } = fixture(); const steps: ProviderProgress[] = [];
     expect(await runtime.prepare(step => steps.push(step))).toContain('loaded on first use');

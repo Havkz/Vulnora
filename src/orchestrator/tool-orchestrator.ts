@@ -317,7 +317,7 @@ export function errorType(result: ToolResult): ToolErrorType | undefined {
   const text = `${result.error || ''} ${result.output || ''}`;
   if (result.success) {
     if (!String(result.output || '').trim() && !(result.findings?.length)) return 'empty_result';
-    if (!(result.findings?.length) && /(?:no (?:records|findings|vulnerabilities|open ports|interesting paths)|0 open|not found|missing)/i.test(String(result.output || ''))) return 'valid_negative_result';
+    if (!(result.findings?.length) && /(?:no (?:records|findings|vulnerabilities|open ports|interesting paths|API endpoints)|0 open|not found|missing)/i.test(String(result.output || ''))) return 'valid_negative_result';
     return undefined;
   }
   if (/budget exceeded/i.test(text)) return 'budget_exceeded';
@@ -346,15 +346,29 @@ function responseFingerprint(status?: number, headers?: Record<string, string>, 
   return hash(JSON.stringify(stable({ status, headers: selectedHeaders, bodyHash: body === undefined ? undefined : hash(body) })));
 }
 
-function edgeFrom(headers: Record<string, string> = {}, output = ''): { edge: boolean; provider?: string; challenge: boolean } {
-  const text = `${JSON.stringify(headers)} ${output}`.toLowerCase();
+function edgeFrom(headers: Record<string, string> = {}, output = '', technology = false): { edge: boolean; provider?: string; challenge: boolean } {
+  const signalLines = output.split('\n').filter(line => /^(?:server|cf-ray|x-amz-cf-|x-cache|via|set-cookie)[:\s]/i.test(line.trim())
+    || (technology && /^(?:cloudflare|cloudfront|akamai|fastly|sucuri|imperva)(?:\s|$)/i.test(line.trim())));
+  const text = `${JSON.stringify(headers)} ${signalLines.join('\n')}`.toLowerCase();
   const providers: Array<[RegExp, string]> = [
     [/cloudflare|cf-ray|__cf_bm/, 'Cloudflare'], [/ddos-guard|__ddg/, 'DDoS-Guard'],
     [/cloudfront|x-amz-cf/, 'CloudFront'], [/akamai/, 'Akamai'], [/sucuri/, 'Sucuri'],
     [/fastly/, 'Fastly'], [/imperva|incapsula/, 'Imperva'], [/openresty|reverse proxy/, 'Reverse proxy'],
   ];
   const provider = providers.find(([pattern]) => pattern.test(text))?.[1];
-  return { edge: !!provider, provider, challenge: /captcha|challenge-platform|checking your browser|access denied|request blocked/.test(text) };
+  return { edge: !!provider, provider, challenge: /captcha|challenge-platform|checking your browser|access denied|request blocked/i.test(`${JSON.stringify(headers)} ${output}`) };
+}
+
+/** DNS hosting and registrar names do not establish an HTTP proxy. */
+export function websiteEdgeProvider(target: string, records: EvidenceRecord[]): string | undefined {
+  const host = targetKey(target);
+  for (const record of [...records].reverse()) {
+    if (!['http_fetch', 'http_analysis'].includes(record.toolCategory) && !/^(?:technology_detect|whatweb_tool)$/.test(record.toolName)) continue;
+    if (targetKey(record.target) !== host || record.status !== 'success') continue;
+    const provider = edgeFrom(record.responseHeaders, record.rawOutput, /^(?:technology_detect|whatweb_tool)$/.test(record.toolName)).provider;
+    if (provider) return provider;
+  }
+  return undefined;
 }
 
 export class ToolOrchestrator {
@@ -440,7 +454,10 @@ export class ToolOrchestrator {
     Object.assign(this.metrics, saved.metrics);
     this.budgets.clear(); this.network.clear(); this.wildcardDns.clear(); this.lastHostRequest.clear();
     for (const [key, value] of saved.budgets) this.budgets.set(key, value);
-    for (const [key, value] of saved.network) this.network.set(key, value);
+    for (const [key, value] of saved.network) {
+      const provider = websiteEdgeProvider(key, this.records);
+      this.network.set(key, { ...value, edgeSurface: !!provider, edgeProvider: provider });
+    }
     for (const [key, value] of saved.wildcardDns) this.wildcardDns.set(key, value);
     for (const [key, value] of saved.lastHostRequest) this.lastHostRequest.set(key, value);
   }
@@ -924,7 +941,8 @@ export class ToolOrchestrator {
     budgetCostSource: EvidenceRecord['budgetCostSource'] = 'orchestrator_estimated'
   ): EvidenceRecord {
     const http = parseHttp(result); const fingerprint = responseFingerprint(http.status, http.headers, http.body);
-    const edge = edgeFrom(http.headers, `${result.output || ''} ${http.body || ''}`);
+    const web = ['http_fetch', 'http_analysis'].includes(call.toolCategory) || /^(?:technology_detect|whatweb_tool)$/.test(call.toolName);
+    const edge = edgeFrom(web ? http.headers : {}, web ? `${result.output || ''} ${http.body || ''}` : '', /^(?:technology_detect|whatweb_tool)$/.test(call.toolName));
     const network = this.networkState(call.host);
     const classified = forcedError || errorType(result);
     const id = `evidence-${this.records.length + 1}`;
@@ -979,7 +997,8 @@ export class ToolOrchestrator {
   private updateNetwork(record: EvidenceRecord, latencyMs: number, raw: ToolResult, call: NormalizedToolCall): void {
     const http = parseHttp(raw);
     const state = this.networkState(call.host); const now = Date.now();
-    const edge = edgeFrom(http.headers, `${raw.output || ''} ${http.body || ''}`);
+    const web = ['http_fetch', 'http_analysis'].includes(call.toolCategory) || /^(?:technology_detect|whatweb_tool)$/.test(call.toolName);
+    const edge = edgeFrom(web ? http.headers : {}, web ? `${raw.output || ''} ${http.body || ''}` : '', /^(?:technology_detect|whatweb_tool)$/.test(call.toolName));
     if (edge.edge) { state.edgeSurface = true; state.edgeProvider = edge.provider; if (state.blockState === 'clear') state.blockState = 'defensive'; }
     state.latencyMs = state.latencyMs === undefined ? latencyMs : Math.round(state.latencyMs * 0.7 + latencyMs * 0.3);
     const priorRouteSuccess = state.recent.some(item => item.path === call.path && item.type === 'success');

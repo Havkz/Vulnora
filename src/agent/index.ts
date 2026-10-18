@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { isContextCompactionNotice, LLMUnavailableError, type LLMBackbone } from '../llm/index.js';
 import { KillChainPhase } from '../types/index.js';
 import { hostFromTargetValue, type Arsenal } from '../arsenal/index.js';
-import { errorType, normalizeToolCall, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
+import { errorType, normalizeToolCall, websiteEdgeProvider, type EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 import { canReplayInterruptedCall, checkpointContract, CheckpointRestoreError, CheckpointWriteError, restoreAgentCheckpoint, ToolRecoveryRequiredError, UnsafeResumeError, type AgentCheckpoint } from './checkpoint.js';
 import {
   buildMissionPrompt,
@@ -374,7 +374,9 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       try {
         // Ask the LLM what to do next
         refreshEvidence();
+        const edgeProvider = target && ['web_application', 'api'].includes(target.type) ? websiteEdgeProvider(target.address, this.arsenal.getOrchestrator().getEvidence()) : undefined;
         const callableToolDefs = toolDefs.filter(definition => {
+          if (edgeProvider && /^(?:nmap_scan|nmap_tool|port_scan|naabu_tool)$/.test(definition.name)) return false;
           const limit = maxToolCallsPerTask(definition.name);
           return limit === undefined || (toolCallCounts.get(definition.name) || 0) < limit;
         });

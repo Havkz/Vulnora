@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { DEFAULT_WEB_WORDLIST } from '../arsenal/catalog.js';
 import type { EvidenceRecord, NetworkContext, TargetBudgets } from './tool-orchestrator.js';
+import { websiteEdgeProvider } from './tool-orchestrator.js';
 
 export type CoverageCapability =
   | 'dns_enumeration' | 'http_probe' | 'tls_analysis' | 'header_analysis'
@@ -61,7 +62,7 @@ function belongs(record: EvidenceRecord, capability: CoverageCapability): boolea
   if (capability === 'vulnerability_scanning') return /^(?:nuclei_scan|nuclei_tool|nikto_tool)$/.test(name);
   if (capability === 'targeted_validation') return /(?:sqli|xss|ssti|lfi|redirect|cors|http_methods)/.test(name);
   if (capability === 'authentication_testing') return /(?:auth|login|jwt|password_spray)/.test(`${name} ${record.target}`);
-  if (capability === 'input_surface') return /(?:sqli|xss|ssti|lfi|api_endpoint|ffuf)/.test(name);
+  if (capability === 'input_surface') return /(?:sqli|xss|ssti|lfi)/.test(name);
   return record.toolCategory === 'reporting';
 }
 
@@ -101,11 +102,10 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
       if (entries[capability].status === 'not_started') entries[capability] = { ...entries[capability], status: 'not_applicable', reason: 'No reachable HTTP surface.' };
     }
   }
-  if (entries.vulnerability_scanning.status === 'completed_negative' && entries.targeted_validation.status === 'not_started') {
-    entries.targeted_validation = { ...entries.targeted_validation, status: 'not_applicable', reason: 'No candidate finding requiring targeted validation.' };
-  }
-  const discoveryClosedWithoutSurface = ['completed_negative', 'failed_terminal', 'not_applicable'].includes(entries.content_discovery.status)
-    && ['completed_negative', 'failed_terminal', 'not_applicable'].includes(entries.api_discovery.status);
+  const observedInput = hostRecords.some(record => /<form\b|<input\b|<textarea\b/i.test(String(record.result?.metadata?.responseBody || ''))
+    || /[?]|\/(?:login|auth|signin|sign-in)(?:\/|$)/i.test(record.target) || record.responseStatus === 401 || record.responseStatus === 403);
+  const discoveryClosedWithoutSurface = entries.content_discovery.status === 'completed_negative'
+    && entries.api_discovery.status === 'completed_negative' && !observedInput;
   if (discoveryClosedWithoutSurface) {
     if (entries.authentication_testing.status === 'not_started') entries.authentication_testing = { ...entries.authentication_testing, status: 'not_applicable', reason: 'No authentication surface identified.' };
     if (entries.input_surface.status === 'not_started') entries.input_surface = { ...entries.input_surface, status: 'not_applicable', reason: 'No testable input surface identified.' };
@@ -113,6 +113,13 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
   // A successful HTTP/TLS observation is sufficient to seed the corresponding web port.
   if (entries.port_discovery.status === 'not_started' && (httpAvailable || ['completed', 'completed_negative'].includes(entries.tls_analysis.status))) {
     entries.port_discovery = { ...entries.port_discovery, status: 'completed', reason: 'Known web port inferred from successful HTTP/TLS evidence.' };
+  }
+  const edge = !isIP(host.replace(/^\[|\]$/g, '')) && websiteEdgeProvider(target, hostRecords);
+  if (edge) {
+    for (const capability of ['port_discovery', 'service_detection'] as const) {
+      entries[capability] = { ...entries[capability], status: 'not_applicable',
+        reason: `${edge} fronts the website; origin network scanning requires explicitly authorized origin infrastructure.` };
+    }
   }
   const incomplete = CAPABILITIES.filter(capability => !['completed', 'completed_negative', 'failed_terminal', 'not_applicable'].includes(entries[capability].status));
   const retryable = incomplete.filter(capability => ['not_started', 'failed_retryable', 'incomplete'].includes(entries[capability].status));

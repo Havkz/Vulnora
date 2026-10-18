@@ -9,6 +9,31 @@ function plan(target: string, tool: string) {
 }
 
 describe('coverage recovery target handling', () => {
+  it('does not declare input/authentication testing unnecessary when discovery failed or a login form exists', () => {
+    const target = 'https://fixture.test';
+    const records = ['dir_bruteforce', 'api_endpoint_discovery'].map(toolName => ({ target, toolName, toolCategory: 'content_discovery',
+      executionStatus: 'blocked', errorType: 'budget_exceeded', resultType: 'error' } as EvidenceRecord));
+    const blocked = evaluateCoverage(target, records);
+    expect(blocked.entries.authentication_testing.status).toBe('not_started'); expect(blocked.entries.input_surface.status).toBe('not_started');
+    const negative = records.map(record => ({ ...record, executionStatus: 'executed' as const, resultType: 'negative' as const }));
+    const form = { target, toolName: 'http_request', toolCategory: 'http_fetch', executionStatus: 'executed', resultType: 'inconclusive', result: { metadata: { responseBody: '<form><input name="user"></form>' } } } as unknown as EvidenceRecord;
+    expect(evaluateCoverage(target, [...negative, form]).entries.authentication_testing.status).toBe('not_started');
+    expect(evaluateCoverage(target, negative).entries.authentication_testing.status).toBe('not_applicable');
+  });
+  it('does not skip targeted website validation merely because Nuclei returned no findings', () => {
+    const target = 'https://fixture.test';
+    const record = { target, toolName: 'nuclei_scan', toolCategory: 'active_validation', executionStatus: 'executed', resultType: 'negative' } as EvidenceRecord;
+    const snapshot = evaluateCoverage(target, [record]);
+    expect(snapshot.entries.targeted_validation.status).toBe('not_started');
+    expect(planCoverageRecovery({ snapshot, records: [record], availableTools: new Set(['http_methods_test']), attempts: {}, network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 }, budget: { remaining: { tool_call_budget: 10, total_request_budget: 100 } as TargetBudgets }, includeValidation: true })?.toolName).toBe('http_methods_test');
+  });
+  it('excludes origin port scanning from CDN website coverage while preserving HTTP/API work', () => {
+    const target = 'https://fixture.test';
+    const record = { target, status: 'success', toolName: 'http_request', toolCategory: 'http_fetch', executionStatus: 'executed', resultType: 'inconclusive', responseHeaders: { server: 'cloudflare' }, rawOutput: 'HTTP/2 200' } as unknown as EvidenceRecord;
+    const snapshot = evaluateCoverage(target, [record]);
+    expect(snapshot.entries.port_discovery.status).toBe('not_applicable'); expect(snapshot.entries.service_detection.status).toBe('not_applicable');
+    expect(snapshot.retryable).toContain('api_discovery');
+  });
   it('covers bounded API discovery before admitting the larger content wordlist', () => {
     const target = 'http://fixture.test:8081/base';
     const snapshot = evaluateCoverage(target, []); snapshot.retryable = ['api_discovery', 'content_discovery'];

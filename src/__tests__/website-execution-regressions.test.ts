@@ -20,6 +20,18 @@ afterEach(async () => {
 });
 
 describe('website execution repairs', () => {
+  it('rejects redirects to a raw IP unless that IP was explicitly scoped', async () => {
+    const paths: string[] = [];
+    const server = createServer((request, response) => {
+      paths.push(request.url || '');
+      response.writeHead(302, { Location: `http://127.0.0.1:${(server.address() as { port: number }).port}/outside` }); response.end();
+    }); servers.push(server);
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'http_request'));
+    arsenal.setScope({ allowedHosts: ['localhost'], allowPrivate: false, allowLoopback: false });
+    const result = await arsenal.execute('http_request', { parameters: { url: `http://localhost:${(server.address() as { port: number }).port}/` } });
+    expect(result.success).toBe(false); expect(result.error).toContain('SCOPE DENIED'); expect(paths).toEqual(['/']);
+  });
   it('does not report dangerous methods from 404s or send state-changing method probes', async () => {
     const methods: string[] = [];
     const server = createServer((request, response) => {

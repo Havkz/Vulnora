@@ -20,7 +20,7 @@ export interface InteractiveServices {
   llm: () => LLMConfig;
   installedModels: (signal?: AbortSignal) => Promise<string[]>;
   installedAgents?: () => Promise<string[]>;
-  prepareProviders: (signal?: AbortSignal) => Promise<string>;
+  prepareProviders: (signal?: AbortSignal, check?: 'primary' | 'local') => Promise<string>;
 }
 
 /** Screens share the real durable project/session services and one input owner. */
@@ -318,11 +318,11 @@ export class InteractiveApp {
         ...wrapped.slice(offset, offset + room).map(line => line.text), ...status, ...(dense ? [] : ['']), ...bottom]),
       footer: blocked ? this.surface.columns < 40 ? 'Enter Info Esc Back' : this.surface.columns < 60 ? 'Enter Details Esc Back ^X Quit' : 'Enter Recovery details    Esc Main menu    Ctrl+X Save & Quit'
         : this.surface.columns < 60 ? `Esc Menu ^P ${paused ? 'Resume' : 'Pause'} ^Y AI ^T ${this.transcript ? 'Brief' : 'Full'} ^X Quit`
-        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+Y AI history  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  Ctrl+X Quit  PgUp/PgDn Logs` };
+        : `Esc Menu  Ctrl+P ${paused ? 'Resume' : 'Pause'}  Ctrl+Y Latest AI  Ctrl+T ${this.transcript ? 'Brief' : 'Full output'}  Ctrl+X Quit  PgUp/PgDn Logs` };
     };
     let historySize = -1; let aiText = '';
     const showAIHistory = async () => {
-      await this.document('AI history · Questions & Answers', () => {
+      await this.document('Latest AI exchange · Question & Answer', () => {
         if (historySize !== logs.length) { historySize = logs.length; aiText = formatAIHistory(logs); }
         return aiText;
       }, 'Ctrl+Y / Esc Back    Ctrl+P Pause / Resume    ↑/↓ Scroll    End Latest    Ctrl+X Quit', false, async key => {
@@ -467,14 +467,14 @@ export class InteractiveApp {
       if (!model?.trim()) return;
       config.setDefaultModel('local', model.trim());
       if (makePrimary) config.setDefaultProvider('local');
-      await this.refreshProviders(); return;
+      await this.refreshProviders('local'); return;
     }
   }
 
-  private async refreshProviders(): Promise<void> {
+  private async refreshProviders(check: 'primary' | 'local' = 'primary'): Promise<void> {
     try {
       this.surface.show(() => ({ lines: this.surface.panel([`${this.surface.spinner} Checking selected provider…`]), footer: 'S Skip provider checks    Ctrl+X Save & Quit' }));
-      const description = await this.surface.skippable(signal => this.services.prepareProviders(signal));
+      const description = await this.surface.skippable(signal => this.services.prepareProviders(signal, check));
       await this.notice('Provider availability', description || 'Checks skipped; the selected provider will be tried on first use.');
     }
     finally { if (this.session) this.session.command.llm.updateConfig(this.services.llm()); }
@@ -497,9 +497,9 @@ export async function runInteractive(surface = new TerminalSurface()): Promise<v
     if (!providers) throw new Error('Provider environment unavailable.');
     return providers.getConfig();
   };
-  const prepareProviders = async (signal?: AbortSignal): Promise<string> => {
+  const prepareProviders = async (signal?: AbortSignal, check: 'primary' | 'local' = 'primary'): Promise<string> => {
     if (!providers) throw new Error('Provider environment unavailable.');
-    return providers.prepare(undefined, signal);
+    return providers.prepare(undefined, signal, check);
   };
   try {
     const rows = await initializeTerminal(surface, [

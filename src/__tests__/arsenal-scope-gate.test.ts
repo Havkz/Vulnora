@@ -4,7 +4,8 @@
  * scope BEFORE the handler runs, so an LLM-supplied target can never reach an off-target host.
  * Pins: scopeViolation host math, and that execute() denies out-of-scope without invoking the handler.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { promises as dns } from 'node:dns';
 import { Arsenal, scopeViolation, hostFromTargetValue, type ArsenalScope } from '../arsenal/index.js';
 import type { CustomTool, ToolContext } from '../types/index.js';
 
@@ -13,6 +14,19 @@ const ctx = (parameters: Record<string, unknown>, target?: string): ToolContext 
   ({ parameters, ...(target ? { target: { id: 't', name: 't', type: 'web_application', address: target } as never } : {}) });
 
 describe('egress scope gate', () => {
+  it('does not promote DNS addresses to scope, but permits explicitly authorized IPs', async () => {
+    const resolution = vi.spyOn(dns, 'resolve4').mockResolvedValue(['203.0.113.42']);
+    const handler = vi.fn(async () => ({ success: true, output: 'Scoped fixture' }));
+    const arsenal = new Arsenal(); arsenal.register({ name: 'scope_fixture', description: 'Fixture', category: 'web', parameters: [], handler });
+    try {
+      arsenal.setScope({ allowedHosts: ['fixture.test'], allowLoopback: false, allowPrivate: false });
+      expect((await arsenal.execute('scope_fixture', ctx({ target: '203.0.113.42' }))).success).toBe(false);
+      expect(handler).not.toHaveBeenCalled(); expect(resolution).not.toHaveBeenCalled();
+      arsenal.setScope({ allowedHosts: ['fixture.test', '203.0.113.42'], allowLoopback: false, allowPrivate: false });
+      expect((await arsenal.execute('scope_fixture', ctx({ target: '203.0.113.42' }))).success).toBe(true);
+      expect(handler).toHaveBeenCalledOnce();
+    } finally { resolution.mockRestore(); }
+  });
   it('extracts a bare host from urls / user@host:port / brackets', () => {
     expect(hostFromTargetValue('https://EVIL.com/admin?x=1')).toBe('evil.com');
     expect(hostFromTargetValue('root@10.0.0.5:22')).toBe('10.0.0.5');

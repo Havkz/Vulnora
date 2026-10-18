@@ -93,7 +93,8 @@ describe('durable interactive project flow', () => {
     await f.wait('Model ID:'); f.input.write('my-served-model\r'); await f.wait('Manual local fallback saved');
     expect(config.getLLMConfig().provider).toBe('codex');
     expect(config.getLLMConfig('local')).toMatchObject({ model: 'my-served-model', baseUrl: 'http://127.0.0.1:1234/v1' });
-    expect(prepare).toHaveBeenCalledOnce(); f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect(prepare).toHaveBeenCalledOnce(); expect(prepare).toHaveBeenCalledWith(expect.any(AbortSignal), 'local');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
 
   it.each([[80, 30], [24, 12], [16, 8]])('shows paused recovery at %s × %s and opens details without replaying a write', async (columns, rows) => {
@@ -206,7 +207,7 @@ describe('durable interactive project flow', () => {
     session.command.llm.emit('request:trace', { requestId: 'one', stage: 'response', provider: 'mock', model: 'fixture', response: { content: 'BECAUSE_EVIDENCE', model: 'fixture' } });
     await expect.poll(view).toContain('BECAUSE_EVIDENCE');
     f.input.write('\x10'); await expect.poll(() => session.project.status).toBe('paused');
-    expect(view()).toContain('Questions & Answers');
+    expect(view()).toContain('Question & Answer');
     f.input.write('\x19'); await expect.poll(view).toContain('Stage: Recon');
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
     const logs = (await f.store.readLogs(session.project.id)).events as { category: string; data: { requestId?: string } }[];

@@ -6,6 +6,7 @@
 
 import { EventEmitter } from 'eventemitter3';
 import { randomUUID } from 'crypto';
+import { isIP } from 'node:net';
 import {
   KillChainPhase,
   type Mission,
@@ -579,6 +580,9 @@ export class MissionControl extends EventEmitter<MissionEvents> {
 
 export function createReconTasks(missionId: string, targetAddress: string): Task[] {
   const tasks: Task[] = [];
+  const address = isIP(targetAddress) === 6 ? `[${targetAddress}]` : targetAddress;
+  const hostname = new URL(/^https?:\/\//i.test(address) ? address : `https://${address}`).hostname.replace(/^\[|\]$/g, '');
+  const website = !isIP(hostname);
 
   tasks.push({
     id: randomUUID(),
@@ -597,7 +601,9 @@ export function createReconTasks(missionId: string, targetAddress: string): Task
     id: randomUUID(),
     missionId,
     name: 'Port Scanning & Service Detection',
-    description: `Scan ${targetAddress} for open ports and detect running services with version information. Start with top 1000 ports, then expand if significant results are found. Identify the full attack surface.`,
+    description: website
+      ? `Assess web-service exposure for ${targetAddress} using the HTTP/TLS observations first. If a CDN or shared reverse proxy is evidenced, report network scanning as not applicable and focus on the website and API. Otherwise scan only the configured website ports when existing evidence leaves a specific service question. Do not scan resolved IPs or unrelated services; origin infrastructure requires explicit scope.`
+      : `Scan the explicitly authorized host ${targetAddress} for open ports and service versions. Start with top 1000 ports and use findings to select distinct follow-up checks.`,
     phase: KillChainPhase.RECON,
     operatorType: 'recon',
     status: 'pending',
@@ -631,6 +637,12 @@ export function createReconTasks(missionId: string, targetAddress: string): Task
     dependencies: [],
     createdAt: Date.now(),
   });
+
+  if (website) {
+    const web = tasks.find(task => task.name === 'Web Probing & Technology Fingerprinting');
+    const ports = tasks.find(task => task.name === 'Port Scanning & Service Detection');
+    if (web && ports) { ports.dependencies = [web.id]; ports.priority = 6; }
+  }
 
   return tasks;
 }

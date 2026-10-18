@@ -44,7 +44,9 @@ Saved provider/model choices remain effective. Codex/Claude reuse authentication
 through documented CLI invocation; their credential files are never copied or edited.
 Startup checks the primary provider; local inference is deferred until needed. `S`
 skips a provider check or model discovery. The session holds a local model after its
-first use until graceful exit and unloads it afterwards. It stops only an Ollama
+first use until graceful exit and unloads it afterwards. Selecting a local model in
+Settings validates only that model, with no primary CLI test or fallback chain.
+The selected primary remains first for assessment requests. It stops only an Ollama
 service it started itself. Existing services and unrelated models remain available.
 
 Linux legacy application data is migrated first; Windows Vulnora data fills missing
@@ -62,8 +64,9 @@ advertising new scan tools. Uniform catch-all responses do not count as discover
 
 This is a separate Linux execution environment, not a hardened hostile-code sandbox.
 The live header shows the website assessment stages as a colored path; brackets mark
-the current stage. `Ctrl+Y` opens the live AI question/answer history without pausing
-the scan; `Ctrl+P` pauses or resumes from either view. Questions, supplied schemas,
+the current stage. `Ctrl+Y` shows only the latest question and its matching answer
+in compact form, without replaying prior messages or function schemas. The scan
+continues; `Ctrl+P` pauses or resumes from either view. Questions, supplied schemas,
 responses and errors are paired by request ID in the local project journal with
 credential redaction. Older journals retain responses but cannot reconstruct unsaved
 questions. `Ctrl+T` expands command output; wrapped output retains its indentation.

@@ -102,7 +102,7 @@ export class ProviderSession {
     backbone.on('request:fallback', event => { if (event.toProvider === 'local') retain(); });
   }
 
-  async prepare(report?: ProgressReporter, checkSignal = this.signal): Promise<string> {
+  async prepare(report?: ProgressReporter, checkSignal = this.signal, check: 'primary' | 'local' = 'primary'): Promise<string> {
     this.signal.throwIfAborted();
     const primary = { ...this.configuration.getLLMConfig(), fallbackChain: [] };
     const chosen = this.configuration.getLLMConfig('local');
@@ -122,6 +122,13 @@ export class ProviderSession {
     };
     this.readiness = state;
     const detail = (error: unknown) => String(redactSecrets(error instanceof Error ? error.message : String(error)));
+    if (check === 'local') {
+      if (!local) throw new Error('Select or manually add a local model in Settings.');
+      this.localSession?.retain();
+      await validateProvider(local, AbortSignal.any([this.signal, checkSignal]), undefined, report);
+      state.local = { ready: true, model: local.model, detail: 'inference ready' };
+      return `Local ${local.model}: inference ready. Primary ${primary.provider}/${primary.model} remains selected; it was not tested.`;
+    }
     if (primary.provider === 'local') {
       if (!primary.model?.trim()) throw new Error('Select or manually add a local model in Settings.');
       report?.({ label: 'Local inference deferred until first use', status: 'skipped' });

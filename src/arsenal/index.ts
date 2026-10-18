@@ -20,7 +20,7 @@ import * as tls from 'tls';
 import * as http from 'http';
 import * as https from 'https';
 import { ApprovalController, isGatedRisk, type ApprovalRequest } from './approval.js';
-import { ToolOrchestrator, TOOL_BINARIES, normalizeToolCall, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
+import { ToolOrchestrator, TOOL_BINARIES, normalizeToolCall, websiteEdgeProvider, type OrchestratorEvent } from '../orchestrator/tool-orchestrator.js';
 
 import type {
   CustomTool,
@@ -277,7 +277,7 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
   for (let redirects = 0; redirects <= 20; redirects++) {
     signal?.throwIfAborted();
     const denied = scopeViolation(context?.scope || null, { parameters: { url: currentUrl.href } });
-    if (denied && !await isResolvedAddressOfAllowedHost(context?.scope || null, denied)) {
+    if (denied) {
       throw new Error(`SCOPE DENIED: redirect target '${denied}' is not authorized`);
     }
     const headers = targetHeadersForUrl(currentUrl, explicitHeaders);
@@ -506,22 +506,6 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
   return null;
 }
 
-async function isResolvedAddressOfAllowedHost(scope: ArsenalScope | null, address: string): Promise<boolean> {
-  if (!scope || net.isIP(address) === 0 || address.includes('/')) return false;
-  const hostnames = scope.allowedHosts.filter(host => net.isIP(host) === 0);
-  for (const hostname of hostnames) {
-    try {
-      const records = net.isIP(address) === 6
-        ? await dns.promises.resolve6(hostname)
-        : await dns.promises.resolve4(hostname);
-      if (records.includes(address)) return true;
-    } catch {
-      // A failed lookup does not widen scope; try the next explicitly allowed hostname.
-    }
-  }
-  return false;
-}
-
 /** Best-effort target for an approval request/warning — the first target-like param, else the
  *  context target address. Informational only (the scope gate does the real host math). */
 function approvalTargetOf(context: ToolContext): string | undefined {
@@ -667,11 +651,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
     // Egress scope gate: deny out-of-scope network targets BEFORE the handler runs. A tool call
     // never reaches a host outside the authorized scope, regardless of what the model supplied.
-    let blockedHost = scopeViolation(this.scope, context);
-    // Models commonly continue a hostname assessment using the address returned by dns_lookup.
-    // Admit that address only after independently proving that it currently resolves from one of
-    // the explicitly authorized hostnames. Arbitrary model-supplied IPs remain denied.
-    if (blockedHost && await isResolvedAddressOfAllowedHost(this.scope, blockedHost)) blockedHost = null;
+    const blockedHost = scopeViolation(this.scope, context);
     if (blockedHost) {
       const denied: ToolResult = {
         success: false,
@@ -683,6 +663,16 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       return denied;
     }
 
+    const assessmentHost = hostFromTargetValue(context.target?.address || context.parameters.target || context.parameters.host);
+    const website = context.target?.type === 'web_application' || context.target?.type === 'api';
+    const networkScan = /^(?:nmap_scan|nmap_tool|port_scan|naabu_tool)$/.test(toolName);
+    const edgeProvider = networkScan && website && assessmentHost && !net.isIP(assessmentHost)
+      ? websiteEdgeProvider(assessmentHost, this.orchestrator.getEvidence()) : undefined;
+    if (edgeProvider) {
+      return { success: true, output: `Network scanning is not applicable to this website's ${edgeProvider} proxy. Continue HTTP, TLS and API checks against the authorized hostname. An origin IP requires explicit scope.`,
+        metadata: { notApplicable: true, cacheHit: true, networkRequestsActual: 0 } };
+    }
+
     if (toolName === 'nmap_scan' && context.purpose !== 'reporting') {
       context = { ...context, parameters: { ...context.parameters, flags: context.parameters.flags || '-sV -T4' } };
       if (this.scope && !context.parameters.ports) {
@@ -690,6 +680,15 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
         if (ports) context.parameters.ports = ports === '-' ? '1-65535' : ports;
       }
       if (this.scope) context.parameters.flags = sanitizeExternalFlags('nmap', String(context.parameters.flags), true).join(' ') || '-T3';
+      if (website && assessmentHost && !net.isIP(assessmentHost)) {
+        const address = String(context.target?.address || '');
+        const url = new URL(/^https?:\/\//i.test(address) ? address : `https://${address}`);
+        const websitePorts = url.port ? [Number(url.port)] : [80, 443];
+        const requested = context.parameters.ports ? parsePortSpec(String(context.parameters.ports)) : websitePorts;
+        const ports = requested.filter(port => websitePorts.includes(port));
+        if (!ports.length) return { success: true, output: 'The requested ports are outside this website assessment. Continue HTTP/TLS/API checks on the configured website ports.', metadata: { notApplicable: true, cacheHit: true, networkRequestsActual: 0 } };
+        context.parameters.ports = ports.join(',');
+      }
       const call = normalizeToolCall(toolName, context);
       if (call.toolCategory === 'service_detection' && !this.orchestrator.getOpenPorts(call.host).length) {
         const webPort = normalizeToolCall('http_request', { parameters: { url: context.target?.address || context.parameters.target } }).port;

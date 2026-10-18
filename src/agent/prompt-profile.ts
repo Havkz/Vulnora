@@ -237,6 +237,7 @@ export function buildMissionPrompt(args: {
     'Specialization: Validate only reproducible, in-scope security findings relevant to the mission.',
     'Use function calls for tools. Tool schemas are the authoritative tool documentation.',
     'Never invent tool results, evidence, access, or impact.',
+    'The website and API are the assessment focus. DNS addresses are observations, not additional authorized targets. HTTP/TLS must retain the authorized hostname. Do not port-scan shared CDN/proxy infrastructure; Cloudflare DNS hosting alone does not prove HTTP proxying.',
     '',
     'SCOPE',
     `Targets: ${allowedHosts.length ? allowedHosts.join(', ') : 'none'}`,

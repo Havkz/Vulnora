@@ -20,18 +20,27 @@ describe('readable project logs', () => {
     expect(lines[4]).toBe('    + 1 lines (Ctrl+T full output)');
     expect(formatProjectLog(result, true).split('\n').slice(1, -1).every(line => line.startsWith('    '))).toBe(true);
   });
-  it('pairs overlapping AI questions and answers by request ID and redacts private content', () => {
+  it('shows only the latest question and its matching answer even when older replies arrive later', () => {
     const event = (category: string, data: Record<string, unknown>) => ({ timestamp: 1, category, data });
     const events = [event('provider:request', { requestId: 'one', provider: 'codex', model: 'primary', messages: [{ role: 'user', content: 'QUESTION_ONE token=private-fixture' }] }),
       event('provider:request', { requestId: 'two', provider: 'codex', model: 'primary', messages: [{ role: 'user', content: 'QUESTION_TWO' }] }),
       event('provider:response', { requestId: 'two', provider: 'local', model: 'fallback', response: { content: 'ANSWER_TWO' } }),
       event('provider:response', { requestId: 'one', provider: 'codex', model: 'primary', response: { content: 'ANSWER_ONE' } })];
     const history = formatAIHistory(events);
-    expect(history.indexOf('QUESTION_ONE')).toBeLessThan(history.indexOf('ANSWER_ONE'));
-    expect(history.indexOf('ANSWER_ONE')).toBeLessThan(history.indexOf('QUESTION_TWO'));
+    expect(history).not.toContain('QUESTION_ONE'); expect(history).not.toContain('ANSWER_ONE');
+    expect(history).toContain('QUESTION_TWO'); expect(history).toContain('ANSWER_TWO');
     expect(history).toContain('ANSWER · local/fallback'); expect(history).not.toContain('private-fixture');
     expect(formatAIHistory(events.slice(0, 1))).toContain('Awaiting response');
     expect(formatProjectLog(events[0], true)).toBe('');
+  });
+  it('renders a compact mission question and readable requested tools without replaying schemas or history', () => {
+    const text = formatAIHistory([{ timestamp: 1, category: 'provider:request', data: { requestId: 'last', provider: 'codex', model: 'fixture',
+      messages: [{ role: 'user', content: 'ROLE\nContract\n\nMISSION\nObjective: Inspect the website.\nSuccess condition: coverage.\n\nTOOLS\n' + 'schema '.repeat(500) },
+        { role: 'assistant', content: 'OLDER_REPLY' }, { role: 'user', content: 'SHARED SCAN STATE\n' + 'evidence '.repeat(500) }], tools: ['HIDDEN_SCHEMA'] } },
+      { timestamp: 2, category: 'provider:response', data: { requestId: 'last', response: { content: '```json\n{"tool_calls":[{"name":"http_request","arguments":{"url":"https://fixture.test","method":"GET"}}]}\n```' } } }]);
+    expect(text).toContain('Objective: Inspect the website.'); expect(text).toContain('    method: GET');
+    expect(text).not.toContain('OLDER_REPLY'); expect(text).not.toContain('HIDDEN_SCHEMA'); expect(text).not.toContain('schema schema');
+    expect(text).not.toContain('tool_calls'); expect(text.length).toBeLessThan(500);
   });
   it('uses readable units and shows measured process duration beside every exit code', () => {
     expect([59000, 60000, 754000, 3600000, 90000000].map(formatDuration)).toEqual(['59s', '1m 0s', '12m 34s', '1h 0m', '1d 1h']);

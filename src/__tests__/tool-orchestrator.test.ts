@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { ToolOrchestrator, normalizeToolCall } from '../orchestrator/tool-orchestrator.js';
+import { ToolOrchestrator, normalizeToolCall, websiteEdgeProvider } from '../orchestrator/tool-orchestrator.js';
 import { JsonlEvidenceStore } from '../orchestrator/evidence-store.js';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 
@@ -38,6 +38,18 @@ function httpResult(status = 200, body = '<title>Home</title>'): ToolResult {
 }
 
 describe('central tool orchestrator', () => {
+  it('distinguishes Cloudflare DNS hosting from actual HTTP proxy evidence, including after restore', async () => {
+    const orchestrator = new ToolOrchestrator();
+    await orchestrator.execute(tool('dns_lookup'), context({ domain: 'fixture.test', type: 'NS' }), async () => ({ success: true, output: 'Nameservers: ivan.ns.cloudflare.com' }));
+    expect(orchestrator.getNetworkContext('fixture.test').edgeSurface).toBe(false);
+    expect(websiteEdgeProvider('fixture.test', orchestrator.getEvidence())).toBeUndefined();
+    const saved = orchestrator.exportCheckpoint(); saved.network[0][1].edgeSurface = true; saved.network[0][1].edgeProvider = 'Cloudflare';
+    const restored = new ToolOrchestrator(); restored.restoreCheckpoint(saved);
+    expect(restored.getNetworkContext('fixture.test').edgeSurface).toBe(false);
+    await orchestrator.execute(tool('http_request'), context({ url: 'https://fixture.test' }), async () => ({ ...httpResult(), metadata: { responseStatus: 200, responseHeaders: { server: 'cloudflare', 'cf-ray': 'test-ray' } } }));
+    expect(websiteEdgeProvider('fixture.test', orchestrator.getEvidence())).toBe('Cloudflare');
+    expect(websiteEdgeProvider('other.test', orchestrator.getEvidence())).toBeUndefined();
+  });
   it('exposes running work for planning without leaking credentials or retaining completed reservations', async () => {
     const orchestrator = new ToolOrchestrator();
     let release!: () => void; let started!: () => void;

@@ -16,30 +16,37 @@ export function phasePath(phase: string | undefined, colors: TerminalTheme): str
 }
 
 export function formatAIHistory(events: ProjectLogEvent[]): string {
-  const requests = new Map<string, { timestamp: number; data: Record<string, unknown>; answer?: Record<string, unknown> }>();
-  for (const event of events) {
-    const data = fields(event);
-    if (event.category === 'provider:request') requests.set(String(data.requestId), { timestamp: event.timestamp, data });
-    if (event.category === 'provider:response') {
-      const request = requests.get(String(data.requestId));
-      if (request) request.answer = data;
-    }
+  const compact = (text: string, limit = 1400) => {
+    const clean = terminalText(String(redactSecrets(text))).trim();
+    return clean.length > limit ? clean.slice(0, limit).trimEnd() + '\n… Full details are saved in project logs.' : clean;
+  };
+  const latest = [...events].reverse();
+  const request = latest.find(event => event.category === 'provider:request');
+  if (!request) {
+    const legacy = latest.find(event => event.category === 'provider:progress' && typeof fields(event).text === 'string');
+    return legacy ? `QUESTION\nNot recorded by the earlier version.\n\nLATEST ANSWER\n${compact(String(fields(legacy).text))}` : 'No AI question recorded yet.';
   }
-  if (!requests.size) {
-    const legacy = events.filter(event => event.category === 'provider:progress' && typeof fields(event).text === 'string');
-    return 'Earlier versions saved responses only; their questions were not recorded. Full question/answer history begins with this version.\n\n'
-      + (legacy.map(event => {
-        const data = fields(event);
-        return terminalText(String(redactSecrets(`ANSWER · ${data.provider || data.agent}/${data.model || 'unknown model'}\n${data.text}`)));
-      }).join('\n\n') || 'No recorded AI questions or answers yet.');
+  const data = fields(request);
+  const answer = fields(latest.find(event => event.category === 'provider:response' && fields(event).requestId === data.requestId) || { timestamp: 0, category: '', data: {} });
+  const messages = Array.isArray(data.messages) ? data.messages as { role: string; content: string }[] : [];
+  const mission = messages.find(message => message.role === 'user' && message.content.startsWith('ROLE\n'))?.content;
+  const objective = mission?.match(/\nMISSION\n([\s\S]*?)(?:\n\n|$)/)?.[1].split('\n')[0];
+  const instruction = [...messages].reverse().find(message => message.role === 'user' && !message.content.startsWith('SHARED SCAN STATE\n'))?.content || '';
+  const question = [objective, instruction.startsWith('ROLE\n') ? undefined : instruction].filter(Boolean).join('\n\n') || instruction;
+  const response = answer.response as { content?: string; toolCalls?: { name: string; arguments?: unknown }[] } | undefined;
+  let content = response?.content || '';
+  let calls = response?.toolCalls;
+  if (content) {
+    try {
+      const parsed = JSON.parse(content.replace(/^```(?:json)?\s*|\s*```$/g, '').trim());
+      if (Array.isArray(parsed.tool_calls)) { calls ||= parsed.tool_calls; content = ''; }
+    } catch { /* Plain text answers are already readable. */ }
   }
-  return [...requests.values()].map(({ timestamp, data, answer }, index) => {
-    const messages = Array.isArray(data.messages) ? data.messages as { role: string; content: string; toolCalls?: unknown }[] : [];
-    const question = messages.map(message => `${message.role.toUpperCase()}\n${message.content}${message.toolCalls ? `\nTool calls: ${JSON.stringify(message.toolCalls)}` : ''}`).join('\n\n');
-    const response = answer?.response as { content?: string; toolCalls?: unknown } | undefined;
-    return `Request ${index + 1} · ${new Date(timestamp).toLocaleTimeString('de-DE')} · ${data.provider}/${data.model}\n\nQUESTION\n${question}\n\nTOOLS\n${JSON.stringify(data.tools || [], null, 2)}\n\nANSWER · ${answer?.provider || data.provider}/${answer?.model || data.model}\n`
-      + (response ? `${response.content || ''}${response.toolCalls ? `\nTool calls: ${JSON.stringify(response.toolCalls, null, 2)}` : ''}` : String(answer?.error || (answer ? 'Request ended without a response.' : 'Awaiting response…')));
-  }).map(text => terminalText(String(redactSecrets(text)))).join('\n\n────────────────────\n\n');
+  const tools = calls?.map(call => `  ${call.name}\n${Object.entries((call.arguments && typeof call.arguments === 'object' ? call.arguments : {}) as Record<string, unknown>)
+    .map(([key, value]) => `    ${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`).join('\n')}`).join('\n');
+  return `${new Date(request.timestamp).toLocaleTimeString('de-DE')} · ${data.provider}/${data.model}\n\nQUESTION\n${compact(question)}\n\nANSWER · ${answer.provider || data.provider}/${answer.model || data.model}\n`
+    + compact(response ? [content, tools ? `Requested tools\n${tools}` : ''].filter(Boolean).join('\n\n') || 'No text returned.'
+      : String(answer.error || 'Awaiting response…'), 2400);
 }
 
 export function phaseLabel(phase?: string): string {

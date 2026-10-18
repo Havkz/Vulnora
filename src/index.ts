@@ -1248,25 +1248,23 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       t => t.status === 'pending' || t.status === 'assigned' || t.status === 'in_progress'
     );
     const inFlight = allMissionTasks.filter(t => this.activeDispatches.has(t.id));
+    const infrastructureFailures = allMissionTasks.filter(task => task.phase === mission.currentPhase
+      && task.status === 'failed' && task.result?.failureKind === 'dispatch_infrastructure');
+    const failedIds = new Set(infrastructureFailures.map(task => task.id));
+    if (infrastructureFailures.length && inFlight.length === 0 && pendingOrActive.every(task => task.status === 'pending'
+      && task.dependencies.some(id => failedIds.has(id)))) {
+      const firstError = infrastructureFailures[0].result?.error;
+      this.stallReason = `stalled in ${mission.currentPhase}: ${infrastructureFailures.length} dispatch infrastructure failure(s)` + (firstError ? ` — ${firstError}` : '');
+      this.paused = true;
+      this.emit('command:paused');
+      this.emit('recovery:blocked', { task: infrastructureFailures[0], error: new Error(this.stallReason) });
+      return;
+    }
 
     // If we have tasks, all are done, and nothing is in-flight → advance phase.
     // Failed required tasks are terminal, but they are not successful progress.
     // Stall instead of walking the phase bar forward with no backend/model work.
     if (allMissionTasks.length > 0 && pendingOrActive.length === 0 && inFlight.length === 0) {
-      const infrastructureFailures = allMissionTasks.filter(task =>
-        task.phase === mission.currentPhase
-        && task.status === 'failed'
-        && task.result?.failureKind === 'dispatch_infrastructure'
-      );
-      if (infrastructureFailures.length > 0) {
-        const firstError = infrastructureFailures[0].result?.error;
-        this.stallReason = `stalled in ${mission.currentPhase}: ${infrastructureFailures.length} dispatch infrastructure failure(s)`
-          + (firstError ? ` — ${firstError}` : '');
-        this.paused = true;
-        this.emit('command:paused');
-        this.emit('recovery:blocked', { task: infrastructureFailures[0], error: new Error(this.stallReason) });
-        return;
-      }
       if (await this.ensureCoverageBeforeAdvance(mission, taskQueue)) return;
       const failedCurrentPhase = allMissionTasks.filter(
         t => t.phase === mission.currentPhase && t.status === 'failed'
