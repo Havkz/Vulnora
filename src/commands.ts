@@ -1,10 +1,11 @@
-import { Command } from 'commander';
+import { Command, InvalidArgumentError } from 'commander';
 import ora from 'ora';
 import Table from 'cli-table3';
 import { renderLogo, theme } from './ui/theme.js';
 import { config, hasApiKey, AVAILABLE_MODELS } from './config/index.js';
 import { LLMBackbone } from './llm/index.js';
 import { createOllamaSession } from './llm/ollama-session.js';
+import type { LLMProvider } from './types/index.js';
 
 function showBanner(): void { console.log('\n' + renderLogo(process.stdout.columns || 80).join('\n') + '\n'); }
 function showError(message: string): void { console.log(theme.error('✗ ') + message); }
@@ -29,6 +30,26 @@ program
   .action(async () => {
     await import('./setup.js');
   });
+
+program
+  .command('fallback')
+  .description('Show or update the saved fallback policy (safety refusals never switch models)')
+  .option('--enabled <boolean>', 'Enable fallback', parseBoolean)
+  .option('--on-api-error <boolean>', 'Switch on API or connection errors', parseBoolean)
+  .option('--on-rate-limit <boolean>', 'Switch on rate limits or exhausted quota', parseBoolean)
+  .option('--on-refusal <boolean>', 'Reevaluate technical or unclear refusals (default: false)', parseBoolean)
+  .option('--provider <provider>', 'Fallback provider, such as local, codex or openai')
+  .option('--model <model>', 'Fallback model ID (empty uses the provider default)')
+  .action((options: { enabled?: boolean; onApiError?: boolean; onRateLimit?: boolean; onRefusal?: boolean; provider?: LLMProvider; model?: string }) => {
+    if (Object.keys(options).length) config.setFallbackSettings(options);
+    console.log(JSON.stringify(config.getFallbackSettings(), null, 2));
+  });
+
+function parseBoolean(value: string): boolean {
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new InvalidArgumentError('Expected true or false.');
+}
 
 program
   .command('status')

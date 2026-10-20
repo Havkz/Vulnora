@@ -9,7 +9,8 @@ import Conf from 'conf';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel, CLIReasoningEffort } from '../types/index.js';
+import type { LLMProvider, LLMConfig, FallbackEntry, FallbackPolicy, OpsecLevel, CLIReasoningEffort } from '../types/index.js';
+import { DEFAULT_FALLBACK_POLICY } from '../llm/fallback-policy.js';
 import { configDirectory, migrateEnvironment, protectConfigSecrets } from './migration.js';
 import { registerSecret } from '../redact.js';
 
@@ -38,6 +39,7 @@ export interface VulnoraSettings {
   defaultModel: string;
   /** Explicit saved choices take precedence over inherited startup defaults. */
   userSelections: string[];
+  fallback: FallbackPolicy & { provider: LLMProvider; model: string };
 
   scanningBehavior: 'auto' | 'stealth' | 'aggressive';
   local: { baseUrl: string; defaultModel: string };
@@ -131,9 +133,10 @@ export type TempestSettings = VulnoraSettings;
 const DEFAULT_SETTINGS: VulnoraSettings = {
   apiKeys: {},
   userSelections: [],
+  fallback: { ...DEFAULT_FALLBACK_POLICY, provider: 'local', model: '' },
 
-  defaultProvider: 'openrouter',
-  defaultModel: 'anthropic/claude-opus-4.8',
+  defaultProvider: 'codex',
+  defaultModel: 'codex-default',
 
   scanningBehavior: 'auto',
   local: { baseUrl: 'http://127.0.0.1:11434/api', defaultModel: '' },
@@ -784,7 +787,7 @@ class ConfigManager {
   /**
    * Get the LLM configuration for the default or specified provider
    */
-  getLLMConfig(provider?: LLMProvider, model?: string): LLMConfig {
+  getLLMConfig(provider?: LLMProvider, model?: string, includeFallback = true): LLMConfig {
     let actualProvider = provider;
 
     if (!actualProvider) {
@@ -892,35 +895,36 @@ class ConfigManager {
       maxTokens: this.config.get('maxTokens'),
       temperature: this.config.get('temperature'),
       timeout: this.config.get('timeout'),
-      fallbackChain: this.buildFallbackChain(actualProvider),
+      fallbackChain: includeFallback ? this.buildFallbackChain(actualProvider) : [],
+      fallbackPolicy: this.getFallbackSettings(),
     };
   }
 
-  /**
-   * Opt-in model fallback ladder. When VULNORA_MODEL_FALLBACK is set, any primary-
-   * model failure that the model can't self-recover from — a refusal, an empty 200,
-   * or a hard error that survives same-model retries (rate-limit, 5xx, timeout, dead
-   * key, missing model, context blowout) — escalates across the OTHER configured
-   * providers in priority order (openrouter → venice → anthropic → openai), each with its own
-   * key/model. VULNORA_MODEL_FALLBACK=local selects the configured local/Ollama
-   * model as the sole fallback. OFF by default (no surprise model-switching). On a refusal the real
-   * authorization context is restated — honest escalation, no jailbreak prompts
-   * (see LLMBackbone.chat).
-   */
+  getFallbackSettings(): VulnoraSettings['fallback'] {
+    return { ...DEFAULT_SETTINGS.fallback, ...this.config.get('fallback') };
+  }
+
+  setFallbackSettings(changes: Partial<VulnoraSettings['fallback']>): void {
+    const next = { ...this.getFallbackSettings(), ...changes };
+    for (const key of ['enabled', 'onApiError', 'onRateLimit', 'onRefusal'] as const) {
+      if (typeof next[key] !== 'boolean') throw new Error(`Fallback ${key} must be a boolean.`);
+    }
+    if (typeof next.model !== 'string' || /[\r\n\0]/.test(next.model)) throw new Error('Invalid fallback model.');
+    if (!['codex', 'local-agent', 'local', 'openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek'].includes(next.provider)) throw new Error('Invalid fallback provider.');
+    this.config.set({ fallback: { ...next, model: next.model.trim() }, userSelections: this.selections('fallback') });
+  }
+
   private buildFallbackChain(primary: LLMProvider): FallbackEntry[] {
-    const flag = (process.env.VULNORA_MODEL_FALLBACK || '').trim().toLowerCase();
-    if (!flag || ['0', 'false', 'off', 'no'].includes(flag)) return [];
+    const settings = this.getFallbackSettings();
+    if (!settings.enabled) return [];
+    const flag = this.selected('fallback') ? '' : (process.env.VULNORA_MODEL_FALLBACK || '').trim().toLowerCase();
+    if (['0', 'false', 'off', 'no'].includes(flag)) return [];
     const chain: FallbackEntry[] = [];
-    if (['local', 'ollama'].includes(flag)) {
-      if (primary !== 'local') {
-        const local = this.getLLMConfig('local');
-        chain.push({
-          provider: 'local',
-          model: local.model,
-          apiKey: local.apiKey,
-          baseUrl: local.baseUrl,
-        });
-      }
+    if (!flag || ['local', 'ollama'].includes(flag)) {
+      const provider = flag ? 'local' : settings.provider;
+      const fallback = this.getLLMConfig(provider, flag ? undefined : settings.model || undefined, false);
+      const current = this.getLLMConfig(primary, undefined, false);
+      if (fallback.model.trim() && (fallback.provider !== current.provider || fallback.model !== current.model)) chain.push(fallback);
       return chain;
     }
     const add = (p: 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek') => {

@@ -11,6 +11,14 @@ import type { AgentCheckpoint } from '../agent/checkpoint.js';
 export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'codex' | 'mock' | 'local' | 'local-agent' | 'deterministic';
 export type CLIReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
+export interface FallbackPolicy {
+  enabled: boolean;
+  onApiError: boolean;
+  onRateLimit: boolean;
+  /** Only technical or unclear refusals; safety refusals never advance. */
+  onRefusal: boolean;
+}
+
 export interface LLMConfig {
   provider: LLMProvider;
   model: string;
@@ -22,19 +30,9 @@ export interface LLMConfig {
   /** In local-agent mode, model identifies the CLI; cliModel identifies its inference model. */
   cliModel?: string;
   reasoningEffort?: CLIReasoningEffort;
-  /**
-   * Ordered model/provider ladder to fall back to when the PRIMARY model fails for
-   * ANY reason it can't self-recover from — hard errors after same-model retries
-   * (rate-limit, 5xx, timeout, auth, unavailable model, context-length) AND soft
-   * failures (a refusal, or an empty/contentless 200). Empty/unset = no fallback.
-   * Each entry overrides the primary config's matching fields.
-   *
-   * On a *refusal* specifically, the operation's REAL authorization context (scope
-   * + human-approved gate + responsible disclosure) is restated before the next
-   * model is tried — honest escalation, NO jailbreak / guardrail-bypass prompts.
-   * A refusal that survives honest context + a model swap is respected.
-   */
+  /** Ordered, deduplicated provider ladder, governed by fallbackPolicy. */
   fallbackChain?: FallbackEntry[];
+  fallbackPolicy?: FallbackPolicy;
 }
 
 /** One hop in an LLMConfig.fallbackChain ladder. */

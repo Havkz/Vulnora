@@ -1,0 +1,42 @@
+name: Vulnora controlled CI
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Exact committed revision to validate
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, Windows, X64, codexpi]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Windows checks
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($script in @('lint', 'typecheck', 'test', 'doctor', 'verify-claims', 'test:no-fitting', 'test:no-self-fitting', 'test:gate', 'test:fallback', 'prompt:audit', 'smoke')) {
+            npm run $script
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          npm audit --audit-level=low
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Linux checks in CodexPi-CI
+        shell: pwsh
+        run: |
+          $linuxPath = wsl.exe -d CodexPi-CI -- wslpath -a $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          wsl.exe -d CodexPi-CI --cd $linuxPath.Trim() -- bash scripts/ci-linux.sh
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

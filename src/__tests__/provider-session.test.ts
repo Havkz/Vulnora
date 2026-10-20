@@ -23,7 +23,8 @@ const primary: LLMConfig = { provider: 'codex', model: 'configured-primary', tim
 const local: LLMConfig = { provider: 'local', model: 'installed:7b', baseUrl: 'http://127.0.0.1:11434/api' };
 function fixture(config: LLMConfig = primary) {
   const selectedLocal = { ...local };
-  const source = { getLLMConfig: (provider?: string) => ({ ...(provider === 'local' ? selectedLocal : config) }),
+  const source = { getLLMConfig: (provider?: string) => provider === 'local' ? { ...selectedLocal }
+      : { fallbackChain: config.provider !== 'local' && selectedLocal.model ? [{ ...selectedLocal }] : [], ...config },
     get: () => ({ command: 'configured-codex' }) } as never;
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ models: [{ name: 'installed:7b' }, { name: 'installed:7b' }] }) })));
   const controller = new AbortController(); const runtime = new ProviderSession(source, controller.signal);
@@ -40,7 +41,7 @@ describe('lazy local provider initialization', () => {
     const { runtime } = fixture(primary);
     primary.model = 'next'; primary.reasoningEffort = 'high'; runtime.updateSelection();
     expect(runtime.getConfig()).toMatchObject({ provider: 'codex', model: 'next', reasoningEffort: 'high',
-      fallbackChain: [{ provider: 'local', model: 'installed:7b' }, { provider: 'deterministic' }] });
+      fallbackChain: [{ provider: 'local', model: 'installed:7b' }] });
     expect(probe).not.toHaveBeenCalled(); expect(detection).not.toHaveBeenCalled(); expect(held).toHaveLength(0);
   });
   it('tests only the selected local fallback even when primary Codex is unavailable', async () => {
@@ -60,25 +61,34 @@ describe('lazy local provider initialization', () => {
     expect(steps.filter(step => step.status === 'completed').map(step => step.label)).toEqual([
       'Checking codex CLI authentication', 'Testing codex inference', 'Using codex/configured-primary',
     ]);
-    expect(runtime.getConfig()).toMatchObject({ provider: 'codex', fallbackChain: [{ provider: 'local', model: 'installed:7b' }, { provider: 'deterministic' }] });
+    expect(runtime.getConfig()).toMatchObject({ provider: 'codex', fallbackChain: [{ provider: 'local', model: 'installed:7b' }] });
     await runtime.close();
   });
   it('does not inject or download a built-in model when none is selected', async () => {
     const { runtime, selectedLocal } = fixture(); selectedLocal.model = ''; await runtime.prepare();
-    expect(runtime.getConfig().fallbackChain).toEqual([{ provider: 'deterministic', model: 'evidence-only' }]);
+    expect(runtime.getConfig().fallbackChain).toEqual([]);
     expect(held).toEqual([]); expect(fetch).not.toHaveBeenCalled(); await runtime.close();
   });
   it('defers local primary inference and retains it only on an actual request', async () => {
     const { runtime } = fixture(local); await runtime.prepare();
     expect(probe).not.toHaveBeenCalled(); expect(fetch).not.toHaveBeenCalled();
-    const backbone = new LLMBackbone(runtime.getConfig()); runtime.track(backbone); backbone.emit('request:start', { messages: [] });
+    const backbone = new LLMBackbone(runtime.getConfig()); runtime.track(backbone); backbone.emit('request:provider', local);
     expect(held[0].retain).toHaveBeenCalledOnce(); expect(runtime.readiness?.primary.ready).toBe(false); await runtime.close();
   });
   it('retains local fallback only when engaged', async () => {
     const { runtime } = fixture(); await runtime.prepare(); const backbone = new LLMBackbone(runtime.getConfig()); runtime.track(backbone);
     backbone.emit('request:start', { messages: [] }); expect(held[0].retain).not.toHaveBeenCalled();
-    backbone.emit('request:fallback', { fromProvider: 'codex', fromModel: primary.model, toProvider: 'local', toModel: local.model, engaged: true, reason: 'unavailable' });
+    backbone.emit('request:provider', local);
     expect(held[0].retain).toHaveBeenCalledOnce(); await runtime.close(); expect(held[0].stop).toHaveBeenCalledOnce();
+  });
+  it('retains and releases the actual fallback model after a settings change', async () => {
+    const { runtime } = fixture(); await runtime.prepare();
+    const backbone = new LLMBackbone(runtime.getConfig()); runtime.track(backbone);
+    backbone.emit('request:provider', { ...local, model: 'second:7b' });
+    expect(held).toHaveLength(2);
+    expect(held[0].retain).not.toHaveBeenCalled(); expect(held[1].retain).toHaveBeenCalledOnce();
+    await runtime.close();
+    expect(held[0].stop).toHaveBeenCalledOnce(); expect(held[1].stop).toHaveBeenCalledOnce();
   });
   it('keeps Codex first after a failed check and redacts diagnostics', async () => {
     const { runtime } = fixture(); probe.mockRejectedValue(new Error('token=secret-fixture-value-1234567890'));
@@ -122,9 +132,10 @@ describe('lazy local provider initialization', () => {
       expect(probe).not.toHaveBeenCalled();
     } finally { timeout.mockRestore(); vi.useRealTimers(); await runtime.close(); }
   });
-  it('releases a replaced model without eagerly loading the replacement', async () => {
+  it('keeps model cleanup until session close without eagerly loading a replacement', async () => {
     const { runtime, selectedLocal } = fixture(); await runtime.prepare(); selectedLocal.model = 'replacement:7b'; await runtime.prepare();
-    expect(held).toHaveLength(2); expect(held[0].stop).toHaveBeenCalledOnce(); expect(held[1].start).not.toHaveBeenCalled(); await runtime.close();
+    expect(held).toHaveLength(2); expect(held[0].stop).not.toHaveBeenCalled(); expect(held[1].start).not.toHaveBeenCalled(); await runtime.close();
+    expect(held[0].stop).toHaveBeenCalledOnce(); expect(held[1].stop).toHaveBeenCalledOnce();
   });
   it('propagates application cancellation', async () => {
     const { runtime, controller } = fixture(); probe.mockImplementation(async () => { controller.abort(new Error('operator stopped')); throw controller.signal.reason; });

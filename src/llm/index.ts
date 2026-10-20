@@ -22,6 +22,7 @@ import type { LLMConfig, LLMMessage, LLMResponse, LLMProvider, LLMToolDefinition
 import { config } from '../config/index.js';
 import { localAgentChat, type LocalAgentProgress } from '../agent/local-agents.js';
 import { fetchLocal } from './local-service.js';
+import { classifyRefusal, permitsFallback } from './fallback-policy.js';
 import { redactLedgerText, redactSecrets, redactString, registerSecret } from '../redact.js';
 
 // =============================================================================
@@ -30,6 +31,7 @@ import { redactLedgerText, redactSecrets, redactString, registerSecret } from '.
 
 export interface LLMEvents {
   'request:start': { messages: LLMMessage[] };
+  'request:provider': { provider: LLMProvider; model: string; baseUrl?: string };
   'request:end': undefined;
   'request:trace': { requestId: string; stage: 'request' | 'response'; provider: LLMProvider; model: string;
     messages?: LLMMessage[]; tools?: LLMToolDefinition[]; response?: LLMResponse; error?: string };
@@ -90,12 +92,12 @@ export function isContextCompactionNotice(content: string): boolean {
 
 interface FallbackAuditEntry {
   requestId: string;
-  event: 'fallback_trigger' | 'fallback_result';
+  event: 'fallback_trigger' | 'fallback_result' | 'fallback_stopped';
   primary: { provider: LLMProvider; model: string };
   from: { provider: LLMProvider; model: string };
   to?: { provider: LLMProvider; model: string };
   reason: string;
-  status?: 'success' | 'refusal' | 'empty' | 'error';
+  status?: 'success' | 'refusal' | 'empty' | 'error' | 'security_refusal' | 'technical_refusal' | 'unclear_refusal';
   question?: string;
   conversation?: Array<{ role: string; name?: string; content: string }>;
   messageCount?: number;
@@ -164,7 +166,7 @@ interface OpenRouterToolCall {
 
 interface OpenRouterResponse {
   choices: Array<{
-    message?: { content?: string; tool_calls?: OpenRouterToolCall[] };
+    message?: { content?: string; refusal?: string | null; tool_calls?: OpenRouterToolCall[] };
     delta?: { content?: string };
     finish_reason?: string;
   }>;
@@ -319,10 +321,11 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     }
 
     const data = await response.json() as OpenRouterResponse;
-    const toolCalls = this.parseToolCalls(data.choices[0]?.message?.tool_calls);
+    const refusal = data.choices[0]?.message?.refusal;
+    const toolCalls = refusal || data.choices[0]?.finish_reason === 'content_filter' ? undefined : this.parseToolCalls(data.choices[0]?.message?.tool_calls);
 
     return {
-      content: data.choices[0]?.message?.content || '',
+      content: refusal || data.choices[0]?.message?.content || '',
       toolCalls,
       model: data.model || this.config.model,
       usage: data.usage
@@ -332,7 +335,7 @@ class OpenRouterAdapter implements LLMProviderAdapter {
             totalTokens: data.usage.total_tokens,
           }
         : undefined,
-      finishReason: data.choices[0]?.finish_reason,
+      finishReason: refusal ? 'content_filter' : data.choices[0]?.finish_reason,
     };
   }
 
@@ -686,7 +689,8 @@ class OpenAIAdapter implements LLMProviderAdapter {
     }
 
     const data = await response.json() as OpenRouterResponse;
-    const rawToolCalls = data.choices[0]?.message?.tool_calls;
+    const refusal = data.choices[0]?.message?.refusal;
+    const rawToolCalls = refusal || data.choices[0]?.finish_reason === 'content_filter' ? undefined : data.choices[0]?.message?.tool_calls;
     const toolCalls: LLMToolCall[] | undefined = rawToolCalls?.length
       ? rawToolCalls.map(tc => ({
           id: tc.id,
@@ -696,7 +700,7 @@ class OpenAIAdapter implements LLMProviderAdapter {
       : undefined;
 
     return {
-      content: data.choices[0]?.message?.content || '',
+      content: refusal || data.choices[0]?.message?.content || '',
       toolCalls,
       model: data.model || this.config.model,
       usage: data.usage
@@ -706,7 +710,7 @@ class OpenAIAdapter implements LLMProviderAdapter {
             totalTokens: data.usage.total_tokens,
           }
         : undefined,
-      finishReason: data.choices[0]?.finish_reason,
+      finishReason: refusal ? 'content_filter' : data.choices[0]?.finish_reason,
     };
   }
 }
@@ -987,21 +991,22 @@ class LocalAdapter implements LLMProviderAdapter {
         } catch {
           // Non-JSON error bodies are still covered by the string redactor above.
         }
-        throw new Error(
+        throw new LLMApiError(
           `Local LLM HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}` +
-          `${responseBody ? `: ${responseBody}` : ' (empty response body)'}`
+          `${responseBody ? `: ${responseBody}` : ' (empty response body)'}`, response.status
         );
       }
 
       const data = await response.json() as OllamaResponse & {
-        choices?: Array<{ message?: { content?: string } }>;
+        choices?: Array<{ message?: { content?: string; refusal?: string | null }; finish_reason?: string }>;
         usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
       };
-      const content = openaiWire ? (data.choices?.[0]?.message?.content || '') : (data.message?.content || '');
+      const refusal = openaiWire ? data.choices?.[0]?.message?.refusal : undefined;
+      const content = openaiWire ? (refusal || data.choices?.[0]?.message?.content || '') : (data.message?.content || '');
 
       // Tool-calling over text: if the Arsenal was offered, parse the model's tool
       // requests so the ReAct loop EXECUTES them instead of abstaining on turn 0.
-      const toolCalls = options?.tools?.length ? parseTextToolCalls(content) : undefined;
+      const toolCalls = !refusal && options?.tools?.length ? parseTextToolCalls(content) : undefined;
 
       const usage = openaiWire
         ? (data.usage
@@ -1015,7 +1020,7 @@ class LocalAdapter implements LLMProviderAdapter {
         content,
         model: data.model || this.config.model,
         usage,
-        finishReason: toolCalls?.length ? 'tool_calls' : 'stop',
+        finishReason: refusal ? 'content_filter' : data.choices?.[0]?.finish_reason || (toolCalls?.length ? 'tool_calls' : 'stop'),
         toolCalls,
       };
     } catch (error) {
@@ -1275,17 +1280,7 @@ class LocalAgentAdapter implements LLMProviderAdapter {
 // =============================================================================
 
 // =============================================================================
-// REFUSAL FALLBACK
-// -----------------------------------------------------------------------------
-// Models sometimes return a *refusal* — a 200-OK response that declines the task
-// rather than an HTTP error — so the retry loop sails right past it and an
-// authorized operation silently dead-ends. These helpers detect that case and
-// drive an honest provider/model fallback.
-//
-// Honest by design: on refusal we restate the operation's REAL authorization
-// (scope + human-approved gate + responsible disclosure) and try the next model.
-// No jailbreak / guardrail-bypass prompts. A refusal that survives honest context
-// is respected and returned as-is.
+// RESPONSE CLASSIFICATION
 // =============================================================================
 
 /**
@@ -1300,7 +1295,8 @@ export function isLikelyRefusal(content?: string, finishReason?: string): boolea
   const raw = (content || '').trim();
   if (!raw) return false;
   const prose = raw.replace(/```[\s\S]*?```/g, '').split('\n').filter(line => !line.trim().startsWith('>')).join('\n');
-  const t = (prose.slice(0, 2400) + '\n' + prose.slice(-1200)).toLowerCase();
+  const t = (prose.slice(0, 2400) + '\n' + prose.slice(-1200)).toLowerCase()
+    .replace(/\bi\s+(?:can't|cannot|can not)\s+help\s+but\b/g, '');
   // A decline verb bound to a help-class object: "I can't help", "I'm sorry, but I
   // cannot assist", "I won't provide", "I must decline to participate". Crucially
   // NOT "I can't find the flag" / "I cannot reach the host" (technical progress).
@@ -1312,33 +1308,14 @@ export function isLikelyRefusal(content?: string, finishReason?: string): boolea
 }
 
 /**
- * Prepend a TRUTHFUL restatement of the authorization already governing the op.
- * This is NOT a jailbreak — it adds honest context (the engagement is in-scope and
- * human-approved, for responsible disclosure) and asks the model to flag any
- * specific genuine concern rather than blanket-refusing an authorized task.
- */
-export function reframeWithAuthorizedContext(messages: LLMMessage[]): LLMMessage[] {
-  const note: LLMMessage = {
-    role: 'system',
-    content:
-      'AUTHORIZATION CONTEXT (restated): This is an authorized, in-scope security ' +
-      'assessment running under an explicit engagement scope and a human-approved ' +
-      'authorization gate, for defensive and responsible-disclosure purposes — ' +
-      'findings are reported to the asset owner to be fixed. Please proceed with the ' +
-      'authorized task. If a SPECIFIC step is genuinely outside acceptable bounds, ' +
-      'identify that step precisely rather than declining the overall task.',
-  };
-  return [note, ...messages];
-}
-
-/**
  * Classify a *successful* (200) response that is nonetheless unusable and should
  * trigger a model fallback: a refusal, or an empty/contentless reply (no text and
  * no tool calls). Returns null when the response is good.
  */
-export function classifySoftFailure(r: LLMResponse): 'refusal' | 'empty' | null {
+export function classifySoftFailure(r: LLMResponse): ReturnType<typeof classifyRefusal> | 'empty' | null {
+  if (r.finishReason === 'content_filter' || r.finishReason === 'refusal') return 'security_refusal';
   if (r.toolCalls?.length) return null;
-  if (isLikelyRefusal(r.content, r.finishReason)) return 'refusal';
+  if (isLikelyRefusal(r.content, r.finishReason)) return classifyRefusal(r.content, r.finishReason);
   const hasContent = (r.content || '').trim().length > 0;
   const hasToolCalls = (r.toolCalls?.length || 0) > 0;
   if (!hasToolCalls && isContextCompactionNotice(r.content || '')) return 'empty';
@@ -1353,9 +1330,11 @@ export function classifySoftFailure(r: LLMResponse): 'refusal' | 'empty' | null 
  */
 export function classifyErrorKind(error: Error | null): string {
   if (!error) return 'unknown';
+  if (/flagged for possible cybersecurity risk|trusted access for cyber|content (?:was )?flagged|content_filter|safety (?:policy|filter)|policy (?:refusal|violation)/i.test(error.message.slice(-2000))) return 'security_refusal';
   if (error instanceof LLMApiError) {
     if (/context length|maximum context|too many tokens|context_length|reduce the length/i.test(error.message)) return 'context_length';
     if (error.status === 429) return 'rate_limit';
+    if (error.status === 402) return 'quota';
     if (error.status === 401 || error.status === 403) return 'auth';
     if (error.status === 404) return 'model_unavailable';
     if (error.status >= 500) return 'server_error';
@@ -1370,22 +1349,11 @@ export function classifyErrorKind(error: Error | null): string {
   if (/input exceeds the maximum length|input_too_large|max_chars|context length|maximum context|too many tokens/i.test(diagnostic)) {
     return 'context_length';
   }
-  if (/flagged for possible cybersecurity risk|trusted access for cyber|content (?:was )?flagged|safety (?:policy|filter)|policy (?:refusal|violation)|request (?:was )?rejected/i.test(diagnostic)) {
-    return 'refusal';
-  }
+  if (/usage limit|quota|insufficient_quota|credits? (?:exhausted|depleted)|billing limit/i.test(diagnostic)) return 'quota';
+  if (/rate.?limit|too many requests|\b429\b/i.test(diagnostic)) return 'rate_limit';
   if (/abort|timed? ?out|timeout/i.test(diagnostic)) return 'timeout';
   if (/fetch failed|network|ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|socket|stream disconnected/i.test(diagnostic)) return 'network';
   return 'unknown';
-}
-
-/** The configured fallback ladder is always available. Codex refusals engage it
- * immediately; all hard Codex failures (including its ten-minute timeout) also
- * advance to Ollama instead of failing the task outright. */
-export function shouldAdvanceFallback(primaryProvider: LLMProvider, rung: number, reason: string): boolean {
-  void primaryProvider;
-  void rung;
-  void reason;
-  return true;
 }
 
 function providerIdentity(entry: Pick<LLMConfig, 'provider' | 'model' | 'cliModel'>): { provider: LLMProvider; model: string } {
@@ -1510,14 +1478,15 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
   private async chatWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string,
     requestConfig: LLMConfig, requestAdapter: LLMProviderAdapter, retryAttempts: number): Promise<LLMResponse> {
 
-    // The model ladder: primary first, then each configured fallback hop. A hop is
-    // tried when the rung above fails for ANY reason that model can't fix itself —
-    // hard errors that survive same-model retries (rate-limit, 5xx, timeout, auth,
-    // 404, context-length) OR soft failures on a 200 (a refusal, or empty output).
+    const seen = new Set<string>();
     const ladder: FallbackEntry[] = [
       requestConfig,
       ...(requestConfig.fallbackChain || []),
-    ];
+    ].filter(hop => {
+      const key = JSON.stringify([providerIdentity(hop), hop.baseUrl || '', hop.reasoningEffort || '']);
+      if (seen.has(key)) return false;
+      seen.add(key); return true;
+    });
     const question = [...messages].reverse().find(message => message.role === 'user')?.content;
     const auditContext = {
       requestId,
@@ -1528,23 +1497,23 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     };
 
     let lastError: Error | null = null;
-    let reframeNext = false; // honest authz restatement on the hop after a refusal
     const trail: string[] = [];
 
     for (let rung = 0; rung < ladder.length; rung++) {
+      options?.signal?.throwIfAborted();
       const hop = ladder[rung];
+      this.emit('request:provider', { provider: hop.provider, model: hop.model, baseUrl: hop.baseUrl });
       this.activeProvider = providerIdentity(hop);
       const onFallback = rung > 0;
       const hasNext = rung < ladder.length - 1;
-      const adapter = onFallback ? this.createAdapter({ ...requestConfig, ...hop, cliModel: hop.cliModel, reasoningEffort: hop.reasoningEffort }) : requestAdapter;
-      const msgs = reframeNext ? reframeWithAuthorizedContext(messages) : messages;
+      const adapter = onFallback ? this.createAdapter({ ...requestConfig, ...hop, apiKey: hop.apiKey, baseUrl: hop.baseUrl, cliModel: hop.cliModel, reasoningEffort: hop.reasoningEffort }) : requestAdapter;
 
       // ── same-model retry loop: only transient hard errors retry in place ──
       let response: LLMResponse | null = null;
       for (let attempt = 1; attempt <= retryAttempts; attempt++) {
         try {
           options?.signal?.throwIfAborted();
-          response = await adapter.chat(msgs, { ...options, onProgress: event => {
+          response = await adapter.chat(messages, { ...options, onProgress: event => {
             const safe = { ...event, ...(event.text ? { text: String(redactSecrets(event.text)) } : {}) };
             this.activeProvider = { ...providerIdentity(hop), model: event.model || providerIdentity(hop).model };
             this.emit('request:progress', { ...safe, ...this.activeProvider });
@@ -1559,8 +1528,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           lastError.message = redactString(lastError.message);
           if (lastError.stack) lastError.stack = redactString(lastError.stack);
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
-          const permanent = error instanceof LLMUnavailableError || (error instanceof LLMApiError &&
-            (error.status === 401 || error.status === 403 || error.status === 404));
+          const permanent = error instanceof LLMUnavailableError || ['security_refusal', 'quota', 'auth', 'model_unavailable', 'context_length', 'bad_request'].includes(classifyErrorKind(lastError));
           if (permanent || attempt >= retryAttempts) break;
           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
           if (error instanceof LLMApiError && error.retryAfterMs) {
@@ -1589,8 +1557,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             durationMs: Date.now() - startTime,
           });
         }
-        reframeNext = false;
-        if (hasNext && shouldAdvanceFallback(requestConfig.provider, rung, reason)) {
+        if (hasNext && permitsFallback(reason, requestConfig.fallbackPolicy)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1604,12 +1571,14 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason });
           continue;
         }
-        break; // bottom of the ladder, still failing → throw below
+        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, reason, sourceError: lastError?.message });
+        break;
       }
 
       // ── soft failure on a 200: refusal or empty/contentless ──
       const soft = classifySoftFailure(response);
       if (soft) {
+        if (soft === 'security_refusal') response = { ...response, toolCalls: undefined };
         trail.push(`${hop.model}:${soft}`);
         if (onFallback) {
           await appendFallbackAudit({
@@ -1623,11 +1592,10 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             durationMs: Date.now() - startTime,
           });
         }
-        if (soft === 'refusal') {
+        if (soft.endsWith('_refusal')) {
           this.emit('request:refusal', { provider: hop.provider, model: hop.model, preview: (response.content || '').slice(0, 160) });
         }
-        reframeNext = soft === 'refusal';
-        if (hasNext && shouldAdvanceFallback(requestConfig.provider, rung, soft)) {
+        if (hasNext && permitsFallback(soft, requestConfig.fallbackPolicy)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1641,7 +1609,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason: soft });
           continue;
         }
-        // bottom of the ladder: surface the best-effort / honest response, don't throw
+        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, reason: soft, sourceResponse: redactLedgerText(response.content || '', 30000) });
         this.emit('request:complete', { response, durationMs: Date.now() - startTime });
         return response;
       }

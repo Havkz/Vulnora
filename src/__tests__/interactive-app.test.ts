@@ -51,6 +51,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\rActivity fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing fixture session');
+    await expect.poll(() => session.command.isRunning()).toBe(true);
     const view = () => screens.mock.calls.at(-1)?.[0]().lines.map(stripVTControlCharacters).join('\n') || '';
     session.command.llm.emit('request:start', { messages: [] });
     expect(view()).toContain('Thinking · Work');
@@ -75,6 +76,25 @@ describe('durable interactive project flow', () => {
     expect((await f.store.list()).projects).toHaveLength(1);
     f.input.write('\x1b[B\r'); await expect.poll(async () => (await f.store.list()).projects.length).toBe(0);
     expect(f.open).not.toHaveBeenCalled(); f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+  });
+
+  it('persists fallback policy changes from the existing settings menu without probing providers', async () => {
+    const f = await fixture();
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-fallback-menu-')); directories.push(directory);
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory); vi.resetModules();
+    const { config } = await import('../config/index.js');
+    f.services.configuration = config;
+    f.services.updateModels = vi.fn();
+    f.services.prepareProviders = vi.fn(async () => 'Unused');
+    const result = f.start();
+    f.input.write('\x1b[B\x1b[B\r'); await f.wait('Fallback policy');
+    f.input.write('\x1b[B\x1b[B\x1b[B\x1b[B\r'); await f.wait('Fallback on Refusal: Off');
+    f.input.write('\x1b[B\x1b[B\x1b[B\r'); await f.wait('Fallback on Refusal: On');
+    expect(config.getFallbackSettings().onRefusal).toBe(true);
+    expect(f.services.updateModels).toHaveBeenCalledOnce();
+    expect(f.services.prepareProviders).not.toHaveBeenCalled();
+    expect(config.getLLMConfig().provider).toBe('codex');
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
   });
 
   it('allows manual local endpoint/model entry while discovery is offline and keeps the installed primary selected', async () => {

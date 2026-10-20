@@ -13,6 +13,32 @@ afterEach(async () => {
 });
 
 describe('interactive setting persistence', () => {
+  it('persists fallback switches through CLI and config without replacing the primary or exposing keys', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-fallback-settings-'));
+    directories.push(directory);
+    vi.stubEnv('VULNORA_CONFIG_DIR', directory);
+    vi.stubEnv('VULNORA_MODEL_FALLBACK', 'local');
+    const { config } = await import('../config/index.js');
+    config.setDefaultProvider('codex');
+    config.setDefaultModel('local', 'discovered:7b');
+    expect(config.getLLMConfig().fallbackChain?.[0].model).toBe('discovered:7b');
+    expect(config.getLLMConfig().fallbackPolicy?.onRefusal).toBe(false);
+    const cli = (...args: string[]) => execFileSync(process.execPath,
+      ['--import', 'tsx', fileURLToPath(new URL('../cli.ts', import.meta.url)), 'fallback', ...args],
+      { encoding: 'utf8', windowsHide: true, env: process.env });
+    expect(JSON.parse(cli('--enabled', 'false', '--on-api-error', 'false', '--on-rate-limit', 'true', '--on-refusal', 'true', '--provider', 'openai', '--model', 'alternate-fixture')))
+      .toMatchObject({ enabled: false, onApiError: false, onRateLimit: true, onRefusal: true, provider: 'openai', model: 'alternate-fixture' });
+    vi.resetModules();
+    const restored = (await import('../config/index.js')).config;
+    expect(restored.getLLMConfig()).toMatchObject({ provider: 'codex', fallbackChain: [], fallbackPolicy: { enabled: false } });
+    restored.setFallbackSettings({ enabled: true });
+    expect(restored.getLLMConfig().fallbackChain).toEqual([expect.objectContaining({ provider: 'openai', model: 'alternate-fixture' })]);
+    expect(() => restored.setFallbackSettings({ enabled: 'false' as unknown as boolean })).toThrow('boolean');
+    expect(() => restored.setFallbackSettings({ provider: 'invalid' as never })).toThrow('provider');
+    expect(() => cli('--enabled', 'maybe')).toThrow();
+    expect(restored.getLLMConfig().provider).toBe('codex');
+  }, 20000);
+
   it.each(['VULNORA_LOCAL_API_KEY', 'ZAI_API_KEY', 'ZHIPUAI_API_KEY'])('forwards %s to the local provider without storing the environment credential', async name => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-settings-'));
     directories.push(directory);

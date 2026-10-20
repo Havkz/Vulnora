@@ -4,7 +4,7 @@ import type { config as settings, ApiKeyProvider } from '../config/index.js';
 import type { ProjectSession, ProjectLogEvent } from '../projects/session.js';
 import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from '../projects/store.js';
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
-import type { LLMConfig, CLIReasoningEffort } from '../types/index.js';
+import type { LLMConfig, CLIReasoningEffort, FallbackPolicy, LLMProvider } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
 import { formatAIHistory, formatDuration, formatProjectLog, formatSavedProjectLog, phaseLabel, phasePath, ProjectActivity } from './project-log.js';
 export { formatProjectLog, projectLogStyle } from './project-log.js';
@@ -436,8 +436,8 @@ export class InteractiveApp {
   private async settings(): Promise<void> {
     const config = this.services.configuration;
     for (;;) {
-      const choice = await this.surface.menu('Settings', ['Scanning Behavior', 'Change Default Model / Provider', 'Change API Key', 'Local models / fallback', 'Back']);
-      if (choice === undefined || choice === 4) return;
+      const choice = await this.surface.menu('Settings', ['Scanning Behavior', 'Change Default Model / Provider', 'Change API Key', 'Local models / fallback', 'Fallback policy', 'Back']);
+      if (choice === undefined || choice === 5) return;
       if (choice === 0) {
         const selected = await this.surface.menu('Scanning Behavior', ['Auto · adaptive', 'Stealth · low impact', 'Aggressive · bounded throughput']);
         if (selected !== undefined) {
@@ -449,6 +449,8 @@ export class InteractiveApp {
         await this.selectProvider();
       } else if (choice === 3) {
         await this.selectLocalModel(false);
+      } else if (choice === 4) {
+        await this.fallbackSettings();
       } else {
         const providers: ApiKeyProvider[] = ['openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek', 'local'];
         const selected = await this.surface.menu('API key provider', providers);
@@ -459,6 +461,37 @@ export class InteractiveApp {
           await this.refreshProviders();
         }
       }
+    }
+  }
+
+  private async fallbackSettings(): Promise<void> {
+    const config = this.services.configuration;
+    const toggles: Array<[keyof FallbackPolicy, string]> = [
+      ['enabled', 'Fallback Enabled'], ['onApiError', 'Fallback on API Error'],
+      ['onRateLimit', 'Fallback on Rate Limit'], ['onRefusal', 'Fallback on Refusal'],
+    ];
+    for (;;) {
+      const settings = config.getFallbackSettings();
+      const selected = await this.surface.menu('Fallback policy', [
+        ...toggles.map(([key, label]) => `${label}: ${settings[key] ? 'On' : 'Off'}`),
+        `Fallback Model: ${settings.provider} / ${settings.model || 'provider default'}`, 'Back',
+      ], () => ['Safety refusals stop the request. Other refusals require explicit opt-in.']);
+      if (selected === undefined || selected === 5) return;
+      if (selected < toggles.length) {
+        const key = toggles[selected][0];
+        config.setFallbackSettings({ [key]: !settings[key] });
+      } else {
+        const providers: LLMProvider[] = ['local', 'codex', 'local-agent', 'openrouter', 'venice', 'anthropic', 'openai', 'xai', 'gemini', 'litellm', 'deepseek'];
+        const selectedProvider = await this.surface.menu('Fallback provider', providers);
+        if (selectedProvider === undefined) continue;
+        const provider = providers[selectedProvider];
+        if (provider === 'local') { await this.selectLocalModel(false); continue; }
+        const model = await this.surface.prompt(provider === 'local-agent' ? 'Installed CLI (codex or claude):' : 'Fallback model ID:', config.getLLMConfig(provider).model);
+        if (!model?.trim()) continue;
+        config.setFallbackSettings({ provider, model });
+      }
+      this.services.updateModels?.();
+      if (this.session) this.session.command.llm.updateConfig(this.services.llm());
     }
   }
 
@@ -556,6 +589,7 @@ export class InteractiveApp {
       if (!model?.trim()) return;
       config.setDefaultModel('local', model.trim());
       if (makePrimary) config.setDefaultProvider('local');
+      else config.setFallbackSettings({ provider: 'local', model: model.trim() });
       await this.refreshProviders('local'); return;
     }
   }

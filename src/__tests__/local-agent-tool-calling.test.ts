@@ -12,7 +12,8 @@ vi.mock('../agent/local-agents.js', () => ({
   localAgentChat: vi.fn(),
 }));
 
-import { classifyErrorKind, classifySoftFailure, parseTextToolCalls, shouldAdvanceFallback, LLMBackbone } from '../llm/index.js';
+import { classifyErrorKind, classifySoftFailure, parseTextToolCalls, LLMBackbone } from '../llm/index.js';
+import { DEFAULT_FALLBACK_POLICY, permitsFallback } from '../llm/fallback-policy.js';
 import { localAgentChat } from '../agent/local-agents.js';
 const cli = vi.mocked(localAgentChat);
 
@@ -74,15 +75,13 @@ describe('Codex CLI failure classification', () => {
       'Codex CLI exited 1: ERROR: This content was flagged for possible cybersecurity risk. '
       + 'Join the Trusted Access for Cyber program.'
     );
-    expect(classifyErrorKind(error)).toBe('refusal');
+    expect(classifyErrorKind(error)).toBe('security_refusal');
   });
 
-  it('allows Ollama fallback for every Codex failure, including timeout and refusal', () => {
-    expect(shouldAdvanceFallback('codex', 0, 'timeout')).toBe(true);
-    expect(shouldAdvanceFallback('codex', 0, 'refusal')).toBe(true);
-    expect(shouldAdvanceFallback('codex', 0, 'network')).toBe(true);
-    expect(shouldAdvanceFallback('codex', 0, 'context_length')).toBe(true);
-    expect(shouldAdvanceFallback('local', 0, 'network')).toBe(true);
+  it('defaults to technical recovery and respects safety refusals even with refusal fallback enabled', () => {
+    for (const reason of ['timeout', 'network', 'context_length', 'quota']) expect(permitsFallback(reason)).toBe(true);
+    expect(permitsFallback('unclear_refusal')).toBe(false);
+    expect(permitsFallback('security_refusal', { ...DEFAULT_FALLBACK_POLICY, onRefusal: true })).toBe(false);
   });
 });
 
@@ -129,16 +128,16 @@ describe('codex backbone surfaces toolCalls (guards the CodexAdapter half of the
   it.each([
     'I cannot assist with conducting this assessment. ' + 'Explanation of the limitation. '.repeat(70),
     'Ich kann dich bei diesen aktiven Prüfungen nicht unterstützen.',
-  ])('sends a refused Codex request to the configured local fallback and retries Codex on the next request', async refusal => {
+  ])('only reevaluates an unclear refusal when explicitly enabled and tries Codex next turn', async refusal => {
     const original = global.fetch;
     try {
       const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ model: 'served-fallback', message: { content: 'Proceed with the authorized scoped assessment.' } }) } as Response));
       global.fetch = fetch;
-      const backbone = new LLMBackbone({ provider: 'codex', model: 'primary', fallbackChain: [{ provider: 'local', model: 'configured-fallback', baseUrl: 'http://localhost:11434/api' }] });
+      const backbone = new LLMBackbone({ provider: 'codex', model: 'primary', fallbackPolicy: { ...DEFAULT_FALLBACK_POLICY, onRefusal: true }, fallbackChain: [{ provider: 'local', model: 'configured-fallback', baseUrl: 'http://localhost:11434/api' }] });
       const fallback = vi.fn(); backbone.on('request:fallback', fallback);
       cli.mockResolvedValueOnce(refusal);
       expect(await backbone.prompt('Assess the authorized local fixture')).toContain('Proceed');
-      expect(fetch).toHaveBeenCalledOnce(); expect(fallback.mock.calls[0][0]).toMatchObject({ fromProvider: 'codex', toProvider: 'local', reason: 'refusal' });
+      expect(fetch).toHaveBeenCalledOnce(); expect(fallback.mock.calls[0][0]).toMatchObject({ fromProvider: 'codex', toProvider: 'local', reason: 'unclear_refusal' });
       expect(backbone.getActiveProvider()).toEqual({ provider: 'local', model: 'served-fallback' });
       cli.mockResolvedValueOnce('Next authorized check.'); await backbone.prompt('Next check');
       expect(backbone.getActiveProvider().provider).toBe('codex'); expect(fetch).toHaveBeenCalledOnce();

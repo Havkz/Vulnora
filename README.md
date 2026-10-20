@@ -68,6 +68,10 @@ Select providers and scanning behavior in **Settings**. The selected primary pro
 
 Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` selects an alternative directory. Private CLI credential files remain owned by their providers and are neither copied nor modified.
 
+**Settings → Fallback policy** and `vulnora fallback` configure the replacement model
+and separate API-error, rate-limit and refusal behavior. Refusal fallback defaults
+to off; safety refusals never switch models. See [fallback configuration](docs/FALLBACK.md).
+
 Assessments have no default cumulative AI token or step budget. Technical failures trigger recovery or a saved pause; partial coverage is shown explicitly. See [execution and recovery rules](docs/SCAN_EXECUTION.md).
 
 ## Architecture
@@ -93,7 +97,7 @@ npm run build        # Compile to dist/
 npm run arsenal:doctor -- --offline --strict
 ```
 
-Tests include local HTTP/TCP fixtures, checkpoint recovery, scope enforcement, tool-call deduplication, terminal interaction and provider lifecycle behavior. The [CI workflow](.github/workflows/ci.yml) defines the automated checks; external provider access and scanner installation require workstation validation.
+Tests include local HTTP/TCP fixtures, checkpoint recovery, scope enforcement, tool-call deduplication, terminal interaction and provider lifecycle behavior. The [controlled CI workflow](.github/workflows/codexpi-ci.yml) runs Windows checks and Linux checks in WSL on the project's private Windows runner; external provider access and scanner installation require workstation validation.
 
 ## Development status
 

@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 /**
  * test-model-fallback — unit tests for the failure classifiers that drive
- * LLMBackbone's model-fallback ladder. The ladder escalates to the next model on
- * ANY failure the current one can't self-recover from:
- *   • soft failures on a 200  → classifySoftFailure() : 'refusal' | 'empty' | null
- *   • hard thrown errors      → classifyErrorKind()   : rate_limit/auth/timeout/…
+ * LLMBackbone's policy-controlled, finite model-fallback ladder.
  *
  * The hard requirement for refusal detection isn't catching refusals (easy) — it's
  * NOT firing on the "I can't find / I cannot reach" progress chatter a hacking
@@ -16,12 +13,12 @@
  */
 import {
   isLikelyRefusal,
-  reframeWithAuthorizedContext,
   classifySoftFailure,
   classifyErrorKind,
   LLMApiError,
   LLMBackbone,
 } from '../dist/llm/index.js';
+import { DEFAULT_FALLBACK_POLICY, permitsFallback } from '../dist/llm/fallback-policy.js';
 import { mkdtemp, readFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -75,7 +72,7 @@ ok('long substantive answer (>1200 chars) not a refusal',
 
 // ── classifySoftFailure — the 200-but-unusable gate ──────────────────────────
 console.log('\nSOFT FAILURES — classify a 200 that should still fall back:');
-ok('refusal → "refusal"',        classifySoftFailure({ content: 'I cannot assist with that.' }) === 'refusal');
+ok('generic refusal → unclear', classifySoftFailure({ content: 'I cannot assist with that.' }) === 'unclear_refusal');
 ok('empty string → "empty"',     classifySoftFailure({ content: '' }) === 'empty');
 ok('whitespace-only → "empty"',  classifySoftFailure({ content: '   \n  ' }) === 'empty');
 ok('undefined content → "empty"',classifySoftFailure({}) === 'empty');
@@ -96,19 +93,12 @@ ok('400 plain → bad_request', classifyErrorKind(new LLMApiError('bad params', 
 ok('abort → timeout',        classifyErrorKind(new Error('The operation was aborted due to timeout')) === 'timeout');
 ok('ECONNREFUSED → network', classifyErrorKind(new Error('connect ECONNREFUSED 1.2.3.4:443')) === 'network');
 ok('Codex policy block → refusal',
-   classifyErrorKind(new Error('Codex CLI exited 1: ERROR: This content was flagged for possible cybersecurity risk. Join the Trusted Access for Cyber program.')) === 'refusal');
+   classifyErrorKind(new Error('Codex CLI exited 1: ERROR: This content was flagged for possible cybersecurity risk. Join the Trusted Access for Cyber program.')) === 'security_refusal');
 ok('null → unknown',         classifyErrorKind(null) === 'unknown');
 ok('odd error → unknown',    classifyErrorKind(new Error('something weird happened')) === 'unknown');
 
-// ── reframeWithAuthorizedContext — honest, non-mutating ──────────────────────
-console.log('\nRE-FRAME — truthful authorization restatement (refusal hop only):');
-const orig = [{ role: 'user', content: 'enumerate the target' }];
-const reframed = reframeWithAuthorizedContext(orig);
-ok('prepends exactly one system note', reframed.length === orig.length + 1 && reframed[0].role === 'system');
-ok('does not mutate the original', orig.length === 1 && orig[0].role === 'user');
-ok('states real authorization, not a jailbreak',
-   /authoriz/i.test(reframed[0].content) && /scope/i.test(reframed[0].content) &&
-   !/ignore|jailbreak|no restrictions|godmode|pretend/i.test(reframed[0].content));
+ok('refusal fallback is off by default', !permitsFallback('unclear_refusal'));
+ok('security refusals never advance', !permitsFallback('security_refusal', { ...DEFAULT_FALLBACK_POLICY, onRefusal: true }));
 
 // ── INTEGRATION: the real ladder flow in LLMBackbone.chat() (stubbed adapters) ─
 console.log('\nLADDER FLOW (integration):');
@@ -116,7 +106,7 @@ console.log('\nLADDER FLOW (integration):');
   const mk = (content, finishReason) => ({ chat: async () => ({ content, finishReason }), validateConfig: () => ({ valid: true }) });
   const mkErr = (err) => ({ chat: async () => { throw err; }, validateConfig: () => ({ valid: true }) });
   const newBackbone = (fallbackChain) => {
-    const b = new LLMBackbone({ provider: 'mock', model: 'primary', fallbackChain });
+    const b = new LLMBackbone({ provider: 'mock', model: 'primary', fallbackChain, fallbackPolicy: { ...DEFAULT_FALLBACK_POLICY, onRefusal: true } });
     b.retryAttempts = 1; // fail fast in tests
     return b;
   };
@@ -151,7 +141,7 @@ console.log('\nLADDER FLOW (integration):');
 }
 
 const auditText = await readFile(auditPath, 'utf8');
-ok('fallback audit records trigger reason', auditText.includes('"event":"fallback_trigger"') && auditText.includes('"reason":"refusal"'));
+ok('fallback audit records trigger reason', auditText.includes('"event":"fallback_trigger"') && auditText.includes('"reason":"unclear_refusal"'));
 ok('fallback audit records fallback answer', auditText.includes('"event":"fallback_result"') && auditText.includes('Found a concrete bug at line 42.'));
 await rm(auditDir, { recursive: true, force: true });
 

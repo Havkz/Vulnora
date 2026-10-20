@@ -55,8 +55,7 @@ export async function validateProvider(config: LLMConfig, signal: AbortSignal, c
 
 /** Keep the chosen primary first; load local fallback only when a request needs it. */
 export class ProviderSession {
-  private localSession?: ReturnType<typeof createOllamaSession>;
-  private localConfig?: Pick<LLMConfig, 'model' | 'baseUrl'>;
+  private localSessions = new Map<string, ReturnType<typeof createOllamaSession>>();
   private effective: LLMConfig = { provider: 'deterministic', model: 'evidence-only' };
   readiness?: ProviderReadiness;
   private abort = () => { void this.stop().catch(() => {}); };
@@ -88,16 +87,12 @@ export class ProviderSession {
   }
 
   getConfig(): LLMConfig {
-    return { ...this.effective, fallbackChain: this.effective.fallbackChain?.map(entry => ({ ...entry })) };
+    return { ...this.effective, fallbackPolicy: this.effective.fallbackPolicy ? { ...this.effective.fallbackPolicy } : undefined,
+      fallbackChain: this.effective.fallbackChain?.map(entry => ({ ...entry })) };
   }
 
   updateSelection(): void {
-    const primary = this.configuration.getLLMConfig();
-    const local = this.configuration.getLLMConfig('local');
-    this.effective = { ...primary, fallbackChain: [
-      ...(primary.provider !== 'local' && local.model?.trim() ? [local] : []),
-      { provider: 'deterministic', model: 'evidence-only' },
-    ] };
+    this.effective = this.configuration.getLLMConfig();
   }
 
   description(): string {
@@ -107,23 +102,28 @@ export class ProviderSession {
   }
 
   track(backbone: LLMBackbone): void {
-    const retain = () => this.localSession?.retain();
-    backbone.on('request:start', () => { if (backbone.getProvider() === 'local') retain(); });
-    backbone.on('request:fallback', event => { if (event.toProvider === 'local') retain(); });
+    backbone.on('request:provider', provider => {
+      if (provider.provider === 'local') this.localSessionFor(provider).retain();
+    });
+  }
+
+  private localSessionFor(local: LLMConfig): ReturnType<typeof createOllamaSession> {
+    const key = JSON.stringify([local.model, local.baseUrl || 'http://127.0.0.1:11434/api']);
+    let session = this.localSessions.get(key);
+    if (!session) { session = createOllamaSession({ ...local, fallbackChain: [] }); this.localSessions.set(key, session); }
+    return session;
   }
 
   async prepare(report?: ProgressReporter, checkSignal = this.signal, check: 'primary' | 'local' = 'primary'): Promise<string> {
     this.signal.throwIfAborted();
-    const primary = { ...this.configuration.getLLMConfig(), fallbackChain: [] };
-    const chosen = this.configuration.getLLMConfig('local');
+    this.updateSelection();
+    const primary = { ...this.effective, fallbackChain: [] };
+    const chosen = check === 'local' ? this.configuration.getLLMConfig('local')
+      : primary.provider === 'local' ? primary
+      : this.effective.fallbackChain?.find(entry => entry.provider === 'local') || this.configuration.getLLMConfig('local');
     const local = chosen.model?.trim() ? { ...chosen, fallbackChain: [] } : undefined;
-    if (this.localSession && (!local || this.localConfig?.model !== local.model || this.localConfig.baseUrl !== local.baseUrl)) await this.stop();
-    if (local && !this.localSession) {
-      this.localSession = createOllamaSession(local);
-      this.localConfig = { model: local.model, baseUrl: local.baseUrl };
-    }
+    if (local) this.localSessionFor(local);
     const deterministic = { provider: 'deterministic' as const, model: 'evidence-only' };
-    this.effective = { ...primary, fallbackChain: [...(primary.provider !== 'local' && local ? [local] : []), deterministic] };
     const state: ProviderReadiness = {
       configured: { provider: primary.provider, model: primary.model },
       primary: { ready: false, detail: 'checked on first request' },
@@ -134,7 +134,7 @@ export class ProviderSession {
     const detail = (error: unknown) => String(redactSecrets(error instanceof Error ? error.message : String(error)));
     if (check === 'local') {
       if (!local) throw new Error('Select or manually add a local model in Settings.');
-      this.localSession?.retain();
+      this.localSessionFor(local).retain();
       await validateProvider(local, AbortSignal.any([this.signal, checkSignal]), undefined, report);
       state.local = { ready: true, model: local.model, detail: 'inference ready' };
       return `Local ${local.model}: inference ready. Primary ${primary.provider}/${primary.model} remains selected; it was not tested.`;
@@ -152,8 +152,8 @@ export class ProviderSession {
       } catch (error) {
         this.signal.throwIfAborted();
         state.primary.detail = checkSignal.aborted ? 'check skipped; retried on first request' : detail(error);
-        if (!checkSignal.aborted && !local) throw new Error(this.description());
-        if (!checkSignal.aborted && local) report?.({ label: `Primary unavailable; ${local.model} fallback will be tried on first request`, status: 'skipped' });
+        if (!checkSignal.aborted && (!this.effective.fallbackChain?.length || this.effective.fallbackPolicy?.enabled === false)) throw new Error(this.description());
+        if (!checkSignal.aborted) report?.({ label: 'Primary unavailable; the first request will apply the configured fallback policy', status: 'skipped' });
       }
     }
     report?.({ label: `Using ${state.active.provider}/${state.active.model}`, status: 'completed' });
@@ -161,9 +161,13 @@ export class ProviderSession {
   }
 
   async stop(): Promise<void> {
-    const held = this.localSession;
-    await held?.stop();
-    if (this.localSession === held) { this.localSession = undefined; this.localConfig = undefined; }
+    const failures: unknown[] = [];
+    // Reverse acquisition order restores the previous keep-alive environment.
+    for (const [key, session] of [...this.localSessions].reverse()) {
+      try { await session.stop(); this.localSessions.delete(key); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Could not release all local model sessions.');
   }
 
   async close(): Promise<void> {
