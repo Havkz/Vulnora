@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import type { config as settings, ApiKeyProvider } from '../config/index.js';
 import type { ProjectSession, ProjectLogEvent } from '../projects/session.js';
 import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from '../projects/store.js';
+import { normalizeAssessmentRules } from '../projects/assessment.js';
 import { validateProjectName, validateProjectTarget } from '../projects/targets.js';
 import type { LLMConfig, CLIReasoningEffort, FallbackPolicy, LLMProvider } from '../types/index.js';
 import { fitTerminalText, initializeTerminal, TerminalInterrupted, TerminalSurface, terminalText, wrapTerminalText } from './terminal.js';
@@ -139,7 +140,7 @@ export class InteractiveApp {
         offset = Math.max(0, Math.min(offset, Math.max(0, target.length - room)));
         return { lines: [...logo, ...(logo.length ? [''] : []), ...this.surface.panel([
           ...target.slice(offset, offset + room).map(line => this.surface.colors.foreground(line)), '', ...status])],
-        footer: this.surface.columns < 60 ? 'Enter Start  Esc Edit' : 'Enter Start    Esc Edit    PgUp/PgDn Target    Ctrl+X Save & Quit' };
+        footer: this.surface.columns < 60 ? 'Enter Start  R Rules  Esc Edit' : 'Enter Start    R Rules    Esc Edit    PgUp/PgDn Target    Ctrl+X Save & Quit' };
       });
       const { key } = await this.surface.nextKey();
       if (key.name === 'up' || key.name === 'pageup') offset -= key.name === 'up' ? 1 : room;
@@ -151,19 +152,47 @@ export class InteractiveApp {
         try {
           answer = await this.surface.prompt('Target URL or IP:', project.inputDraft ?? project.target.input, false,
             value => { project.inputDraft = value; });
-        } finally { await this.services.store.save(project); }
+        } finally { Object.assign(project, await this.services.store.updateReadyProject(project.id, { inputDraft: project.inputDraft })); }
         if (answer === undefined) return;
         try {
-          project.target = validateProjectTarget(answer); project.inputDraft = undefined; project.checkpoint = undefined;
-          await this.services.store.save(project);
+          Object.assign(project, await this.services.store.updateReadyProject(project.id, { targetInput: answer, inputDraft: undefined }));
           width = 0;
         }
         catch (error) { await this.notice('Invalid target', (error as Error).message); }
+      } else if (key.name === 'r' && !key.ctrl) {
+        await this.assessmentRules(project); width = 0;
       } else if (key.name === 'return') {
         this.session = await this.services.open(project.id, this.services.llm());
         await this.scan();
         return;
       }
+    }
+  }
+
+  private async assessmentRules(project: ProjectRecord): Promise<void> {
+    if (project.checkpoint) { await this.notice('Assessment rules', 'Rules are fixed after the first start. Create a new project for a different authorization scope.'); return; }
+    for (;;) {
+      const rules = normalizeAssessmentRules(project.assessment);
+      const choice = await this.surface.menu('Assessment rules', ['Additional authorized hosts', 'Excluded hosts', 'Excluded tools', 'Rate limit', 'Back'],
+        selected => [
+          [`Additional hosts: ${rules.scopeHosts.join(', ') || 'none'}`, 'The target and its subdomains are already included. Bare hostnames or IPs only.'],
+          [`Excluded hosts: ${rules.excludedHosts.join(', ') || 'none'}`, 'Exclusions override host allowances and include all subdomains. No paths, ports, wildcards or CIDRs.'],
+          [`Excluded tools: ${rules.excludedTools.join(', ') || 'none'}`, 'Exact tool IDs; removed from the model toolkit and blocked before execution.'],
+          [`Rate: ${rules.requestsPerSecond ? rules.requestsPerSecond + '/s per host maximum' : 'intensity preset'}`, 'A ceiling shared by operators; the intensity preset or server backoff may be slower.'],
+          ['Rules are saved immediately and become fixed when the project first starts.'],
+        ][selected]);
+      if (choice === undefined || choice === 4) return;
+      const keys = ['scopeHosts', 'excludedHosts', 'excludedTools'] as const;
+      const key = keys[choice];
+      const answer = await this.surface.prompt(choice === 3 ? 'Maximum requests/sec per host (blank = preset):' : `${['Authorized hosts', 'Excluded hosts', 'Excluded tool IDs'][choice]} (comma separated):`,
+        choice === 3 ? String(rules.requestsPerSecond ?? '') : rules[key].join(', '));
+      if (answer === undefined) continue;
+      try {
+        if (choice === 3) rules.requestsPerSecond = answer.trim() ? Number(answer) : undefined;
+        else rules[key] = answer.trim() ? answer.split(',').map(value => value.trim()) : [];
+        const next = normalizeAssessmentRules(rules, project.target.input);
+        Object.assign(project, await this.services.store.updateReadyProject(project.id, { assessment: next }));
+      } catch (error) { await this.notice('Invalid assessment rules', (error as Error).message); }
     }
   }
 

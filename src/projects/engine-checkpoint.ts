@@ -1,3 +1,4 @@
+import { normalizeAssessmentRules, type AssessmentRules } from './assessment.js';
 import type { MissionControl } from '../mission/index.js';
 import type { ToolOrchestrator } from '../orchestrator/tool-orchestrator.js';
 import type { OpsecController } from '../opsec/index.js';
@@ -11,6 +12,7 @@ import { ScanPolicy } from '../orchestrator/scan-policy.js';
 
 export interface EngineCheckpoint {
   version: 1;
+  assessment?: AssessmentRules;
   limits: { maxOperators: number; taskTimeoutMs: number };
   mission: ReturnType<MissionControl['exportCheckpoint']>;
   targets: Target[];
@@ -41,6 +43,7 @@ export function validateEngineCheckpoint(value: unknown): asserts value is Engin
   const fail = (): never => { throw new Error('Invalid scanner checkpoint; saved project was retained and no scan started.'); };
   if (!record(value) || value.version !== 1) return fail();
   const saved = value as unknown as EngineCheckpoint;
+  const assessment = normalizeAssessmentRules(saved.assessment);
   if (!record(saved.limits) || !count(saved.limits.maxOperators) || saved.limits.maxOperators < 1
     || !count(saved.limits.taskTimeoutMs) || saved.limits.taskTimeoutMs < 1) return fail();
   if (!record(saved.mission) || !objects(saved.mission.missions) || !objects(saved.mission.tasks)
@@ -120,6 +123,7 @@ export function validateEngineCheckpoint(value: unknown): asserts value is Engin
   for (const [, wildcard] of orchestrator.wildcardDns) if (!record(wildcard) || typeof wildcard.detected !== 'boolean' || !strings(wildcard.addresses) || !Number.isFinite(wildcard.checkedAt)) return fail();
   if (!orchestrator.lastHostRequest.every(([, at]) => Number.isFinite(at))) return fail();
   if (orchestrator.scanPolicy !== undefined) ScanPolicy.validateCheckpoint(orchestrator.scanPolicy);
+  if (assessment.requestsPerSecond !== orchestrator.scanPolicy?.requestsPerSecond) return fail();
   const opsec = saved.opsec;
   if (!record(opsec) || !record(opsec.config) || !['silent', 'covert', 'loud'].includes(opsec.config.level)
     || !count(opsec.config.maxDetectionEvents) || opsec.config.maxDetectionEvents < 1

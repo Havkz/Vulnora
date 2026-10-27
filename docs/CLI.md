@@ -10,11 +10,12 @@ vulnora run --resume <project-uuid>
 vulnora run https://authorized.example --provider codex --model codex-default --reasoning high
 vulnora run https://authorized.example --provider claude --model sonnet --reasoning medium
 vulnora run https://authorized.example --fallback-provider local --fallback-model installed-model:7b
+vulnora run https://authorized.example --scope api.authorized.example --exclude admin.authorized.example --exclude-tool nmap_scan --rate-limit 2
 vulnora run --help
 ```
 
 Use an explicit HTTP(S) URL. Resume accepts a saved UUID and preserves its target
-and intensity; it cannot be combined with a new URL, name or intensity. Projects
+and assessment rules; it cannot be combined with a new URL, name, intensity or scope/rate override. Projects
 created in either interface are accessible from both. Provider/model overrides
 apply to this process and do not modify saved settings or the installed CLI's
 own configuration. `claude` selects the installed Claude Code CLI.
@@ -28,7 +29,18 @@ own configuration. `claude` selects the installed Claude Code CLI.
 | `--fallback-provider`, `--fallback-model` | Override the alternative provider/model. |
 | `--fallback-on-api-error`, `--fallback-on-rate-limit`, `--fallback-on-refusal` | Boolean overrides of the [central policy](FALLBACK.md); safety refusals never reroute. |
 | `--verbose` | Expand process output using the existing transcript formatter. |
+| `--scope <host>` | Additional authorized hostname/IP; repeat for multiple hosts. Domains include their subdomains. |
+| `--exclude <host>` | Exclude a requested hostname/IP and its subdomains, even if an allow rule matches. Repeatable. |
+| `--exclude-tool <id>` | Remove an exact tool ID from model definitions and block its execution. Repeatable. |
+| `--rate-limit <integer>` | Per-host ceiling, 1–1000 requests/second; existing intensity/backoff may be slower. |
 | `--resume` | Reopen a saved project without creating another one. |
+
+Use bare hostnames or IPs in host rules. Paths, ports, wildcard expressions and
+CIDRs are rejected rather than silently widened. Excluding the primary target
+is an error. These options persist in both the project record and checkpoint;
+changing the saved rules without their matching checkpoint prevents resume.
+In the TUI, press `R` on the existing READY screen to edit rules before starting.
+See [scope enforcement and limits](SCOPE_AND_AUTHORIZATION.md#saved-assessment-rules).
 
 The CLI prints the project UUID and resume command before starting. Graceful
 interrupts cancel work, drain outstanding tasks and persist the checkpoint
@@ -60,6 +72,5 @@ provider only, with no fallback. A local model used by that test is released on
 exit; Codex is not tested when `--provider local` is selected.
 
 Configuration uses the same saved settings and `VULNORA_CONFIG_DIR` as the TUI.
-Explicit scope/exclusion/rate overrides, a per-run config file, alternative
-report formats and output-directory flags are still part of the ongoing
+Per-run config files, alternative report formats and output-directory flags are still part of the ongoing
 integration; they are not yet exposed by `run`.

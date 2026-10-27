@@ -2,6 +2,7 @@
  * VULNORA Core Type Definitions
  */
 
+import type { AssessmentRules } from '../projects/assessment.js';
 import type { AgentCheckpoint } from '../agent/checkpoint.js';
 
 // =============================================================================
@@ -518,6 +519,7 @@ export interface VulnoraConfig {
   /** Restrict project scans to explicitly selected hosts, including local targets. */
   strictScope?: boolean;
   scanningBehavior?: 'auto' | 'stealth' | 'aggressive';
+  assessment?: Partial<AssessmentRules>;
   hooks?: RuntimeHooks;
 }
 

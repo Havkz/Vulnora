@@ -1,3 +1,5 @@
+import { normalizeHostname } from '../projects/targets.js';
+import { validateRequestRate } from '../projects/assessment.js';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export type ScanningBehavior = 'auto' | 'stealth' | 'aggressive';
@@ -8,12 +10,19 @@ export const SCAN_PRESETS = {
 } as const;
 
 interface HostState { nextStart: number; backoffUntil: number; penalty: number; stable: number; latencyMs: number }
-export interface ScanPolicyCheckpoint { behavior: ScanningBehavior; hosts: [string, HostState][] }
+export interface ScanPolicyCheckpoint { behavior: ScanningBehavior; requestsPerSecond?: number; hosts: [string, HostState][] }
 const emptyHost = (): HostState => ({ nextStart: 0, backoffUntil: 0, penalty: 0, stable: 0, latencyMs: 0 });
 
 /** Shared by all operators; mode changes retain server backoff and accumulated budgets. */
 export class ScanPolicy {
   behavior?: ScanningBehavior;
+  private requestsPerSecond?: number;
+
+  setRateLimit(value?: number): void {
+    validateRequestRate(value);
+    this.requestsPerSecond = value;
+    if (value !== undefined) this.behavior ??= 'auto';
+  }
   private hosts = new Map<string, HostState>();
   private active = new Map<string, number>();
   private external = new Set<string>();
@@ -25,6 +34,7 @@ export class ScanPolicy {
   }
 
   private state(host: string): HostState {
+    host = normalizeHostname(host);
     let state = this.hosts.get(host);
     if (!state) { state = emptyHost(); this.hosts.set(host, state); }
     return state;
@@ -40,7 +50,7 @@ export class ScanPolicy {
     return {
       operators: Math.max(1, Math.floor(preset.operators / factor)),
       concurrency: Math.max(1, Math.floor(preset.concurrency / factor)),
-      intervalMs: Math.min(8000, preset.intervalMs * factor),
+      intervalMs: Math.max(Math.min(8000, preset.intervalMs * factor), this.requestsPerSecond ? Math.ceil(1000 / this.requestsPerSecond) : 0),
       timeoutMs: Math.min(timeoutCeiling, Math.max(preset.timeoutMs, Math.ceil(state.latencyMs * 4))),
       retries: preset.retries,
       backoffMs: Math.min(60_000, preset.backoffMs * factor),
@@ -86,6 +96,7 @@ export class ScanPolicy {
 
   async runNetwork<T>(host: string, runner: () => Promise<T>, signal?: AbortSignal, exclusive = true, lane = 'web'): Promise<T> {
     if (!this.behavior) return runner();
+    host = normalizeHostname(host);
     const release = await this.acquire(host, signal, exclusive, true, lane);
     try {
       signal?.throwIfAborted();
@@ -100,7 +111,8 @@ export class ScanPolicy {
     if (!this.behavior) return args;
     const limits = this.limits(host);
     const rate = String(Math.max(1, Math.floor(1000 / limits.intervalMs)));
-    const concurrency = String(limits.concurrency);
+    // Delay-only clients apply pacing per worker, so use one worker under an explicit cap.
+    const concurrency = String(this.requestsPerSecond !== undefined && ['sqlmap', 'gobuster', 'whatweb'].includes(command) ? 1 : limits.concurrency);
     const seconds = String(Math.ceil(limits.timeoutMs / 1000));
     const retries = String(limits.retries);
     const options: Record<string, string[]> = {
@@ -139,7 +151,7 @@ export class ScanPolicy {
 
   async fetch(url: URL, init: RequestInit, beforeRequest: () => Promise<void>, transport = globalThis.fetch): Promise<Response> {
     if (!this.behavior) return transport(url, init);
-    const host = url.hostname;
+    const host = normalizeHostname(url.hostname);
     const method = (init.method || 'GET').toUpperCase();
     const retrySafe = (method === 'GET' || method === 'HEAD') && (init.body === undefined || init.body === null);
     for (let attempt = 0; ; attempt++) {
@@ -195,11 +207,12 @@ export class ScanPolicy {
   }
 
   exportCheckpoint(): ScanPolicyCheckpoint | undefined {
-    return this.behavior ? structuredClone({ behavior: this.behavior, hosts: [...this.hosts] }) : undefined;
+    return this.behavior ? structuredClone({ behavior: this.behavior, ...(this.requestsPerSecond === undefined ? {} : { requestsPerSecond: this.requestsPerSecond }), hosts: [...this.hosts] }) : undefined;
   }
 
   static validateCheckpoint(value: unknown): asserts value is ScanPolicyCheckpoint {
     const saved = value as ScanPolicyCheckpoint;
+    validateRequestRate(saved?.requestsPerSecond);
     if (!saved || !Object.hasOwn(SCAN_PRESETS, saved.behavior) || !Array.isArray(saved.hosts)
       || !saved.hosts.every(entry => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string'
         && entry[1] && ['nextStart', 'backoffUntil', 'latencyMs'].every(key => Number.isFinite(entry[1][key as keyof HostState]) && entry[1][key as keyof HostState] >= 0)
@@ -213,6 +226,7 @@ export class ScanPolicy {
     ScanPolicy.validateCheckpoint(saved);
     if (this.active.size) throw new Error('Cannot restore an active scanning policy.');
     this.behavior = saved.behavior;
+    this.setRateLimit(saved.requestsPerSecond);
     this.hosts = new Map(structuredClone(saved.hosts));
   }
 }

@@ -2,6 +2,12 @@ import { isIP } from 'node:net';
 
 export interface ProjectTarget { input: string; kind: 'url' | 'ip' | 'hostname'; hostname: string }
 
+/** Canonical host identity for scope comparisons and shared request pacing. */
+export function normalizeHostname(host: string): string {
+  const value = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  return isIP(value) === 6 ? new URL(`http://[${value}]`).hostname.slice(1, -1) : value;
+}
+
 export function validateProjectName(input: string): string {
   const name = input.trim();
   if (!name || name.length > 120 || /[\p{Cc}\p{Cf}]/u.test(name)) throw new Error('Use a project name of 1–120 visible characters.');

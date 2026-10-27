@@ -1,3 +1,4 @@
+import { normalizeAssessmentRules, type AssessmentRules } from './assessment.js';
 import { mkdir, open, rename, readFile, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -29,6 +30,7 @@ export interface ProjectRecord<Checkpoint = unknown> {
   progress: number;
   workDurationMs?: number;
   behavior: ScanningBehavior;
+  assessment?: AssessmentRules;
   checkpoint?: Checkpoint;
   inputDraft?: string;
   report?: { markdown: string; generatedAt: number };
@@ -52,6 +54,7 @@ function validateRecord(value: unknown): asserts value is ProjectRecord {
     || !Number.isFinite(project.createdAt) || !Number.isFinite(project.lastActivity)
     || !Number.isFinite(project.progress) || project.progress < 0 || project.progress > 100) throw new Error('Invalid project metadata.');
   validateProjectName(project.name);
+  normalizeAssessmentRules(project.assessment, project.target.input);
   if (project.inputDraft !== undefined && (typeof project.inputDraft !== 'string' || project.inputDraft.length > 8192)) throw new Error('Invalid pending target input.');
   if (project.workDurationMs !== undefined && (!Number.isFinite(project.workDurationMs) || project.workDurationMs < 0)) throw new Error('Invalid project work duration.');
   const validated = validateProjectTarget(project.target.input);
@@ -70,10 +73,11 @@ export class ProjectStore {
     return join(this.directory, id + suffix);
   }
 
-  async create(name: string, target: string, behavior: ScanningBehavior = 'auto'): Promise<ProjectRecord> {
+  async create(name: string, target: string, behavior: ScanningBehavior = 'auto', assessment?: Partial<AssessmentRules>): Promise<ProjectRecord> {
     const project: ProjectRecord = {
       version: 1, id: randomUUID(), name: validateProjectName(name), target: validateProjectTarget(target),
       createdAt: Date.now(), lastActivity: Date.now(), status: 'ready', progress: 0, behavior,
+      ...(assessment === undefined ? {} : { assessment: normalizeAssessmentRules(assessment, target) }),
     };
     await this.save(project);
     return project;
@@ -83,6 +87,20 @@ export class ProjectStore {
     validateRecord(project);
     // Capture the checkpoint now, before a running operator mutates its next step.
     await this.publish(project.id, '.json', JSON.stringify(project));
+  }
+
+  async updateReadyProject(id: string, changes: { targetInput?: string; assessment?: Partial<AssessmentRules>; inputDraft?: string }): Promise<ProjectRecord> {
+    const release = await acquireProjectLease(this.directory, id);
+    try {
+      const project = await this.load(id);
+      if (project.status !== 'ready' || project.checkpoint !== undefined) throw new Error('Assessment rules and target are fixed after the first start. Create a new project to change them.');
+      if (changes.targetInput !== undefined) project.target = validateProjectTarget(changes.targetInput);
+      project.assessment = normalizeAssessmentRules(changes.assessment ?? project.assessment, project.target.input);
+      if (Object.hasOwn(changes, 'inputDraft')) project.inputDraft = changes.inputDraft;
+      project.lastActivity = Date.now();
+      await this.save(project);
+      return project;
+    } finally { await release(); }
   }
 
   private async publish(id: string, suffix: string, data: string): Promise<void> {

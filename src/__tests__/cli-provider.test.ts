@@ -82,7 +82,8 @@ describe('CLI provider selection over actual loopback HTTP', () => {
   it.skipIf(process.platform === 'win32')('saves a headless project on SIGINT instead of exiting before cleanup', async () => {
     const { directory, env } = await fixture();
     const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../cli.ts', import.meta.url)),
-      'run', 'http://127.0.0.1:1/', '--provider', 'local', '--model', 'installed:7b', '--fallback-enabled', 'false'],
+      'run', 'http://127.0.0.1:1/', '--provider', 'local', '--model', 'installed:7b', '--fallback-enabled', 'false',
+      '--scope', 'localhost', '--exclude', 'blocked.localhost', '--exclude-tool', 'nmap_scan', '--rate-limit', '2'],
     { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; let id: string | undefined; let interruption: ReturnType<typeof setTimeout> | undefined;
     const timeout = setTimeout(() => child.kill('SIGKILL'), 20000);
@@ -97,6 +98,8 @@ describe('CLI provider selection over actual loopback HTTP', () => {
       expect(code, output).toBe(130); expect(id).toBeDefined();
       const saved = JSON.parse(await readFile(join(directory, 'projects', `${id}.json`), 'utf8'));
       expect(saved.status).toBe('paused'); expect(saved.checkpoint.targets[0].address).toBe('http://127.0.0.1:1/');
+      expect(saved.assessment).toEqual({ scopeHosts: ['localhost'], excludedHosts: ['blocked.localhost'], excludedTools: ['nmap_scan'], requestsPerSecond: 2 });
+      expect(saved.checkpoint.assessment).toEqual(saved.assessment);
       expect(output).toContain('checkpoint retained');
     } finally { clearTimeout(timeout); clearTimeout(interruption); if (child.exitCode === null) child.kill('SIGKILL'); }
   }, 25000);

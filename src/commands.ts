@@ -9,6 +9,7 @@ import { ProviderSession, validateProvider } from './llm/provider-session.js';
 import { stopOwnedOllama } from './llm/local-service.js';
 import { CLI_PROVIDERS, resolveInference, type InferenceOptions } from './cli-inference.js';
 import type { ProjectRecord, ScanningBehavior } from './projects/store.js';
+import { normalizeAssessmentRules } from './projects/assessment.js';
 import { validateProjectTarget } from './projects/targets.js';
 import { formatProjectLog } from './ui/project-log.js';
 import { redactSecrets } from './redact.js';
@@ -105,17 +106,23 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
   .option('--resume <id>', 'Resume a saved project UUID; its target and intensity remain unchanged')
   .addOption(new Option('--intensity <mode>', 'Scanning behavior').choices(['auto', 'stealth', 'aggressive']))
   .option('--verbose', 'Show full command output')
+  .option('--scope <host>', 'Additional authorized hostname or IP, including subdomains (repeatable)', collectOption, [])
+  .option('--exclude <host>', 'Exclude a hostname/IP and its subdomains (repeatable)', collectOption, [])
+  .option('--exclude-tool <id>', 'Exclude an exact tool ID (repeatable)', collectOption, [])
+  .option('--rate-limit <number>', 'Maximum requests/sec per host (integer 1–1000; intensity may be slower)', Number)
   .option('--fallback-enabled <boolean>', 'Override fallback for this process', parseBoolean)
   .addOption(new Option('--fallback-provider <provider>', 'Fallback provider for this process').choices(CLI_PROVIDERS))
   .option('--fallback-model <model>', 'Fallback inference model ID')
   .option('--fallback-on-api-error <boolean>', 'Fallback on connection/API errors', parseBoolean)
   .option('--fallback-on-rate-limit <boolean>', 'Fallback on rate limits/quota', parseBoolean)
   .option('--fallback-on-refusal <boolean>', 'Reevaluate technical/unclear refusals only', parseBoolean)
-  .action(async (url: string | undefined, options: InferenceOptions & { name?: string; resume?: string; intensity?: ScanningBehavior; verbose?: boolean }) => {
-    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined)) {
-      throw new Error('Use --resume <id> without a new target, name or intensity.');
+  .action(async (url: string | undefined, options: InferenceOptions & { name?: string; resume?: string; intensity?: ScanningBehavior; verbose?: boolean; scope: string[]; exclude: string[]; excludeTool: string[]; rateLimit?: number }) => {
+    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined || options.scope.length || options.exclude.length || options.excludeTool.length || options.rateLimit !== undefined)) {
+      throw new Error('Use --resume <id> without a new target, name, intensity or assessment rules.');
     }
     if (!options.resume && !url) throw new Error('Provide a target URL or --resume <project-id>.');
+    const assessment = normalizeAssessmentRules({ scopeHosts: options.scope, excludedHosts: options.exclude,
+      excludedTools: options.excludeTool, requestsPerSecond: options.rateLimit }, url);
     const llm = resolveInference(config, options);
     const { ProjectStore } = await import('./projects/store.js');
     const { ProjectSession } = await import('./projects/session.js');
@@ -129,7 +136,7 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
     if (options.resume) project = await store.load(options.resume);
     else {
       if (!target) throw new Error('Provide a target URL.');
-      project = await store.create(options.name || target.hostname, target.input, options.intensity || 'auto');
+      project = await store.create(options.name || target.hostname, target.input, options.intensity || 'auto', assessment);
     }
     showInfo(`Project ${project.id} · ${project.name}`);
     showInfo(`Resume: vulnora run --resume ${project.id}`);
@@ -150,6 +157,8 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
       process.exitCode = controller.signal.aborted ? interruptionCode : 2;
     }
   });
+
+function collectOption(value: string, previous: string[]): string[] { return [...previous, value]; }
 
 function inferenceOptions(command: Command): Command {
   return command.addOption(new Option('--provider <provider>', 'Inference provider (claude selects Claude Code)').choices(CLI_PROVIDERS))

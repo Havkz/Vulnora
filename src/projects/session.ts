@@ -1,3 +1,4 @@
+import { normalizeAssessmentRules } from './assessment.js';
 import { EventEmitter } from 'eventemitter3';
 import { VulnoraCommand } from '../index.js';
 import type { VulnoraConfig } from '../types/index.js';
@@ -29,9 +30,12 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     configuration: Omit<VulnoraConfig, 'name' | 'hooks'>, private release: () => Promise<void>) {
     super();
     this.command = new VulnoraCommand({ ...configuration, name: project.name, strictScope: true,
-      scanningBehavior: project.behavior,
+      scanningBehavior: project.behavior, assessment: normalizeAssessmentRules(project.assessment, project.target.input),
       hooks: { onStateCheckpoint: () => this.persist() } });
     try {
+      for (const name of project.assessment?.excludedTools || []) {
+        if (!this.command.arsenal.getTool(name)) throw new Error(`Unknown excluded tool: ${name}. Review the project assessment rules.`);
+      }
       if (project.checkpoint !== undefined) this.command.restoreCheckpoint(project.checkpoint);
       else {
         this.command.targetEnv.addTarget({ name: project.target.hostname, type: 'web_application',
@@ -80,6 +84,9 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
       const project = await store.load(id);
       if (project.checkpoint !== undefined) validateEngineCheckpoint(project.checkpoint);
       const checkpoint = project.checkpoint as EngineCheckpoint | undefined;
+      if (checkpoint && JSON.stringify(normalizeAssessmentRules(checkpoint.assessment)) !== JSON.stringify(normalizeAssessmentRules(project.assessment))) {
+        throw new Error('Saved assessment rules do not match the project; no scan started.');
+      }
       if (checkpoint && (checkpoint.targets.length !== 1 || checkpoint.targets[0].address !== project.target.input.trim())) {
         throw new Error('Saved scanner scope does not match the original project target; no scan started.');
       }

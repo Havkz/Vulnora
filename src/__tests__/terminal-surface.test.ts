@@ -128,6 +128,14 @@ describe('terminal surface', () => {
     expect(transcript()).toContain('•');
   });
 
+  it('honors Ctrl+X immediately after Esc when readline combines both keys', async () => {
+    const { input, surface } = terminal();
+    const menu = surface.menu('Fixture', ['Continue', 'Back']);
+    const rejected = expect(menu).rejects.toBeInstanceOf(TerminalInterrupted);
+    input.write('\x1b'); input.write('\x18');
+    await rejected;
+  });
+
   it('preserves received edit text on Ctrl+X without submitting a queued Enter or accepting later input', async () => {
     const { input, surface } = terminal(); const changed = vi.fn();
     const editing = surface.prompt('Target URL or IP:', '', false, changed);

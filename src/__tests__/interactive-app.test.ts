@@ -46,6 +46,23 @@ async function fixture(llm: LLMConfig = { provider: 'mock', model: 'fixture' }) 
 }
 
 describe('durable interactive project flow', () => {
+  it('saves assessment rules from the existing ready screen before any scan starts', async () => {
+    const f = await fixture(); const result = f.start();
+    f.input.write('\rRule fixture\r'); await f.wait('Target URL or IP:');
+    f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start');
+    f.input.write('r'); await f.wait('Additional authorized hosts');
+    f.input.write('\r'); await f.wait('Authorized hosts (comma separated):');
+    f.input.write('api.fixture.test\r');
+    await expect.poll(async () => (await f.store.list()).projects[0]?.assessment?.scopeHosts).toEqual(['api.fixture.test']);
+    f.input.write('\x1b[B\x1b[B\x1b[B\r'); await f.wait('Maximum requests/sec per host');
+    f.input.write('2\r');
+    await expect.poll(async () => (await f.store.list()).projects[0]?.assessment?.requestsPerSecond).toBe(2);
+    f.input.write('\x1b[B\x1b[B\x1b[B'); await f.wait('2/s per host maximum'); f.input.write('\x1b');
+    expect(f.open).not.toHaveBeenCalled();
+    f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
+    expect((await f.store.list()).projects[0].assessment).toMatchObject({ scopeHosts: ['api.fixture.test'], requestsPerSecond: 2 });
+  });
+
   it('renders stable activity priority from real project process and model lifecycle events', async () => {
     const f = await fixture(); const screens = vi.spyOn(f.surface, 'show'); const result = f.start();
     f.input.write('\rActivity fixture\r'); await f.wait('Target URL or IP:');

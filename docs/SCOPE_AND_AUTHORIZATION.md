@@ -23,6 +23,35 @@ subdomains, including DNS service labels such as `_dmarc`. Other domains and TLD
 lookalike suffixes and unrelated local addresses remain outside scope. An IP
 target authorizes that address, not hostname strings ending in that IP.
 
+## Saved assessment rules
+
+Before starting, `R Rules` on the READY screen edits additional allowed hosts,
+excluded hosts, excluded tool IDs and a per-host rate ceiling. The same controls
+are available through `run --scope`, `--exclude`, `--exclude-tool` and
+`--rate-limit`. Rules persist with the project and its checkpoint. Resume cannot
+silently replace them; create a new project for changed authorization boundaries.
+Edits use the project lease so another terminal cannot overwrite running work.
+
+- Host rules use bare names or IPs; URL paths, ports, wildcard expressions and
+  CIDRs are rejected. An excluded domain includes its subdomains and takes
+  precedence over allowance. Host case, trailing dots and equivalent IPv6 forms
+  are normalized for comparisons.
+- The backend checks tool target parameters, built-in HTTP redirects and DNS
+  candidates. Excluded tool IDs are omitted from model definitions and rejected
+  before their handler runs, including deterministic backend calls.
+- The optional integer rate ceiling is shared across operators' managed HTTP
+  requests to a host. Mode/backoff limits still apply. External scanners receive
+  their supported rate/delay flags; delay-only clients use one worker under an
+  explicit ceiling. Nmap's limit counts probes, not HTTP requests.
+
+These are application controls, not an OS network firewall. The independent
+destinations and traffic generated inside external scanner templates still need
+broader integration verification. This milestone does not establish containment
+of arbitrary third-party templates or custom executables. Path-level exclusions
+and a separate destructive-action policy remain outstanding integration work.
+
+## Tool execution modes
+
 - `safe_command`: local-read or lab-safe command, still logged and evidence-oriented.
 - `receipt_required`: active, networked, credential-adjacent, or otherwise risky command.
 - `catalog_only`: known capability that should not run through generic command execution.

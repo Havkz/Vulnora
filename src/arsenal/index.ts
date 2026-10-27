@@ -1,3 +1,4 @@
+import { normalizeHostname } from '../projects/targets.js';
 /**
  * VULNORA Arsenal
  *
@@ -32,15 +33,17 @@ import type {
   RiskTier,
 } from '../types/index.js';
 
-const dnsResolve = (domain: string, type: string) => scheduledDns(resolver => resolver.resolve(domain, type), () => dns.promises.resolve(domain, type));
-const dnsResolve4 = (domain: string) => scheduledDns(resolver => resolver.resolve4(domain), () => dns.promises.resolve4(domain));
-const dnsResolveMx = (domain: string) => scheduledDns(resolver => resolver.resolveMx(domain), () => dns.promises.resolveMx(domain));
-const dnsResolveTxt = (domain: string) => scheduledDns(resolver => resolver.resolveTxt(domain), () => dns.promises.resolveTxt(domain));
-const dnsResolveNs = (domain: string) => scheduledDns(resolver => resolver.resolveNs(domain), () => dns.promises.resolveNs(domain));
-const dnsReverse = (ip: string) => scheduledDns(resolver => resolver.reverse(ip), () => dns.promises.reverse(ip));
+const dnsResolve = (domain: string, type: string) => scheduledDns(domain, resolver => resolver.resolve(domain, type), () => dns.promises.resolve(domain, type));
+const dnsResolve4 = (domain: string) => scheduledDns(domain, resolver => resolver.resolve4(domain), () => dns.promises.resolve4(domain));
+const dnsResolveMx = (domain: string) => scheduledDns(domain, resolver => resolver.resolveMx(domain), () => dns.promises.resolveMx(domain));
+const dnsResolveTxt = (domain: string) => scheduledDns(domain, resolver => resolver.resolveTxt(domain), () => dns.promises.resolveTxt(domain));
+const dnsResolveNs = (domain: string) => scheduledDns(domain, resolver => resolver.resolveNs(domain), () => dns.promises.resolveNs(domain));
+const dnsReverse = (ip: string) => scheduledDns(ip, resolver => resolver.reverse(ip), () => dns.promises.reverse(ip));
 
-async function scheduledDns<T>(query: (resolver: dns.promises.Resolver) => Promise<T>, fallback: () => Promise<T>): Promise<T> {
+async function scheduledDns<T>(domain: string, query: (resolver: dns.promises.Resolver) => Promise<T>, fallback: () => Promise<T>): Promise<T> {
   const context = fetchContext.getStore();
+  const denied = scopeViolation(context?.scope || null, { parameters: { domain } });
+  if (denied) throw new Error(`SCOPE DENIED: DNS target '${denied}' is not authorized`);
   const policy = context?.orchestrator?.scanPolicy;
   if (!policy?.behavior || !context?.host) return fallback();
   const host = context.host;
@@ -427,6 +430,9 @@ export interface ToolExecution {
 export interface ArsenalScope {
   /** exact hosts / registrable domains explicitly authorized (subdomains allowed) */
   allowedHosts: string[];
+  /** Exclusions override all allow rules, including implicit subdomains. */
+  excludedHosts?: string[];
+  excludedTools?: string[];
   /** Do not implicitly authorize subdomains for a single-target project. */
   exactHosts?: boolean;
   /** allow 127.0.0.0/8, localhost, ::1 */
@@ -446,7 +452,7 @@ export function hostFromTargetValue(v: unknown): string | null {
   s = s.replace(/^[^@/]*@/, '').replace(/\/.*$/, '');
   if (net.isIP(s) !== 6) s = s.replace(/:\d+$/, '');
   s = s.replace(/^\[|\]$/g, '');
-  return s.toLowerCase() || null;
+  return normalizeHostname(s) || null;
 }
 
 function isLoopbackTargetHost(h: string): boolean {
@@ -489,8 +495,10 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
     }
     candidates.push({ h, v });
   }
-  const allow = scope.allowedHosts.map(a => a.toLowerCase());
+  const allow = scope.allowedHosts.map(a => hostFromTargetValue(a));
+  const excluded = (scope.excludedHosts || []).map(a => hostFromTargetValue(a));
   for (const { h, v } of candidates) {
+    if (excluded.some(a => a && (a === h || (!net.isIP(a) && h.endsWith('.' + a))))) return h;
     // How is the BASE host admitted — and what CIDR prefix keeps the WHOLE range inside that block?
     // hostFromTargetValue strips the mask, so "10.0.0.0/0" (base 10.0.0.0 private) would otherwise
     // sweep the entire internet past a scope authorizing only that base. Validate the range, not the
@@ -498,10 +506,11 @@ export function scopeViolation(scope: ArsenalScope | null, context: ToolContext)
     let minMask: number;
     if (scope.allowLoopback && isLoopbackTargetHost(h)) minMask = 8;              // 127/8, ::1
     else if (scope.allowPrivate && isPrivateTargetHost(h)) minMask = privateBlockMinMask(h);
-    else if (allow.some(a => a === h || (!scope.exactHosts && !net.isIP(a) && h.endsWith('.' + a)))) minMask = net.isIP(h) === 6 ? 128 : 32;
+    else if (allow.some(a => a && (a === h || (!scope.exactHosts && !net.isIP(a) && h.endsWith('.' + a))))) minMask = net.isIP(h) === 6 ? 128 : 32;
     else return h; // base host out of scope
     // treat a trailing "/N" as a CIDR mask ONLY on a bare host/ip (no scheme) — not a URL path segment.
     const cidr = !v.includes('://') && v.match(/^[^/]+\/(\d{1,3})$/);
+    if (cidr && excluded.length && parseInt(cidr[1], 10) < (net.isIP(h) === 6 ? 128 : 32)) return v;
     if (cidr && parseInt(cidr[1], 10) < minMask) return v; // CIDR range extends beyond the authorized block
   }
   return null;
@@ -652,6 +661,12 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
 
     // Egress scope gate: deny out-of-scope network targets BEFORE the handler runs. A tool call
     // never reaches a host outside the authorized scope, regardless of what the model supplied.
+    if (this.scope?.excludedTools?.includes(toolName)) {
+      const denied: ToolResult = { success: false, error: `ASSESSMENT RULES: ${toolName} is excluded for this project.`,
+        metadata: { orchestrationStatus: 'scope_denied', executionStatus: 'blocked' } };
+      this.orchestrator.recordBlocked(tool, context, denied, 'scope_denied');
+      return denied;
+    }
     const blockedHost = scopeViolation(this.scope, context);
     if (blockedHost) {
       const denied: ToolResult = {
@@ -811,7 +826,7 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   }
 
   getToolDefinitions(categories?: string[], names?: string[]): LLMToolDefinition[] {
-    let tools = this.getAllTools();
+    let tools = this.getAllTools().filter(tool => !this.scope?.excludedTools?.includes(tool.name));
     // A per-operator NAME allowlist (the archetype's role toolkit) is the precise gate and
     // takes precedence over the coarse category filter; fall back to categories, then to all.
     if (names?.length) {
@@ -971,10 +986,10 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             records = await dnsResolveNs(domain);
             break;
           case 'SOA':
-            records = await scheduledDns(resolver => resolver.resolveSoa(domain), () => dns.promises.resolveSoa(domain));
+            records = await scheduledDns(domain, resolver => resolver.resolveSoa(domain), () => dns.promises.resolveSoa(domain));
             break;
           case 'CAA':
-            records = await scheduledDns(resolver => resolver.resolveCaa(domain), () => dns.promises.resolveCaa(domain));
+            records = await scheduledDns(domain, resolver => resolver.resolveCaa(domain), () => dns.promises.resolveCaa(domain));
             break;
           case 'DNSKEY':
           case 'DS': {
@@ -1101,7 +1116,8 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         extended: ['www', 'mail', 'ftp', 'admin', 'dev', 'staging', 'api', 'app', 'cdn', 'static', 'test', 'blog', 'shop', 'store', 'portal', 'secure', 'vpn', 'remote', 'webmail', 'ns1', 'ns2', 'mx', 'smtp', 'pop', 'imap', 'cpanel', 'whm', 'webdisk', 'autodiscover', 'autoconfig', 'git', 'gitlab', 'jenkins', 'ci', 'jira', 'confluence', 'wiki', 'docs', 'status', 'monitor', 'grafana', 'prometheus', 'elastic', 'kibana', 'redis', 'mysql', 'postgres', 'mongo', 'db', 'database', 'backup', 'files', 'media', 'assets', 'images', 'img', 'video', 'download', 'upload'],
       };
 
-      const prefixes = wordlists[wordlistType] || wordlists.common;
+      const prefixes = (wordlists[wordlistType] || wordlists.common).filter(prefix =>
+        !scopeViolation(fetchContext.getStore()?.scope || null, { parameters: { domain: `${prefix}.${domain}` } }));
       const found: { subdomain: string; ip: string }[] = [];
 
       // Check subdomains in parallel with concurrency limit

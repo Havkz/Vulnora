@@ -1,3 +1,4 @@
+import { normalizeAssessmentRules, type AssessmentRules } from './projects/assessment.js';
 import { renderLogo, createTheme } from './ui/theme.js';
 /**
  * VULNORA (VULNORA)
@@ -374,6 +375,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   private hooks: RuntimeHooks;
   private defaultOperatorConfig?: VulnoraConfig['operators'];
   private readonly strictScope: boolean;
+  private assessmentRules: AssessmentRules;
   private tickPromise?: Promise<void>;
   private quiescing?: Promise<void>;
   private restoredCompleted = false;
@@ -432,6 +434,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.hooks = config.hooks || {};
     this.defaultOperatorConfig = config.operators;
     this.strictScope = config.strictScope === true;
+    this.assessmentRules = normalizeAssessmentRules(config.assessment);
     this.taskTimeoutMs = VulnoraCommand.resolveTaskTimeoutMs(config.llm.provider);
 
     // Initialize LLM backbone
@@ -446,6 +449,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     if (this.hooks.onStateCheckpoint) this.arsenal.getOrchestrator().setCheckpointWriter(() => this.persistState());
     this.opsec = new OpsecController(config.opsec);
     if (config.scanningBehavior) this.setScanningBehavior(config.scanningBehavior);
+    this.arsenal.getOrchestrator().scanPolicy.setRateLimit(this.assessmentRules.requestsPerSecond);
     this.comms = new CommsChannel();
 
     // Register built-in tools and external CLI wrappers. The built-in intrusive/credential probes
@@ -634,7 +638,9 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     const allowedHosts = this.targetEnv.getAllTargets()
       .map((t) => hostFromTargetValue(t.address))
       .filter((h): h is string => !!h);
-    this.arsenal.setScope({ allowedHosts, allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
+    allowedHosts.push(...this.assessmentRules.scopeHosts);
+    this.arsenal.setScope({ allowedHosts: [...new Set(allowedHosts)], excludedHosts: [...this.assessmentRules.excludedHosts],
+      excludedTools: [...this.assessmentRules.excludedTools], allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
       exactHosts: false });
   }
 
@@ -931,7 +937,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
   }
 
   public exportCheckpoint(): EngineCheckpoint {
-    return structuredClone({ version: 1, limits: { maxOperators: this.cell.getCapacity(), taskTimeoutMs: this.taskTimeoutMs },
+    return structuredClone({ version: 1, assessment: this.assessmentRules, limits: { maxOperators: this.cell.getCapacity(), taskTimeoutMs: this.taskTimeoutMs },
       mission: this.mission.exportCheckpoint(), targets: this.targetEnv.getAllTargets(),
       vault: { findings: this.vault.getAllFindings(), credentials: this.vault.getAllCredentials() },
       orchestrator: this.arsenal.getOrchestrator().exportCheckpoint(), opsec: this.opsec.exportCheckpoint(),
@@ -947,6 +953,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     validateEngineCheckpoint(value);
     const saved = structuredClone(value);
     if (saved.operators.length > this.cell.getCapacity()) throw new Error('Configured operator capacity is smaller than the saved project. Restore its recorded limit first.');
+    this.assessmentRules = normalizeAssessmentRules(saved.assessment);
     this.taskTimeoutMs = saved.limits.taskTimeoutMs;
     this.targetEnv.restoreCheckpoint(saved.targets);
     this.mission.restoreCheckpoint(saved.mission);
@@ -999,6 +1006,9 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       phases: targets.length && targets.every(target => ['web_application', 'api'].includes(target.type))
         ? [KillChainPhase.RECON, KillChainPhase.WEAPONIZE, KillChainPhase.DELIVER, KillChainPhase.ACTIONS] : undefined,
     });
+    mission.rules.scope = this.arsenal.getScope()?.allowedHosts || [];
+    mission.rules.excludedTargets = [...this.assessmentRules.excludedHosts];
+    mission.rules.forbiddenTechniques.push(...this.assessmentRules.excludedTools);
     this.mission.startMission(mission.id);
   }
 
@@ -1730,8 +1740,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         receipt: configuredReceipt || undefined,
         approvedTools,
         intensity: configuredReceipt ? 'Only actions covered by the receipt.' : 'Non-intrusive and read-only only.',
-        forbidden: mission?.rules.forbiddenTechniques || [],
-        rateLimit: 'Honor tool rate limits and server backoff; pause on persistent instability or OPSEC abort.',
+        forbidden: [...(mission?.rules.forbiddenTechniques || []), ...this.assessmentRules.excludedHosts.map(host => `Do not contact ${host} or its subdomains`)],
+        rateLimit: `${this.assessmentRules.requestsPerSecond ? `At most ${this.assessmentRules.requestsPerSecond} requests per second per host. ` : ''}Honor tool rate limits and server backoff; pause on persistent instability or OPSEC abort.`,
         stopConditions: ['task objective covered', 'missing scope', 'missing required receipt', 'no distinct testable path remains'],
         intrusiveAllowed: Boolean(configuredReceipt),
         credentialToolsAllowed: Boolean(configuredReceipt),

@@ -107,7 +107,8 @@ export class TerminalSurface extends EventEmitter<{ interrupt: void }> {
       key = { name: code === 27 ? 'escape' : code === 13 ? 'return' : String.fromCodePoint(code).toLowerCase(),
         ctrl: !!(modifiers & 4), meta: !!(modifiers & 2), shift: !!(modifiers & 1), sequence: text };
     } else if (text === '\x1b[27;2;27~') key = { name: 'escape', shift: true, sequence: text };
-    if (key.ctrl && key.name === 'x') {
+    // readline combines a quick Esc then Ctrl+X into an unnamed meta sequence.
+    if ((key.ctrl && key.name === 'x') || text === '\x1b\x18') {
       this.emit('interrupt');
       this.waiting?.reject(new TerminalInterrupted()); this.waiting = undefined;
       this.stopped = true;
