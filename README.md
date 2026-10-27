@@ -68,6 +68,10 @@ Select providers and scanning behavior in **Settings**. The selected primary pro
 
 Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` selects an alternative directory. Private CLI credential files remain owned by their providers and are neither copied nor modified.
 
+For direct execution, `vulnora run https://authorized.example --intensity stealth`
+uses the same project engine. `vulnora run --resume <project-uuid>` reopens saved
+work. See the [CLI guide](docs/CLI.md) for model overrides, exit codes and current limits.
+
 **Settings → Fallback policy** and `vulnora fallback` configure the replacement model
 and separate API-error, rate-limit and refusal behavior. Refusal fallback defaults
 to off; safety refusals never switch models. See [fallback configuration](docs/FALLBACK.md).

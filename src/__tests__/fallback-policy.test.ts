@@ -22,6 +22,13 @@ function fixture(overrides: Partial<LLMConfig> = {}) {
 }
 
 describe('fallback policy', () => {
+  it('exposes the actual CLI inference model to progress listeners', async () => {
+    const { backbone, primary } = fixture({ provider: 'local-agent', model: 'claude', cliModel: 'sonnet', fallbackChain: [] });
+    primary.mockResolvedValue({ model: 'sonnet', content: 'Ready' });
+    const observed = vi.fn(); backbone.on('request:provider', observed);
+    await backbone.prompt('Inspect the fixture');
+    expect(observed).toHaveBeenCalledWith(expect.objectContaining({ provider: 'local-agent', model: 'claude', cliModel: 'sonnet' }));
+  });
   it.each(['openai', 'openrouter', 'local', 'anthropic'] as const)('respects structured %s refusal fields even without recognizable prose', async provider => {
     vi.stubEnv('VULNORA_FALLBACK_AUDIT_LOG', 'off');
     const response = provider === 'anthropic'

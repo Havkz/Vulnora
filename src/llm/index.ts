@@ -31,7 +31,7 @@ import { redactLedgerText, redactSecrets, redactString, registerSecret } from '.
 
 export interface LLMEvents {
   'request:start': { messages: LLMMessage[] };
-  'request:provider': { provider: LLMProvider; model: string; baseUrl?: string };
+  'request:provider': { provider: LLMProvider; model: string; cliModel?: string; baseUrl?: string };
   'request:end': undefined;
   'request:trace': { requestId: string; stage: 'request' | 'response'; provider: LLMProvider; model: string;
     messages?: LLMMessage[]; tools?: LLMToolDefinition[]; response?: LLMResponse; error?: string };
@@ -1502,7 +1502,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     for (let rung = 0; rung < ladder.length; rung++) {
       options?.signal?.throwIfAborted();
       const hop = ladder[rung];
-      this.emit('request:provider', { provider: hop.provider, model: hop.model, baseUrl: hop.baseUrl });
+      this.emit('request:provider', { provider: hop.provider, model: hop.model, cliModel: hop.cliModel, baseUrl: hop.baseUrl });
       this.activeProvider = providerIdentity(hop);
       const onFallback = rung > 0;
       const hasNext = rung < ladder.length - 1;

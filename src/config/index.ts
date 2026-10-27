@@ -895,7 +895,7 @@ class ConfigManager {
       maxTokens: this.config.get('maxTokens'),
       temperature: this.config.get('temperature'),
       timeout: this.config.get('timeout'),
-      fallbackChain: includeFallback ? this.buildFallbackChain(actualProvider) : [],
+      fallbackChain: includeFallback ? this.buildFallbackChain(actualProvider, actualModel) : [],
       fallbackPolicy: this.getFallbackSettings(),
     };
   }
@@ -914,7 +914,7 @@ class ConfigManager {
     this.config.set({ fallback: { ...next, model: next.model.trim() }, userSelections: this.selections('fallback') });
   }
 
-  private buildFallbackChain(primary: LLMProvider): FallbackEntry[] {
+  private buildFallbackChain(primary: LLMProvider, model: string): FallbackEntry[] {
     const settings = this.getFallbackSettings();
     if (!settings.enabled) return [];
     const flag = this.selected('fallback') ? '' : (process.env.VULNORA_MODEL_FALLBACK || '').trim().toLowerCase();
@@ -923,7 +923,7 @@ class ConfigManager {
     if (!flag || ['local', 'ollama'].includes(flag)) {
       const provider = flag ? 'local' : settings.provider;
       const fallback = this.getLLMConfig(provider, flag ? undefined : settings.model || undefined, false);
-      const current = this.getLLMConfig(primary, undefined, false);
+      const current = this.getLLMConfig(primary, model, false);
       if (fallback.model.trim() && (fallback.provider !== current.provider || fallback.model !== current.model)) chain.push(fallback);
       return chain;
     }

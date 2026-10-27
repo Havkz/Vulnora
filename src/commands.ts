@@ -1,16 +1,24 @@
-import { Command, InvalidArgumentError } from 'commander';
+import { Command, InvalidArgumentError, Option } from 'commander';
 import ora from 'ora';
 import Table from 'cli-table3';
 import { renderLogo, theme } from './ui/theme.js';
 import { config, hasApiKey, AVAILABLE_MODELS } from './config/index.js';
-import { LLMBackbone } from './llm/index.js';
+import { dirname, join } from 'node:path';
+import { mkdir } from 'node:fs/promises';
+import { ProviderSession, validateProvider } from './llm/provider-session.js';
+import { stopOwnedOllama } from './llm/local-service.js';
+import { CLI_PROVIDERS, resolveInference, type InferenceOptions } from './cli-inference.js';
+import type { ProjectRecord, ScanningBehavior } from './projects/store.js';
+import { validateProjectTarget } from './projects/targets.js';
+import { formatProjectLog } from './ui/project-log.js';
+import { redactSecrets } from './redact.js';
+import { terminalText } from './ui/terminal.js';
 import { createOllamaSession } from './llm/ollama-session.js';
 import type { LLMProvider } from './types/index.js';
 
 function showBanner(): void { console.log('\n' + renderLogo(process.stdout.columns || 80).join('\n') + '\n'); }
-function showError(message: string): void { console.log(theme.error('✗ ') + message); }
-function showInfo(message: string): void { console.log(theme.active(message)); }
-function showWarning(message: string): void { console.log(theme.warning(message)); }
+function showError(message: string): void { console.log(theme.error('✗ ') + terminalText(message)); }
+function showInfo(message: string): void { console.log(theme.active(terminalText(message))); }
 
 const program = new Command();
 
@@ -79,46 +87,91 @@ program
     console.log('');
   });
 
-program
-  .command('test')
-  .description('Test the LLM connection')
-  .action(async () => {
-    showBanner();
-
-    const provider = config.getLLMConfig().provider;
-
-    if (!['codex', 'local', 'local-agent', 'mock'].includes(provider) && !config.getLLMConfig().apiKey) {
-      showError(`No API key configured for ${provider}`);
-      showInfo('Run "npx vulnora setup" to configure API keys');
-      process.exitCode = 1;
-      return;
-    }
-
-    const spinner = ora(`Testing connection to ${provider}...`).start();
-
+inferenceOptions(program.command('test').description('Test only the selected provider; never use fallback'))
+  .action(async (options: InferenceOptions) => {
+    const selected = resolveInference(config, { ...options, fallbackEnabled: false });
+    selected.fallbackChain = [];
+    const spinner = ora(`Testing ${selected.provider}/${selected.cliModel || selected.model}...`).start();
+    ollamaSession = createOllamaSession(selected);
+    ollamaSession.retain();
     try {
-      const llm = new LLMBackbone(config.getLLMConfig());
-      const response = await llm.prompt('Say "Connection successful!" and nothing else.');
-
+      await validateProvider(selected, controller.signal, config.get('codex').command);
       spinner.succeed('Connection successful!');
-      console.log('');
-      console.log(theme.active('Response:'), response);
-      console.log('');
-    } catch (error) {
-      spinner.fail('Connection failed');
-      showError(`${error instanceof Error ? error.message : String(error)}`);
-      process.exitCode = 1;
+    } catch (error) { spinner.fail('Connection failed'); throw error; }
+  });
+
+inferenceOptions(program.command('run [url]').description('Run or resume a persistent website assessment without menus'))
+  .option('--name <name>', 'Project name (defaults to the target hostname)')
+  .option('--resume <id>', 'Resume a saved project UUID; its target and intensity remain unchanged')
+  .addOption(new Option('--intensity <mode>', 'Scanning behavior').choices(['auto', 'stealth', 'aggressive']))
+  .option('--verbose', 'Show full command output')
+  .option('--fallback-enabled <boolean>', 'Override fallback for this process', parseBoolean)
+  .addOption(new Option('--fallback-provider <provider>', 'Fallback provider for this process').choices(CLI_PROVIDERS))
+  .option('--fallback-model <model>', 'Fallback inference model ID')
+  .option('--fallback-on-api-error <boolean>', 'Fallback on connection/API errors', parseBoolean)
+  .option('--fallback-on-rate-limit <boolean>', 'Fallback on rate limits/quota', parseBoolean)
+  .option('--fallback-on-refusal <boolean>', 'Reevaluate technical/unclear refusals only', parseBoolean)
+  .action(async (url: string | undefined, options: InferenceOptions & { name?: string; resume?: string; intensity?: ScanningBehavior; verbose?: boolean }) => {
+    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined)) {
+      throw new Error('Use --resume <id> without a new target, name or intensity.');
+    }
+    if (!options.resume && !url) throw new Error('Provide a target URL or --resume <project-id>.');
+    const llm = resolveInference(config, options);
+    const { ProjectStore } = await import('./projects/store.js');
+    const { ProjectSession } = await import('./projects/session.js');
+    const { runProject } = await import('./projects/run.js');
+    const store = new ProjectStore(join(dirname(config.getConfigPath()), 'projects'));
+    const target = url ? validateProjectTarget(url) : undefined;
+    if (target && target.kind !== 'url') throw new Error('Use an explicit HTTP or HTTPS target URL.');
+    controller.signal.throwIfAborted();
+    await mkdir(store.directory, { recursive: true, mode: 0o700 });
+    let project: ProjectRecord;
+    if (options.resume) project = await store.load(options.resume);
+    else {
+      if (!target) throw new Error('Provide a target URL.');
+      project = await store.create(options.name || target.hostname, target.input, options.intensity || 'auto');
+    }
+    showInfo(`Project ${project.id} · ${project.name}`);
+    showInfo(`Resume: vulnora run --resume ${project.id}`);
+    // Let runProject drain cancelled tool/model requests before releasing weights.
+    providers = new ProviderSession(config, new AbortController().signal);
+    const session = await ProjectSession.open(store, project.id, { llm });
+    providers.track(session.command.llm);
+    session.command.llm.on('request:provider', current => showInfo(`Provider: ${current.provider} · ${current.cliModel || current.model}`));
+    const outcome = await runProject(session, controller.signal, event => {
+      // Completed process events carry both the real invocation and its output.
+      if (event.category === 'execution:started') return;
+      const line = formatProjectLog(event, options.verbose, theme, process.stdout.columns || 120);
+      if (line) console.log(line);
+    });
+    if (session.project.report) console.log(`Report: ${await store.exportReport(session.project)}`);
+    if (outcome !== 'completed') {
+      console.log(`Assessment ${outcome}; checkpoint retained. Open Vulnora to inspect pending recovery or missing coverage.`);
+      process.exitCode = controller.signal.aborted ? interruptionCode : 2;
     }
   });
 
+function inferenceOptions(command: Command): Command {
+  return command.addOption(new Option('--provider <provider>', 'Inference provider (claude selects Claude Code)').choices(CLI_PROVIDERS))
+    .option('--model <model>', 'Inference model ID; for CLI providers overrides only this Vulnora process')
+    .addOption(new Option('--reasoning <effort>', 'Codex/Claude reasoning effort').choices(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']));
+}
+
 program
   .command('models')
-  .description('List available models')
-  .action(() => {
+  .description('List provider models; local queries the actual server without loading weights')
+  .addOption(new Option('--provider <provider>', 'Provider to list').choices(CLI_PROVIDERS))
+  .action(async (options: { provider?: string }) => {
     showBanner();
 
-    const provider = config.get('defaultProvider');
-    const models = AVAILABLE_MODELS[provider];
+    const provider = options.provider || config.getLLMConfig().provider;
+    if (provider === 'local') {
+      providers = new ProviderSession(config, controller.signal);
+      const models = await providers.installedModels();
+      console.log(models.length ? models.map(terminalText).join('\n') : 'No installed local models found. Add a model or configure its endpoint in Settings.');
+      return;
+    }
+    const models = AVAILABLE_MODELS[provider === 'claude' ? 'local-agent' : provider as LLMProvider];
 
     console.log(theme.emphasis(`Available models for ${provider}:\n`));
 
@@ -139,32 +192,31 @@ program
     console.log('');
   });
 
-// Wait for async commands so the model remains loaded until the CLI actually exits.
+// Signals cancel work first; async command cleanup drains and saves before exit.
+const controller = new AbortController();
+let interruptionCode = 130;
+let providers: ProviderSession | undefined;
 let ollamaSession: ReturnType<typeof createOllamaSession> | undefined;
-program.hook('preAction', async (_program, command) => {
-  if (command.name() !== 'test') return;
-  ollamaSession = createOllamaSession(config.getLLMConfig());
-  showInfo('Preparing configured local fallback...');
-  await ollamaSession.start();
+const interrupt = () => { interruptionCode = 130; controller.abort(); };
+const terminate = () => { interruptionCode = 143; controller.abort(); };
+program.hook('preAction', (_program, command) => {
+  if (command.name() === 'interactive') return;
+  process.once('SIGINT', interrupt);
+  process.once('SIGTERM', terminate);
 });
-
-async function releaseOllama(): Promise<void> {
-  try { await ollamaSession?.stop(); }
-  catch (error) { showWarning(`Could not unload Ollama: ${error instanceof Error ? error.message : String(error)}`); }
-}
-
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-  process.once(signal, () => {
-    if (process.argv.includes('interactive')) return;
-    void releaseOllama().finally(() => process.exit(signal === 'SIGINT' ? 130 : 143));
-  });
-}
 
 try { await program.parseAsync(); }
 catch (error) {
-  if (error instanceof Error && error.name === 'ExitPromptError') process.exitCode = 130;
+  if (controller.signal.aborted) process.exitCode = interruptionCode;
+  else if (error instanceof Error && error.name === 'ExitPromptError') process.exitCode = 130;
   else {
-    showError(error instanceof Error ? error.message : String(error));
+    showError(String(redactSecrets(error instanceof Error ? error.message : String(error))));
     process.exitCode = 1;
   }
-} finally { await releaseOllama(); }
+} finally {
+  try { await ollamaSession?.stop(); }
+  catch (error) { showError(String(redactSecrets(String(error)))); process.exitCode = 1; }
+  try { if (providers) await providers.close(); else await stopOwnedOllama(); }
+  catch (error) { showError(String(redactSecrets(String(error)))); process.exitCode = 1; }
+  process.off('SIGINT', interrupt); process.off('SIGTERM', terminate);
+}

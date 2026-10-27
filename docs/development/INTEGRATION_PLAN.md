@@ -23,7 +23,7 @@ Avoid transferring Strix's private subscription-backend authentication path; use
 | Reference review | Initial architecture, routing, sessions, coverage and report source reviewed. Browser/proxy/auth, coordination, CLI and report implementation need deeper comparison. | Source-path-based gap analysis covering all relevant subsystems and licenses. |
 | Provider routing | Central policy implemented in configuration, TUI and `fallback` CLI; session no longer injects its own ladder. Structured refusal fields, finite retries, audit and actual-model cleanup covered by targeted tests. | Direct `run` overrides and the standalone streaming helper still need integration; verify end-to-end before completion. |
 | Model configuration | Existing Codex/Claude CLI model and reasoning selection, Ollama discovery/manual endpoint, lazy lifecycle. | Same options in saved configuration, TUI and direct CLI; installed Codex preferred on fresh setup; actual active model shown. |
-| Direct CLI | Existing CLI has setup/status/test/models only. | `run <url>`, resume, scope/exclusions/rate/intensity/provider/fallback/report/config flags; same ProjectSession engine; subprocess integration tests. |
+| Direct CLI | `run <url>` and resume now share ProjectSession, with intensity/provider/model/reasoning/fallback overrides, transcript output and Markdown reports. Provider tests isolate the selected provider; local model listing queries the actual endpoint. | Durable scope/exclusions/rate, report output/formats and config-file flags remain; complete subprocess and workstation validation. |
 | Scope and load | Existing scope gate, scan policy, budgets and authorization. | Durable per-project scope/exclusions/rate/destructive-action controls enforced on every tool and browser redirect/request. |
 | Web surface | Existing HTTP, TLS, headers, content/API discovery and external scanners. | Local fixture discovery of links, JS/API endpoints, forms, parameters, auth; bounded browser support where it adds coverage. |
 | Vulnerability tests | Existing website arsenal needs capability-by-capability audit. | Controlled positive and negative fixtures for SQLi, XSS, IDOR, SSRF, authentication, access controls and misconfiguration; inconclusive stays inconclusive. |
@@ -51,3 +51,12 @@ None of these milestones substitutes for completion of the entire objective.
 - Controlled CI now has one dispatch-only workflow on the designated Windows runner, with genuine Linux checks in `CodexPi-CI`. Workflow invariants and shell syntax checked locally; the workflow has not been executed.
 - GitHub repository visibility verified private. Native Windows revalidation, final installation and the remaining integration workstreams are outstanding.
 - The Windows test handle did not transfer with migration. The new Linux tests are independent evidence; no claims are made about that interrupted run.
+
+## Checkpoint — 2026-10-27
+
+- Recovered and read the original task attachment from the migrated native transcript; the full objective remains in scope.
+- Added headless execution over ProjectSession; graceful cancellation drains/persists and releases its lease, completed runs save reports, pauses and partial coverage return a non-success status.
+- Process-local inference/fallback switches reuse saved configuration without modifying it. Explicit local testing no longer prepares or tests the primary Codex provider. Discovery lists installed local models without inference.
+- Kept heavy scan-engine imports inside the run action so help, provider testing and settings commands retain their small startup path.
+- Targeted Linux verification: 12 direct CLI/provider cases (including real loopback HTTP and a SIGINT subprocess), then 27 lifecycle/settings/provider regression cases and 18 fallback-policy cases passed. These runs overlap; they are not a full-suite or Windows result. Changed files passed ESLint without errors or warnings; new relative documentation links resolve.
+- Remaining milestone 2 work includes durable scope/rate/exclusion controls, config-file loading, richer exports and TUI menu integration. This checkpoint is not completion of the overall objective.
