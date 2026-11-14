@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AnalysisEngine } from '../analysis/index.js';
 import type { Report } from '../types/index.js';
 import { KillChainPhase } from '../types/index.js';
+import { evaluateCoverage } from '../orchestrator/coverage.js';
 
 function makeReport(): Report {
   return {
@@ -66,6 +67,40 @@ function makeReport(): Report {
 }
 
 describe('AnalysisEngine report redaction', () => {
+  it('exports structured evidence with secret redaction, without mutating the source', () => {
+    const report = makeReport();
+    report.findings[0].evidence[0].metadata = { password: 'metadata-secret', responseStatus: 401 };
+    const target = 'https://fixture.test/?token=target-secret';
+    report.assessment = { targets: [target], completionStatus: 'PARTIALLY_COMPLETED',
+      rules: { scopeHosts: [], excludedHosts: [], excludedTools: [] }, phaseStatuses: {},
+      coverage: [evaluateCoverage(target, [])], limitations: ['Open coverage'] };
+    const before = JSON.stringify(report);
+    const engine = Object.create(AnalysisEngine.prototype) as AnalysisEngine;
+    const exported = engine.exportToJson(report);
+    expect(exported).not.toContain('metadata-secret');
+    expect(exported).not.toContain('summaryabcdefghijklmnop');
+    expect(exported).not.toContain('hunter2');
+    expect(exported).not.toContain('target-secret');
+    const data = JSON.parse(exported);
+    expect(data.schemaVersion).toBe(1);
+    expect(data.summary.credentialsHarvested).toBe(1);
+    expect(data.findings[0].evidence[0].metadata.responseStatus).toBe(401);
+    expect(data.assessment.coverage[0].target).toBe('https://fixture.test/?token=[redacted]');
+    expect(JSON.stringify(report)).toBe(before);
+  });
+
+  it('keeps target-controlled HTML and Markdown images literal and labels unverified findings', () => {
+    const report = makeReport();
+    report.findings[0].title = '<img src="https://remote.test/track">';
+    report.findings[0].description = '![tracking](https://remote.test/track)';
+    const markdown = (Object.create(AnalysisEngine.prototype) as AnalysisEngine).exportToMarkdown(report);
+    expect(markdown).not.toContain('<img');
+    expect(markdown).toContain('&lt;img');
+    expect(markdown).toContain('\\!\\[tracking\\]');
+    expect(markdown).toContain('**Verification:** Needs review');
+    expect(markdown).toContain('Correlations require separate verification');
+  });
+
   it('exports complete long evidence, metadata and classifications without leaking new credential fields', () => {
     const report = makeReport();
     const literal = 'FULL EVIDENCE\n' + 'All technical details **stay literal**\n'.repeat(100) + '\n````\nLAST EVIDENCE BYTE';

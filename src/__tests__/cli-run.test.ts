@@ -53,6 +53,16 @@ describe('direct project lifecycle', () => {
     const saved = await store.load(project.id);
     expect(saved.status).toBe('completed'); expect(saved.report?.markdown).toContain('## Findings');
     expect(await readFile(await store.exportReport(saved), 'utf8')).toBe(saved.report?.markdown);
+    const json = JSON.parse(await readFile(await store.exportReport(saved, 'json', join(store.directory, 'exports')), 'utf8'));
+    expect(json.assessment.completionStatus).toBe(status);
+    expect(json.assessment.targets).toEqual([project.target.input]);
+    expect(json.assessment.coverage[0].target).toBe(project.target.input);
+    expect(json.assessment.coverage[0].entries.http_probe.status).toBe('not_started');
+    expect(json.assessment.limitations.join(' ')).toContain('Open coverage');
+    expect(saved.report?.markdown).toContain(status);
+    expect(saved.report?.markdown).toContain('No findings were recorded');
+    expect(json.schemaVersion).toBe(1);
+    expect(json).not.toHaveProperty('checkpoint');
   });
 
   it('returns when the engine pauses without a recovery:error event', async () => {

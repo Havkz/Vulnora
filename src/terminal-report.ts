@@ -6,16 +6,22 @@ function colorSeverity(value: string, colors: TerminalTheme): string {
 }
 
 function formatInlineMarkdown(value: string, colors: TerminalTheme): string {
-  return value
-    .replace(/`([^`]+)`/g, (_match, content: string) => colors.active(content))
-    .replace(/\*{3}([^*]+)\*{3}/g, (_match, content: string) => colors.emphasis.italic(content))
-    .replace(/\*{2}([^*]+)\*{2}/g, (_match, content: string) => colors.emphasis(content))
-    .replace(/\*([^*]+)\*/g, (_match, content: string) => colors.emphasis.italic(content));
+  // One pass keeps escaped target text from becoming Markdown after decoding.
+  return value.replace(/\\([\\`*_{}[\]()#+!|])|&(amp|lt|gt);|`([^`]+)`|\*{3}([^*]+)\*{3}|\*{2}([^*]+)\*{2}|\*([^*]+)\*/g,
+    (_match, escaped: string | undefined, entity: string | undefined, code: string | undefined,
+      boldItalic: string | undefined, bold: string | undefined, italic: string | undefined) => {
+      if (escaped) return escaped;
+      if (entity) return entity === 'amp' ? '&' : entity === 'lt' ? '<' : '>';
+      if (code !== undefined) return colors.active(code);
+      if (boldItalic !== undefined) return colors.emphasis.italic(boldItalic);
+      if (bold !== undefined) return colors.emphasis(bold);
+      return colors.emphasis.italic(italic || '');
+    });
 }
 
 function formatTableRow(line: string, colors: TerminalTheme): string {
   if (/^\|[-:|\s]+\|$/.test(line)) return colors.muted(line);
-  const cells = line.slice(1, -1).split('|').map(cell => cell.trim());
+  const cells = line.slice(1, -1).split(/(?<!\\)\|/).map(cell => cell.trim());
   const rendered = cells.map((cell, index) => {
     if (index === 0 && /^(critical|high|severe|medium|low|info)$/i.test(cell)) {
       return colorSeverity(cell, colors);

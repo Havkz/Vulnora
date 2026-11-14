@@ -1,5 +1,5 @@
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { config as settings, ApiKeyProvider } from '../config/index.js';
 import type { ProjectSession, ProjectLogEvent } from '../projects/session.js';
 import type { ProjectStore, ProjectRecord, ProjectDraft, ScanningBehavior } from '../projects/store.js';
@@ -459,7 +459,30 @@ export class InteractiveApp {
     if (!session) throw new Error('No project is open.');
     const report = await session.results();
     const exported = await this.services.store.exportReport(session.project);
-    await this.document(`${session.project.name} · Results`, `Saved report: ${exported}\n\n${report}`, undefined, true);
+    for (;;) {
+      let exporting = false;
+      await this.document(`${session.project.name} · Results`, `Saved report: ${exported}\n\n${report}`,
+        'E Export    ↑/↓ Scroll    Esc Back    Ctrl+X Save & Quit', true, async key => {
+          if (!key.ctrl && key.name === 'e') { exporting = true; return true; }
+          return false;
+        });
+      if (!exporting) return;
+      const formats = session.project.report?.json ? ['Markdown', 'JSON', 'Both'] : ['Markdown'];
+      const choice = await this.surface.menu('Export report', [...formats, 'Back']);
+      if (choice === undefined || choice === formats.length) continue;
+      const directory = await this.surface.prompt('Export directory:', this.services.store.directory);
+      if (!directory?.trim()) continue;
+      try {
+        const paths: string[] = [];
+        for (const format of choice === 2 ? ['markdown', 'json'] as const : [choice === 1 ? 'json' : 'markdown'] as const) {
+          paths.push(await this.services.store.exportReport(session.project, format, resolve(directory)));
+        }
+        await this.notice('Report exported', paths.join('\n'));
+      } catch (error) {
+        if (error instanceof TerminalInterrupted) throw error;
+        await this.notice('Export failed', error instanceof Error ? error.message : String(error));
+      }
+    }
   }
 
   private async settings(): Promise<void> {

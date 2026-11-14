@@ -3,12 +3,13 @@ import ora from 'ora';
 import Table from 'cli-table3';
 import { renderLogo, theme } from './ui/theme.js';
 import { config, hasApiKey, AVAILABLE_MODELS } from './config/index.js';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { mkdir } from 'node:fs/promises';
 import { ProviderSession, validateProvider } from './llm/provider-session.js';
 import { stopOwnedOllama } from './llm/local-service.js';
 import { CLI_PROVIDERS, resolveInference, type InferenceOptions } from './cli-inference.js';
-import type { ProjectRecord, ScanningBehavior } from './projects/store.js';
+import type { ProjectRecord, ProjectStore } from './projects/store.js';
+import { loadRunProfile, mergeRunOptions, type RunOptions } from './config/run-profile.js';
 import { normalizeAssessmentRules } from './projects/assessment.js';
 import { validateProjectTarget } from './projects/targets.js';
 import { formatProjectLog } from './ui/project-log.js';
@@ -102,22 +103,27 @@ inferenceOptions(program.command('test').description('Test only the selected pro
   });
 
 inferenceOptions(program.command('run [url]').description('Run or resume a persistent website assessment without menus'))
+  .option('--config <file>', 'Read run defaults from a versioned JSON file; explicit flags take precedence')
   .option('--name <name>', 'Project name (defaults to the target hostname)')
   .option('--resume <id>', 'Resume a saved project UUID; its target and intensity remain unchanged')
   .addOption(new Option('--intensity <mode>', 'Scanning behavior').choices(['auto', 'stealth', 'aggressive']))
   .option('--verbose', 'Show full command output')
-  .option('--scope <host>', 'Additional authorized hostname or IP, including subdomains (repeatable)', collectOption, [])
-  .option('--exclude <host>', 'Exclude a hostname/IP and its subdomains (repeatable)', collectOption, [])
-  .option('--exclude-tool <id>', 'Exclude an exact tool ID (repeatable)', collectOption, [])
+  .option('--scope <host>', 'Additional authorized hostname or IP, including subdomains (repeatable)', collectOption)
+  .option('--exclude <host>', 'Exclude a hostname/IP and its subdomains (repeatable)', collectOption)
+  .option('--exclude-tool <id>', 'Exclude an exact tool ID (repeatable)', collectOption)
   .option('--rate-limit <number>', 'Maximum requests/sec per host (integer 1–1000; intensity may be slower)', Number)
+  .option('--output <directory>', 'Report directory (project checkpoints stay in the shared project store)')
+  .addOption(new Option('--report-format <format>', 'Export format (default: markdown)').choices(['markdown', 'json', 'both']))
   .option('--fallback-enabled <boolean>', 'Override fallback for this process', parseBoolean)
   .addOption(new Option('--fallback-provider <provider>', 'Fallback provider for this process').choices(CLI_PROVIDERS))
   .option('--fallback-model <model>', 'Fallback inference model ID')
   .option('--fallback-on-api-error <boolean>', 'Fallback on connection/API errors', parseBoolean)
   .option('--fallback-on-rate-limit <boolean>', 'Fallback on rate limits/quota', parseBoolean)
   .option('--fallback-on-refusal <boolean>', 'Reevaluate technical/unclear refusals only', parseBoolean)
-  .action(async (url: string | undefined, options: InferenceOptions & { name?: string; resume?: string; intensity?: ScanningBehavior; verbose?: boolean; scope: string[]; exclude: string[]; excludeTool: string[]; rateLimit?: number }) => {
-    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined || options.scope.length || options.exclude.length || options.excludeTool.length || options.rateLimit !== undefined)) {
+  .action(async (url: string | undefined, flags: RunOptions & { config?: string }) => {
+    const options = mergeRunOptions(flags.config ? await loadRunProfile(flags.config) : {}, flags);
+    url ??= options.target;
+    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined || options.scope?.length || options.exclude?.length || options.excludeTool?.length || options.rateLimit !== undefined)) {
       throw new Error('Use --resume <id> without a new target, name, intensity or assessment rules.');
     }
     if (!options.resume && !url) throw new Error('Provide a target URL or --resume <project-id>.');
@@ -132,6 +138,7 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
     if (target && target.kind !== 'url') throw new Error('Use an explicit HTTP or HTTPS target URL.');
     controller.signal.throwIfAborted();
     await mkdir(store.directory, { recursive: true, mode: 0o700 });
+    if (options.output) await mkdir(resolve(options.output), { recursive: true, mode: 0o700 });
     let project: ProjectRecord;
     if (options.resume) project = await store.load(options.resume);
     else {
@@ -151,14 +158,31 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
       const line = formatProjectLog(event, options.verbose, theme, process.stdout.columns || 120);
       if (line) console.log(line);
     });
-    if (session.project.report) console.log(`Report: ${await store.exportReport(session.project)}`);
+    if (session.project.report) await exportReports(store, session.project, options.reportFormat, options.output);
     if (outcome !== 'completed') {
       console.log(`Assessment ${outcome}; checkpoint retained. Open Vulnora to inspect pending recovery or missing coverage.`);
       process.exitCode = controller.signal.aborted ? interruptionCode : 2;
     }
   });
 
-function collectOption(value: string, previous: string[]): string[] { return [...previous, value]; }
+program.command('report <id>')
+  .description('Export a saved report without starting a scan or contacting a provider')
+  .option('--output <directory>', 'Report directory (default: shared projects directory)')
+  .addOption(new Option('--format <format>', 'Report format').choices(['markdown', 'json', 'both']).default('markdown'))
+  .action(async (id: string, options: { output?: string; format: RunOptions['reportFormat'] }) => {
+    const { ProjectStore } = await import('./projects/store.js');
+    const store = new ProjectStore(join(dirname(config.getConfigPath()), 'projects'));
+    await exportReports(store, await store.load(id), options.format, options.output);
+  });
+
+async function exportReports(store: ProjectStore, project: ProjectRecord, format: RunOptions['reportFormat'] = 'markdown', output?: string): Promise<void> {
+  for (const selected of format === 'both' ? ['markdown', 'json'] as const : [format]) {
+    const path = await store.exportReport(project, selected, output ? resolve(output) : undefined);
+    console.log(`Report: ${terminalText(path)}`);
+  }
+}
+
+function collectOption(value: string, previous: string[] = []): string[] { return [...previous, value]; }
 
 function inferenceOptions(command: Command): Command {
   return command.addOption(new Option('--provider <provider>', 'Inference provider (claude selects Claude Code)').choices(CLI_PROVIDERS))

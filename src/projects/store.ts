@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateProjectName, validateProjectTarget, type ProjectTarget } from './targets.js';
 import { acquireProjectLease } from './lease.js';
+import { redactString } from '../redact.js';
+
+export type ReportFormat = 'markdown' | 'json';
 
 export const PROJECT_STATUSES = ['ready', 'running', 'paused', 'completed', 'interrupted', 'failed'] as const;
 export type ProjectStatus = typeof PROJECT_STATUSES[number];
@@ -33,7 +36,7 @@ export interface ProjectRecord<Checkpoint = unknown> {
   assessment?: AssessmentRules;
   checkpoint?: Checkpoint;
   inputDraft?: string;
-  report?: { markdown: string; generatedAt: number };
+  report?: { markdown: string; generatedAt: number; json?: string };
 }
 
 function validId(id: string): boolean { return /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(id); }
@@ -60,6 +63,12 @@ function validateRecord(value: unknown): asserts value is ProjectRecord {
   const validated = validateProjectTarget(project.target.input);
   if (validated.kind !== project.target.kind || validated.hostname !== project.target.hostname) throw new Error('Project target metadata does not match the original input.');
   if (project.report && (typeof project.report.markdown !== 'string' || !Number.isFinite(project.report.generatedAt))) throw new Error('Invalid saved report.');
+  if (project.report?.json !== undefined) {
+    let data;
+    try { data = JSON.parse(project.report.json); } catch { throw new Error('Invalid saved JSON report.'); }
+    if (!data || data.schemaVersion !== 1 || typeof data.missionId !== 'string' || !Array.isArray(data.findings)
+      || !Number.isFinite(data.generatedAt)) throw new Error('Invalid saved JSON report.');
+  }
 }
 
 /** Atomic JSON checkpoints and a separately flushed append-only log journal. */
@@ -107,10 +116,12 @@ export class ProjectStore {
     await this.enqueue(id, async () => {
       await mkdir(this.directory, { recursive: true, mode: 0o700 });
       const temporary = this.path(id, `.${randomUUID()}.tmp`);
-      const handle = await open(temporary, 'wx', 0o600);
-      try { await handle.writeFile(data, 'utf8'); await handle.sync(); }
-      finally { await handle.close(); }
-      try { await rename(temporary, this.path(id, suffix)); }
+      try {
+        const handle = await open(temporary, 'wx', 0o600);
+        try { await handle.writeFile(data, 'utf8'); await handle.sync(); }
+        finally { await handle.close(); }
+        await rename(temporary, this.path(id, suffix));
+      }
       finally { await unlink(temporary).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
     });
   }
@@ -157,11 +168,17 @@ export class ProjectStore {
     return project;
   }
 
-  async exportReport(project: ProjectRecord): Promise<string> {
+  async exportReport(project: ProjectRecord, format: ReportFormat = 'markdown', directory = this.directory): Promise<string> {
     if (!project.report) throw new Error('This project has no generated report.');
     validateRecord(project);
-    await this.publish(project.id, '.report.md', project.report.markdown);
-    return this.path(project.id, '.report.md');
+    if (format !== 'markdown' && format !== 'json') throw new Error('Unsupported report format.');
+    const content = format === 'json' ? project.report.json : project.report.markdown;
+    if (content === undefined) throw new Error('This legacy report contains Markdown only; no structured snapshot was saved.');
+    const destination = directory === this.directory ? this : new ProjectStore(directory);
+    const suffix = format === 'json' ? '.report.json' : '.report.md';
+    // JSON is already redacted structurally; applying text patterns to serialized JSON can corrupt its syntax.
+    await destination.publish(project.id, suffix, format === 'json' ? content : redactString(content));
+    return destination.path(project.id, suffix);
   }
 
   async load(id: string): Promise<ProjectRecord> {

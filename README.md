@@ -15,7 +15,7 @@
 
 ## Overview
 
-Vulnora is a TypeScript CLI for organizing authorized website and API security assessments. It connects reconnaissance and scanning tools with AI-assisted planning, shared evidence, persistent projects and Markdown reports.
+Vulnora is a TypeScript CLI for organizing authorized website and API security assessments. It connects reconnaissance and scanning tools with AI-assisted planning, shared evidence, persistent projects and Markdown/JSON reports.
 
 The focus is a recoverable workflow: define a target, confirm the scan, inspect live output and return to saved work. AI providers help plan and interpret checks; the execution layer enforces scope and resource budgets.
 
@@ -26,7 +26,7 @@ The focus is a recoverable workflow: define a target, confirm the scan, inspect 
 - **Terminal workspace** — guided project creation, explicit start confirmation, current-stage display, command output, settings and full-output view with `Ctrl+T`.
 - **Flexible AI providers** — installed Codex and Claude CLIs reuse their supported login workflows; an installed Ollama model can serve as fallback. Supported deterministic checks remain available without AI.
 - **Bounded execution** — shared observations, duplicate-call reuse, scope checks and request budgets; Auto, Stealth and Aggressive modes control load and backoff.
-- **Saved reports** — findings, evidence and recommendations remain with the project and export to Markdown; completed projects reopen without starting a new scan.
+- **Saved reports** — findings, evidence, coverage and limitations export to Markdown or JSON; completed projects reopen without starting a new scan.
 
 ## Getting started
 
@@ -70,7 +70,8 @@ Configuration and projects live under `~/.vulnora/`; `VULNORA_CONFIG_DIR` select
 
 For direct execution, `vulnora run https://authorized.example --intensity stealth`
 uses the same project engine. `vulnora run --resume <project-uuid>` reopens saved
-work. See the [CLI guide](docs/CLI.md) for model overrides, exit codes and current limits.
+work. `--config assessment.json` reads run defaults; `--output ./reports --report-format both`
+exports Markdown and JSON. See the [CLI guide](docs/CLI.md) for model overrides, exit codes and current limits.
 
 **Settings → Fallback policy** and `vulnora fallback` configure the replacement model
 and separate API-error, rate-limit and refusal behavior. Refusal fallback defaults

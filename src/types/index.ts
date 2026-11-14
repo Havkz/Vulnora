@@ -3,6 +3,7 @@
  */
 
 import type { AssessmentRules } from '../projects/assessment.js';
+import type { CoverageSnapshot } from '../orchestrator/coverage.js';
 import type { AgentCheckpoint } from '../agent/checkpoint.js';
 
 // =============================================================================
@@ -551,6 +552,14 @@ export interface Report {
   findings: Finding[];
   attackPaths: AttackPath[];
   recommendations: Recommendation[];
+  assessment?: {
+    targets: string[];
+    completionStatus: NonNullable<Mission['completionStatus']> | 'IN_PROGRESS';
+    rules: AssessmentRules;
+    phaseStatuses: Record<string, string>;
+    coverage: CoverageSnapshot[];
+    limitations: string[];
+  };
   appendices?: Appendix[];
 }
 

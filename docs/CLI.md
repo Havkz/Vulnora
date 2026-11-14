@@ -34,6 +34,9 @@ own configuration. `claude` selects the installed Claude Code CLI.
 | `--exclude-tool <id>` | Remove an exact tool ID from model definitions and block its execution. Repeatable. |
 | `--rate-limit <integer>` | Per-host ceiling, 1–1000 requests/second; existing intensity/backoff may be slower. |
 | `--resume` | Reopen a saved project without creating another one. |
+| `--config <file>` | Load a version 1 JSON run profile; explicit CLI flags take precedence. |
+| `--output <directory>` | Export reports here; checkpoints and logs stay in the shared project store. |
+| `--report-format markdown\|json\|both` | Export format, defaulting to Markdown. |
 
 Use bare hostnames or IPs in host rules. Paths, ports, wildcard expressions and
 CIDRs are rejected rather than silently widened. Excluding the primary target
@@ -50,7 +53,7 @@ Interrupted calls requiring review remain paused; inspect and approve recovery
 through the TUI. A resumed completed project exports its saved report without
 starting a new scan.
 
-Reports are currently Markdown files in the shared projects directory. Exit
+Reports default to the shared projects directory. Exit
 code `0` means the engine reported completed coverage (possibly with warnings),
 `2` means paused or incomplete, and `1` means a command or persistence failure.
 Handled SIGINT/SIGTERM use `130`/`143`. Completion does not prove the absence of
@@ -72,5 +75,69 @@ provider only, with no fallback. A local model used by that test is released on
 exit; Codex is not tested when `--provider local` is selected.
 
 Configuration uses the same saved settings and `VULNORA_CONFIG_DIR` as the TUI.
-Per-run config files, alternative report formats and output-directory flags are still part of the ongoing
-integration; they are not yet exposed by `run`.
+
+## Run configuration files
+
+`vulnora run --config assessment.json` reads defaults without modifying the file
+or saved settings. A profile uses the same options as `run`, in camelCase:
+
+```json
+{
+  "version": 1,
+  "target": "https://authorized.example",
+  "name": "Website assessment",
+  "intensity": "stealth",
+  "provider": "codex",
+  "reasoning": "high",
+  "fallbackEnabled": true,
+  "fallbackProvider": "local",
+  "fallbackModel": "your-installed-model:7b",
+  "fallbackOnApiError": true,
+  "fallbackOnRateLimit": true,
+  "fallbackOnRefusal": false,
+  "scope": ["api.authorized.example"],
+  "exclude": ["admin.authorized.example"],
+  "excludeTool": ["nmap_scan"],
+  "rateLimit": 2,
+  "output": "./reports",
+  "reportFormat": "both"
+}
+```
+
+Optional `model` and `verbose` are also supported. Replace the example model ID
+with one listed by `vulnora models --provider local`. API keys, endpoint URLs and
+CLI executable settings remain in central settings/environment configuration;
+profiles cannot inject environment variables or shell commands.
+
+Precedence is explicit flags, then the run profile, then central settings/defaults.
+A supplied host/tool list replaces that entire profile list. Changing a provider
+with a flag clears the profile's model and reasoning for the previous provider;
+changing the fallback provider clears its profile model. Relative `output` paths
+in files resolve beside the file; paths supplied by flags resolve from the working
+directory. JSON must be UTF-8, at most 64 KiB; unknown keys and malformed values
+fail before starting work. Resume profiles must omit target/name/intensity and
+assessment rules because the saved project owns those values.
+
+## Report exports
+
+```sh
+vulnora run https://authorized.example --output ./reports --report-format both
+vulnora report <project-uuid> --format json --output ./reports
+```
+
+The `report` command exports a saved snapshot without contacting a model or
+starting a scan. In the TUI, open results and press `E` to choose Markdown, JSON
+or both and an export directory. Files use `<project-uuid>.report.md` and
+`<project-uuid>.report.json`; exporting again atomically replaces that report.
+
+New reports include findings and evidence, verification status, recommendations,
+recorded coverage with evidence IDs, phase outcomes, scope rules and limitations.
+JSON has `schemaVersion: 1`. Coverage remains the engine's runtime classification,
+not an independent proof of completeness. Findings sharing a target are labelled
+as correlations, not verified attack chains. A zero-finding report does not assert
+that the website is secure. Known secrets are redacted; review sensitive evidence
+before sharing it.
+
+Older saved Markdown reports remain readable/exportable without being rewritten;
+JSON is available only when a structured snapshot was saved. The original project,
+checkpoint, credentials and raw model history are not bundled into exports.

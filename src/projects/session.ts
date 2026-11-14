@@ -190,8 +190,9 @@ export class ProjectSession extends EventEmitter<SessionEvents> {
     if (this.project.status !== 'completed') throw new Error('This project has not completed.');
     const mission = this.command.mission.getAllMissions().at(-1);
     if (!mission) throw new Error('Completed project has no saved mission or report.');
-    const markdown = this.command.generateReport(mission.id);
-    this.project.report = { markdown, generatedAt: Date.now() };
+    const data = this.command.generateStructuredReport(mission.id);
+    const markdown = this.command.analysis.exportToMarkdown(data);
+    this.project.report = { markdown, generatedAt: data.generatedAt, json: this.command.analysis.exportToJson(data) };
     this.record('report:generated', { generatedAt: this.project.report.generatedAt });
     await this.persist();
     return markdown;

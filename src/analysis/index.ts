@@ -27,6 +27,12 @@ function appendCodeBlock(lines: string[], content: string): void {
   lines.push('', fence, content, fence, '');
 }
 
+/** Target and model text must remain text, including in headings and tables. */
+function markdownText(value: string): string {
+  return redactString(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/([\\`*_{}[\]()#+!|])/g, '\\$1');
+}
+
 // =============================================================================
 // ANALYSIS ENGINE
 // =============================================================================
@@ -118,7 +124,7 @@ export class AnalysisEngine {
     ).length;
 
     if (totalFindings === 0) {
-      return 'No security vulnerabilities were identified during this assessment.';
+      return 'No findings were recorded. This does not establish the absence of vulnerabilities; review coverage and limitations.';
     }
 
     let overview = `During the security assessment, ${totalFindings} finding${totalFindings === 1 ? ' was' : 's were'} identified`;
@@ -165,8 +171,8 @@ export class AnalysisEngine {
 
         paths.push({
           id: randomUUID(),
-          name: `Attack Chain - ${targetId.substring(0, 8)}`,
-          description: `Attack path through ${targetFindings.length} findings on target`,
+          name: `Related findings - ${targetId.substring(0, 8)}`,
+          description: `${targetFindings.length} findings share a target. Their chronological order is not a verified attack chain.`,
           steps: sortedFindings.map(
             f => `${f.title} (${f.severity})`
           ),
@@ -256,10 +262,35 @@ export class AnalysisEngine {
     lines.push(`**Report Type:** ${report.type}`);
     lines.push('');
 
+    if (report.assessment) {
+      const assessment = report.assessment;
+      lines.push('## Assessment Scope and Completion', '', `**Completion:** ${assessment.completionStatus}`, '');
+      for (const target of assessment.targets) lines.push(`- **Target:** ${markdownText(target)}`);
+      for (const [label, values] of [
+        ['Additional hosts', assessment.rules.scopeHosts], ['Excluded hosts', assessment.rules.excludedHosts],
+        ['Excluded tools', assessment.rules.excludedTools],
+      ] as const) lines.push(`- **${label}:** ${values.length ? values.map(markdownText).join(', ') : 'None'}`);
+      if (assessment.rules.requestsPerSecond) lines.push(`- **Rate ceiling:** ${assessment.rules.requestsPerSecond} requests/sec per host`);
+      lines.push('', '### Coverage', '', 'Recorded runtime classifications; a completed check is not a guarantee of security.', '');
+      for (const snapshot of assessment.coverage) {
+        lines.push(`#### ${markdownText(snapshot.target)}`, '', '| Capability | Status | Evidence IDs | Reason |', '| --- | --- | --- | --- |');
+        for (const entry of Object.values(snapshot.entries)) {
+          lines.push(`| ${markdownText(entry.capability)} | ${markdownText(entry.status)} | ${entry.evidenceRecordIds.map(markdownText).join(', ')} | ${markdownText(entry.reason || '').replace(/\r?\n/g, ' ')} |`);
+        }
+        lines.push('');
+      }
+      if (Object.keys(assessment.phaseStatuses).length) {
+        lines.push('### Phase Outcomes', '');
+        for (const [phase, status] of Object.entries(assessment.phaseStatuses)) lines.push(`- ${markdownText(phase)}: ${markdownText(status)}`);
+        lines.push('');
+      }
+      lines.push('### Limitations', '', ...assessment.limitations.map(text => `- ${markdownText(text)}`), '');
+    }
+
     // Executive Summary
     lines.push('## Executive Summary');
     lines.push('');
-    lines.push(redactString(report.summary.overview));
+    lines.push(markdownText(report.summary.overview));
     lines.push('');
     lines.push('### Risk Overview');
     lines.push('');
@@ -290,20 +321,22 @@ export class AnalysisEngine {
     );
 
     for (const finding of sortedFindings) {
-      lines.push(`### ${redactString(finding.title)}`);
+      lines.push(`### ${markdownText(finding.title).replace(/\r?\n/g, ' ')}`);
       lines.push('');
       lines.push(`**Severity:** ${finding.severity.toUpperCase()}`);
+      lines.push(`**Verification:** ${finding.verifyGate?.passed ? 'Passed verification gate' : 'Needs review'}`);
+      lines.push(`**Finding ID:** ${markdownText(finding.id)}`);
       if (finding.cvss) lines.push(`**CVSS:** ${finding.cvss}`);
-      if (finding.cve?.length) lines.push(`**CVE:** ${finding.cve.map(value => redactString(value)).join(', ')}`);
-      if (finding.cwe?.length) lines.push(`**CWE:** ${finding.cwe.map(value => redactString(value)).join(', ')}`);
+      if (finding.cve?.length) lines.push(`**CVE:** ${finding.cve.map(markdownText).join(', ')}`);
+      if (finding.cwe?.length) lines.push(`**CWE:** ${finding.cwe.map(markdownText).join(', ')}`);
       lines.push('');
       lines.push('**Description:**');
-      lines.push(redactString(finding.description));
+      lines.push(markdownText(finding.description));
       lines.push('');
 
       if (finding.remediation) {
         lines.push('**Remediation:**');
-        lines.push(redactString(finding.remediation));
+        lines.push(markdownText(finding.remediation));
         lines.push('');
       }
 
@@ -321,25 +354,26 @@ export class AnalysisEngine {
         lines.push('');
       }
       if (finding.references?.length) {
-        lines.push('**References:**', ...finding.references.map(reference => `- ${redactString(reference)}`), '');
+        lines.push('**References:**', ...finding.references.map(reference => `- ${markdownText(reference)}`), '');
       }
     }
 
     // Attack Paths
     if (report.attackPaths.length > 0) {
-      lines.push('## Attack Paths');
+      lines.push('## Related Findings');
       lines.push('');
+      lines.push('Correlations require separate verification before being treated as attack chains.', '');
 
       for (const path of report.attackPaths) {
-        lines.push(`### ${redactString(path.name)}`);
+        lines.push(`### ${markdownText(path.name)}`);
         lines.push('');
         lines.push(`**Impact Level:** ${path.impactLevel.toUpperCase()}`);
         lines.push('');
-        lines.push(redactString(path.description));
+        lines.push(markdownText(path.description));
         lines.push('');
         lines.push('**Steps:**');
         for (let i = 0; i < path.steps.length; i++) {
-          lines.push(`${i + 1}. ${redactString(path.steps[i])}`);
+          lines.push(`${i + 1}. ${markdownText(path.steps[i])}`);
         }
         lines.push('');
       }
@@ -360,8 +394,8 @@ export class AnalysisEngine {
         lines.push('### Immediate Priority');
         lines.push('');
         for (const rec of byPriority.immediate) {
-          lines.push(`- **${redactString(rec.title)}** (Effort: ${rec.effort})`);
-          lines.push(`  ${redactString(rec.description)}`);
+          lines.push(`- **${markdownText(rec.title)}** (Effort: ${rec.effort})`);
+          lines.push(`  ${markdownText(rec.description)}`);
         }
         lines.push('');
       }
@@ -370,8 +404,8 @@ export class AnalysisEngine {
         lines.push('### Short-Term Priority');
         lines.push('');
         for (const rec of byPriority.short_term) {
-          lines.push(`- **${redactString(rec.title)}** (Effort: ${rec.effort})`);
-          lines.push(`  ${redactString(rec.description)}`);
+          lines.push(`- **${markdownText(rec.title)}** (Effort: ${rec.effort})`);
+          lines.push(`  ${markdownText(rec.description)}`);
         }
         lines.push('');
       }
@@ -380,14 +414,21 @@ export class AnalysisEngine {
         lines.push('### Long-Term Priority');
         lines.push('');
         for (const rec of byPriority.long_term) {
-          lines.push(`- **${redactString(rec.title)}** (Effort: ${rec.effort})`);
-          lines.push(`  ${redactString(rec.description)}`);
+          lines.push(`- **${markdownText(rec.title)}** (Effort: ${rec.effort})`);
+          lines.push(`  ${markdownText(rec.description)}`);
         }
         lines.push('');
       }
     }
 
     return lines.join('\n');
+  }
+
+  exportToJson(report: Report): string {
+    const safe = redactSecrets(report) as Report;
+    // The shared redactor treats every credential-named field as secret, including this count.
+    safe.summary.credentialsHarvested = report.summary.credentialsHarvested;
+    return JSON.stringify({ schemaVersion: 1, ...safe }, null, 2) + '\n';
   }
 }
 

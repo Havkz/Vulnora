@@ -5,6 +5,15 @@ import { createTheme } from '../ui/theme.js';
 
 
 describe('terminal report formatting', () => {
+  it('renders escaped report text literally without styling it as Markdown', () => {
+    const colors = createTheme(2);
+    const rendered = formatTerminalReport('# \\*\\*literal\\*\\* &lt;tag&gt;\n| api\\_discovery | target\\|suffix |\n\\`literal command\\`', colors);
+    expect(stripAnsi(rendered)).toContain('**literal** <tag>');
+    expect(stripAnsi(rendered)).toContain('| api_discovery | target|suffix |');
+    expect(stripAnsi(rendered)).toContain('`literal command`');
+    expect(rendered).not.toContain(colors.active('literal command'));
+  });
+
   it('uses the shared palette and preserves literal technical content inside fenced evidence', () => {
     const colors = createTheme(2);
     const literal = '**literal evidence** | columns | `exact bytes`\n```short fence\nEND OF EVIDENCE';

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, rm, readFile, writeFile, appendFile, readdir } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, writeFile, appendFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProjectStore } from '../projects/store.js';
@@ -21,6 +21,27 @@ describe('project inputs', () => {
 });
 
 describe('durable project records', () => {
+  it('preserves legacy reports and saved data after malformed snapshots or failed exports', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-report-store-'));
+    try {
+      const store = new ProjectStore(directory);
+      const project = await store.create('Report', 'http://127.0.0.1/');
+      project.report = { markdown: '# Legacy evidence', generatedAt: 123 };
+      await store.save(project);
+      const original = await readFile(join(directory, project.id + '.json'), 'utf8');
+      await expect(store.exportReport(project, 'json')).rejects.toThrow('legacy report');
+      for (const json of ['{', 'null', '{"schemaVersion":99}', '{"schemaVersion":1,"findings":"invalid"}']) {
+        await expect(store.save({ ...project, report: { ...project.report, json } })).rejects.toThrow('Invalid saved JSON report');
+      }
+      const destination = join(directory, 'exports');
+      await mkdir(join(destination, project.id + '.report.md'), { recursive: true });
+      await expect(store.exportReport(project, 'markdown', destination)).rejects.toThrow();
+      expect((await readdir(destination)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+      expect(await readFile(join(directory, project.id + '.json'), 'utf8')).toBe(original);
+      expect(await readFile(await store.exportReport(project), 'utf8')).toBe(project.report.markdown);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('renames projects and drafts, protects open projects, and deletes all owned files into recoverable trash', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-manage-'));
     try {

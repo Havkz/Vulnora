@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { ProjectStore } from '../projects/store.js';
 
 const execute = promisify(execFile);
 const directories: string[] = [];
@@ -77,13 +78,33 @@ describe('CLI provider selection over actual loopback HTTP', () => {
     expect(requests).toEqual([]);
     const { stdout } = await cli('run', '--help');
     expect(stdout).toContain('--resume'); expect(stdout).toContain('--fallback-on-refusal');
+    expect(stdout).toContain('--config'); expect(stdout).toContain('--report-format');
+  }, 25000);
+
+  it('exports saved snapshots to another directory without using any model', async () => {
+    const { directory, cli, requests } = await fixture();
+    const store = new ProjectStore(join(directory, 'projects'));
+    const project = await store.create('Saved report', 'http://127.0.0.1:1/');
+    project.status = 'completed';
+    project.report = { markdown: '# Saved result', generatedAt: 123,
+      json: JSON.stringify({ schemaVersion: 1, missionId: 'saved', generatedAt: 123, findings: [] }) };
+    await store.save(project);
+    const output = join(directory, 'exports');
+    const { stdout } = await cli('report', project.id, '--format', 'both', '--output', output);
+    expect(stdout).toContain('.report.json');
+    expect(await readFile(join(output, `${project.id}.report.md`), 'utf8')).toBe('# Saved result');
+    expect(await readFile(join(output, `${project.id}.report.json`), 'utf8')).toBe(project.report.json);
+    expect(requests).toEqual([]);
+    expect((await store.load(project.id)).report).toEqual(project.report);
   }, 25000);
 
   it.skipIf(process.platform === 'win32')('saves a headless project on SIGINT instead of exiting before cleanup', async () => {
     const { directory, env } = await fixture();
+    const profile = join(directory, 'run-profile.json');
+    await writeFile(profile, JSON.stringify({ version: 1, target: 'http://127.0.0.1:1/', provider: 'local', model: 'installed:7b',
+      fallbackEnabled: false, scope: ['localhost'], exclude: ['blocked.localhost'], excludeTool: ['nmap_scan'], rateLimit: 1 }));
     const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../cli.ts', import.meta.url)),
-      'run', 'http://127.0.0.1:1/', '--provider', 'local', '--model', 'installed:7b', '--fallback-enabled', 'false',
-      '--scope', 'localhost', '--exclude', 'blocked.localhost', '--exclude-tool', 'nmap_scan', '--rate-limit', '2'],
+      'run', '--config', profile, '--rate-limit', '2'],
     { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; let id: string | undefined; let interruption: ReturnType<typeof setTimeout> | undefined;
     const timeout = setTimeout(() => child.kill('SIGKILL'), 20000);

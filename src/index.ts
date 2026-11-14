@@ -235,6 +235,7 @@ import type {
   OperatorArchetype,
   CommandEvents,
   Finding,
+  Report,
   ScanProgressEvent,
   Task,
 } from './types/index.js';
@@ -1869,6 +1870,10 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
    * Generate engagement report
    */
   public generateReport(missionId?: string): string {
+    return this.analysis.exportToMarkdown(this.generateStructuredReport(missionId));
+  }
+
+  public generateStructuredReport(missionId?: string): Report {
     const mission = missionId
       ? this.mission.getMission(missionId)
       : this.mission.getActiveMission() || this.mission.getAllMissions().at(-1);
@@ -1878,7 +1883,24 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     }
 
     const report = this.analysis.generateReport(mission.id, 'full_report');
-    return this.analysis.exportToMarkdown(report);
+    const targets = this.targetEnv.getAllTargets().map(target => target.address);
+    const coverage = this.getCoverage();
+    for (const target of targets) {
+      coverage[target] ??= evaluateCoverage(target, this.arsenal.getOrchestrator().getEvidence());
+    }
+    report.assessment = {
+      targets, completionStatus: mission.completionStatus || 'IN_PROGRESS',
+      rules: this.assessmentRules, phaseStatuses: this.getPhaseStatuses(), coverage: Object.values(coverage),
+      limitations: [
+        'Coverage describes recorded tool observations; it is not proof that a target is free of vulnerabilities.',
+        'Findings without a passed verification gate require review. Related findings do not establish a verified attack chain.',
+        ...(!mission.completionStatus || !['COMPLETED', 'COMPLETED_WITH_WARNINGS'].includes(mission.completionStatus)
+          ? ['This assessment did not complete all required work.'] : []),
+        ...Object.values(coverage).filter(snapshot => !snapshot.complete).map(snapshot =>
+          `Open coverage for ${snapshot.target}: ${[...new Set([...snapshot.incomplete, ...snapshot.retryable])].join(', ') || 'see capability statuses'}.`),
+      ],
+    };
+    return report;
   }
 }
 

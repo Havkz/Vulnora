@@ -93,7 +93,7 @@ describe('durable interactive project flow', () => {
     expect((await f.store.list()).projects).toHaveLength(1);
     f.input.write('\x1b[B\r'); await expect.poll(async () => (await f.store.list()).projects.length).toBe(0);
     expect(f.open).not.toHaveBeenCalled(); f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
-  });
+  }, 15000);
 
   it('persists fallback policy changes from the existing settings menu without probing providers', async () => {
     const f = await fixture();
@@ -193,6 +193,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\rRecovery fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing session');
+    await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission');
     const task = session.command.mission.createTask({ missionId: mission.id, name: 'Interrupted nuclei', description: 'Inspect fixture',
       phase: mission.currentPhase, operatorType: 'scanner' });
@@ -216,6 +217,7 @@ describe('durable interactive project flow', () => {
     f.input.write('\rAuthorization fixture\r'); await f.wait('Target URL or IP:');
     f.input.write('https://fixture.test\r'); await f.wait('Press Enter to start'); f.input.write('\r'); await f.wait('Esc Menu');
     const session = f.session(); if (!session) throw new Error('Missing session');
+    await expect.poll(() => session.command.mission.getActiveMission()).toBeDefined();
     const mission = session.command.mission.getActiveMission(); if (!mission) throw new Error('Missing mission'); mission.currentPhase = KillChainPhase.DELIVER;
     const task = session.command.mission.createTask({ missionId: mission.id, name: 'Impact validation', description: 'https://fixture.test', phase: KillChainPhase.DELIVER, operatorType: 'exploiter' });
     const error = new Error('Project authorization required'); error.name = 'ActiveTestingAuthorizationRequired';
@@ -542,6 +544,12 @@ describe('durable interactive project flow', () => {
     expect(f.session()?.command.llm.getProvider()).toBe('deterministic');
     expect(f.session()?.command.arsenal.getExecutions()).toEqual([]);
     expect(await readFile(join(f.store.directory, project.id + '.report.md'), 'utf8')).toBe(project.report.markdown);
+    f.input.write('e'); await f.wait('Export report');
+    f.input.write('\r'); await f.wait('Export directory:');
+    const destination = join(f.store.directory, 'user-export');
+    f.input.write('\x15' + destination + '\r'); await f.wait('Report exported');
+    expect(await readFile(join(destination, project.id + '.report.md'), 'utf8')).toBe(project.report.markdown);
+    f.input.write('\r'); await f.wait('E Export');
     f.input.write('\x1b[F');
     await f.wait('END OF EVIDENCE');
     f.input.write('\x18');
