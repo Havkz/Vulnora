@@ -641,7 +641,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       .filter((h): h is string => !!h);
     allowedHosts.push(...this.assessmentRules.scopeHosts);
     this.arsenal.setScope({ allowedHosts: [...new Set(allowedHosts)], excludedHosts: [...this.assessmentRules.excludedHosts],
-      excludedTools: [...this.assessmentRules.excludedTools], allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
+      excludedTools: [...this.assessmentRules.excludedTools], excludedRisks: this.assessmentRules.excludedRisks, allowLoopback: !this.strictScope, allowPrivate: !this.strictScope,
       exactHosts: false });
   }
 
@@ -1009,7 +1009,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     });
     mission.rules.scope = this.arsenal.getScope()?.allowedHosts || [];
     mission.rules.excludedTargets = [...this.assessmentRules.excludedHosts];
-    mission.rules.forbiddenTechniques.push(...this.assessmentRules.excludedTools);
+    mission.rules.forbiddenTechniques.push(...this.assessmentRules.excludedTools, ...(this.assessmentRules.excludedRisks || []).map(risk => `risk:${risk}`));
     this.mission.startMission(mission.id);
   }
 

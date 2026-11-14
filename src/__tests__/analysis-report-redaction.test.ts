@@ -72,7 +72,7 @@ describe('AnalysisEngine report redaction', () => {
     report.findings[0].evidence[0].metadata = { password: 'metadata-secret', responseStatus: 401 };
     const target = 'https://fixture.test/?token=target-secret';
     report.assessment = { targets: [target], completionStatus: 'PARTIALLY_COMPLETED',
-      rules: { scopeHosts: [], excludedHosts: [], excludedTools: [] }, phaseStatuses: {},
+      rules: { scopeHosts: [], excludedHosts: [], excludedTools: [], excludedRisks: ['dangerous'] }, phaseStatuses: {},
       coverage: [evaluateCoverage(target, [])], limitations: ['Open coverage'] };
     const before = JSON.stringify(report);
     const engine = Object.create(AnalysisEngine.prototype) as AnalysisEngine;
@@ -83,6 +83,8 @@ describe('AnalysisEngine report redaction', () => {
     expect(exported).not.toContain('target-secret');
     const data = JSON.parse(exported);
     expect(data.schemaVersion).toBe(1);
+    expect(data.assessment.rules.excludedRisks).toEqual(['dangerous']);
+    expect(engine.exportToMarkdown(report)).toContain('**Excluded risk classes:** dangerous');
     expect(data.summary.credentialsHarvested).toBe(1);
     expect(data.findings[0].evidence[0].metadata.responseStatus).toBe(401);
     expect(data.assessment.coverage[0].target).toBe('https://fixture.test/?token=[redacted]');

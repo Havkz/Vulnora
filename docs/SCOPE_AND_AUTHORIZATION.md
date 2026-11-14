@@ -48,7 +48,28 @@ These are application controls, not an OS network firewall. The independent
 destinations and traffic generated inside external scanner templates still need
 broader integration verification. This milestone does not establish containment
 of arbitrary third-party templates or custom executables. Path-level exclusions
-and a separate destructive-action policy remain outstanding integration work.
+and independent enforcement of every third-party template action remain outstanding integration work.
+
+## Excluded risk classes
+
+Use `--exclude-risk dangerous --exclude-risk credential`, the run-profile
+`excludeRisk` array, or READY → `R Rules` → `Excluded risk classes`. These rules
+are stored with the project/checkpoint and exported in its report. Missing or
+empty exclusions preserve existing behavior; changing them requires a new project.
+
+Classes are `local_read`, `passive`, `active`, `intrusive`, `credential`, and
+`dangerous`. Tools use their declared/catalog risk; built-in XSS/SQLi/LFI/SSTI
+checks are intrusive and password spraying is credential work. Untyped extensions
+are conservatively dangerous. Matching tools disappear from model definitions;
+direct and backend calls are rejected before handlers run, even if pre-approved.
+
+For managed HTTP and curl calls, methods other than GET/HEAD/OPTIONS/TRACE and
+nonempty request bodies count as dangerous. Excluding `dangerous` blocks those
+calls, including requests made inside built-in probes. Excluding `active` also
+blocks managed bodyless HTTP. These are conservative action classifications,
+not a guarantee that a GET endpoint or an allowed third-party template is harmless.
+External scanner subprocesses still require template-level review/containment;
+use exact tool exclusions when their internal requests are not acceptable.
 
 ## Tool execution modes
 

@@ -7,7 +7,7 @@ import { normalizeHostname } from '../projects/targets.js';
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { commandPath } from '../command-path.js';
-import { DEFAULT_WEB_WORDLIST } from './catalog.js';
+import { DEFAULT_WEB_WORDLIST, TOOL_ADAPTERS } from './catalog.js';
 import { reviewWebsiteSurface } from './website-surface.js';
 import { EventEmitter } from 'eventemitter3';
 import { CheckpointWriteError } from '../agent/checkpoint.js';
@@ -218,6 +218,7 @@ const fetchContext = new AsyncLocalStorage<{
   scope: ArsenalScope | null; signal?: AbortSignal; orchestrator?: ToolOrchestrator; beforeRequest?: () => Promise<void>; host?: string;
   onProcess?: (event: ProcessEvent) => void;
   preparedWordlist?: ToolContext['preparedWordlist'];
+  deniedRisk?: RiskTier;
 }>();
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
@@ -280,6 +281,7 @@ async function targetFetch(url: string | URL, init: RequestInit = {}): Promise<R
 
   for (let redirects = 0; redirects <= 20; redirects++) {
     signal?.throwIfAborted();
+    enforceHttpRisk(method, body);
     const denied = scopeViolation(context?.scope || null, { parameters: { url: currentUrl.href } });
     if (denied) {
       throw new Error(`SCOPE DENIED: redirect target '${denied}' is not authorized`);
@@ -357,6 +359,7 @@ async function nativeHttpRequest(
 
 async function nativeHttpRequestRaw(url: string, method: string, explicitHeaders?: Record<string, string>, body?: string,
   timeoutMs = 30000): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]>; body: string }> {
+  enforceHttpRisk(method, body);
   const denied = scopeViolation(fetchContext.getStore()?.scope || null, { parameters: { url } });
   if (denied) throw new Error(`SCOPE DENIED: target '${denied}' is not authorized`);
   const target = new URL(url);
@@ -440,6 +443,7 @@ export interface ArsenalScope {
   /** Exclusions override all allow rules, including implicit subdomains. */
   excludedHosts?: string[];
   excludedTools?: string[];
+  excludedRisks?: RiskTier[];
   /** Do not implicitly authorize subdomains for a single-target project. */
   exactHosts?: boolean;
   /** allow 127.0.0.0/8, localhost, ::1 */
@@ -674,6 +678,13 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
       this.orchestrator.recordBlocked(tool, context, denied, 'scope_denied');
       return denied;
     }
+    const risk = assessmentToolRisk(tool, context.parameters);
+    if (this.scope?.excludedRisks?.includes(risk)) {
+      const denied: ToolResult = { success: false, error: `ASSESSMENT RULES: ${risk} actions are excluded for this project (${toolName}).`,
+        metadata: { orchestrationStatus: 'not_authorized', executionStatus: 'blocked' } };
+      this.orchestrator.recordBlocked(tool, context, denied, 'not_authorized');
+      return denied;
+    }
     const blockedHost = scopeViolation(this.scope, context);
     if (blockedHost) {
       const denied: ToolResult = {
@@ -764,6 +775,10 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
           onProcess: event => { processCount++; this.emit('tool:process', redactConfiguredSecrets({ ...event, toolName, operator: context.operator })); } },
           async () => {
             const result = await this.runToolHandler(toolName, context, tool.handler);
+            const deniedRisk = fetchContext.getStore()?.deniedRisk;
+            if (deniedRisk) return { ...result, success: false,
+              error: `ASSESSMENT RULES: ${deniedRisk} HTTP requests are excluded for this project.`,
+              metadata: { ...result.metadata, orchestrationStatus: 'not_authorized' } };
             const list = context.preparedWordlist;
             if (!list && !processCount) return result;
             const limited = list && list.entries.length < list.totalEntries;
@@ -833,7 +848,8 @@ export class Arsenal extends EventEmitter<ArsenalEvents> {
   }
 
   getToolDefinitions(categories?: string[], names?: string[]): LLMToolDefinition[] {
-    let tools = this.getAllTools().filter(tool => !this.scope?.excludedTools?.includes(tool.name));
+    let tools = this.getAllTools().filter(tool => !this.scope?.excludedTools?.includes(tool.name)
+      && !this.scope?.excludedRisks?.includes(assessmentToolRisk(tool)));
     // A per-operator NAME allowlist (the archetype's role toolkit) is the precise gate and
     // takes precedence over the coarse category filter; fall back to categories, then to all.
     if (names?.length) {
@@ -932,6 +948,35 @@ export const SPICY_BUILTIN_TIERS: Readonly<Record<string, RiskTier>> = {
   sqli_scan: 'intrusive',
   xss_scan: 'intrusive',
 };
+
+/** Assessment exclusions apply even when the older opt-in approval gate is disabled. */
+function assessmentToolRisk(tool: CustomTool, parameters: Record<string, unknown> = {}): RiskTier {
+  if (/^(?:http_request|curl_request|curl_tool)$/.test(tool.name)
+    && httpRequestRisk(parameters.method, parameters.data, parameters.body) === 'dangerous') return 'dangerous';
+  if (tool.riskTier) return tool.riskTier;
+  if (SPICY_BUILTIN_TIERS[tool.name]) return SPICY_BUILTIN_TIERS[tool.name];
+  if (['lfi_test', 'ssti_test'].includes(tool.name)) return 'intrusive';
+  if (['base64_decode', 'jwt_decode', 'url_encode', 'cve_lookup'].includes(tool.name)) return 'local_read';
+  if (['dns_lookup', 'reverse_dns', 'whois_lookup'].includes(tool.name)) return 'passive';
+  const adapter = TOOL_ADAPTERS.find(item => item.binary === (tool.binary || TOOL_BINARIES[tool.name]));
+  if (adapter) return adapter.risk;
+  // Untyped extensions cannot silently claim a lower risk than the built-in website tools.
+  return BUILTIN_TOOLS.some(item => item.name === tool.name) ? 'active' : 'dangerous';
+}
+
+function httpRequestRisk(method: unknown, ...bodies: unknown[]): RiskTier {
+  return !['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(String(method || 'GET').toUpperCase())
+    || bodies.some(body => body !== undefined && body !== null && body !== '') ? 'dangerous' : 'active';
+}
+
+function enforceHttpRisk(method: string, body?: unknown): void {
+  const context = fetchContext.getStore();
+  const risk = httpRequestRisk(method, body);
+  if (context?.scope?.excludedRisks?.includes(risk)) {
+    context.deniedRisk = risk;
+    throw new Error(`ASSESSMENT RULES: ${risk} HTTP requests are excluded for this project.`);
+  }
+}
 
 /** Copy of `tool` stamped with a gated riskTier iff it is a spicy built-in that isn't already tiered;
  *  otherwise the tool unchanged. Never mutates the shared BUILTIN_TOOLS array — only clones when it

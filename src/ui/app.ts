@@ -173,24 +173,25 @@ export class InteractiveApp {
     if (project.checkpoint) { await this.notice('Assessment rules', 'Rules are fixed after the first start. Create a new project for a different authorization scope.'); return; }
     for (;;) {
       const rules = normalizeAssessmentRules(project.assessment);
-      const choice = await this.surface.menu('Assessment rules', ['Additional authorized hosts', 'Excluded hosts', 'Excluded tools', 'Rate limit', 'Back'],
+      const choice = await this.surface.menu('Assessment rules', ['Additional authorized hosts', 'Excluded hosts', 'Excluded tools', 'Rate limit', 'Excluded risk classes', 'Back'],
         selected => [
           [`Additional hosts: ${rules.scopeHosts.join(', ') || 'none'}`, 'The target and its subdomains are already included. Bare hostnames or IPs only.'],
           [`Excluded hosts: ${rules.excludedHosts.join(', ') || 'none'}`, 'Exclusions override host allowances and include all subdomains. No paths, ports, wildcards or CIDRs.'],
           [`Excluded tools: ${rules.excludedTools.join(', ') || 'none'}`, 'Exact tool IDs; removed from the model toolkit and blocked before execution.'],
           [`Rate: ${rules.requestsPerSecond ? rules.requestsPerSecond + '/s per host maximum' : 'intensity preset'}`, 'A ceiling shared by operators; the intensity preset or server backoff may be slower.'],
+          [`Excluded risk classes: ${rules.excludedRisks?.join(', ') || 'none'}`, 'local_read, passive, active, intrusive, credential, dangerous. Exclusions override tool approvals.'],
           ['Rules are saved immediately and become fixed when the project first starts.'],
         ][selected]);
-      if (choice === undefined || choice === 4) return;
-      const keys = ['scopeHosts', 'excludedHosts', 'excludedTools'] as const;
+      if (choice === undefined || choice === 5) return;
+      const keys = ['scopeHosts', 'excludedHosts', 'excludedTools', 'requestsPerSecond', 'excludedRisks'] as const;
       const key = keys[choice];
-      const answer = await this.surface.prompt(choice === 3 ? 'Maximum requests/sec per host (blank = preset):' : `${['Authorized hosts', 'Excluded hosts', 'Excluded tool IDs'][choice]} (comma separated):`,
-        choice === 3 ? String(rules.requestsPerSecond ?? '') : rules[key].join(', '));
+      const answer = await this.surface.prompt(choice === 3 ? 'Maximum requests/sec per host (blank = preset):' : `${['Authorized hosts', 'Excluded hosts', 'Excluded tool IDs', '', 'Excluded risk classes'][choice]} (comma separated):`,
+        choice === 3 ? String(rules.requestsPerSecond ?? '') : (rules[key] as string[] | undefined)?.join(', ') || '');
       if (answer === undefined) continue;
       try {
         if (choice === 3) rules.requestsPerSecond = answer.trim() ? Number(answer) : undefined;
-        else rules[key] = answer.trim() ? answer.split(',').map(value => value.trim()) : [];
-        const next = normalizeAssessmentRules(rules, project.target.input);
+        const nextValue = choice === 3 ? rules : { ...rules, [key]: answer.trim() ? answer.split(',').map(value => value.trim()) : [] };
+        const next = normalizeAssessmentRules(nextValue, project.target.input);
         Object.assign(project, await this.services.store.updateReadyProject(project.id, { assessment: next }));
       } catch (error) { await this.notice('Invalid assessment rules', (error as Error).message); }
     }

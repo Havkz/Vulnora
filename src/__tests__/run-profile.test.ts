@@ -16,11 +16,11 @@ async function profile(value: unknown) {
 describe('run configuration files', () => {
   it('reads validated defaults without modifying the file and resolves output beside it', async () => {
     const { path, directory } = await profile({ version: 1, target: 'https://fixture.test', scope: ['api.fixture.test'],
-      exclude: ['admin.fixture.test'], excludeTool: ['nmap_scan'], rateLimit: 2, output: 'reports', reportFormat: 'both',
+      exclude: ['admin.fixture.test'], excludeTool: ['nmap_scan'], excludeRisk: ['dangerous'], rateLimit: 2, output: 'reports', reportFormat: 'both',
       provider: 'codex', model: 'chosen-model', reasoning: 'high', fallbackEnabled: true, fallbackOnRefusal: false });
     const before = await readFile(path, 'utf8');
     const loaded = await loadRunProfile(path);
-    expect(loaded).toMatchObject({ provider: 'codex', output: join(directory, 'reports'), rateLimit: 2, fallbackOnRefusal: false });
+    expect(loaded).toMatchObject({ excludeRisk: ['dangerous'], provider: 'codex', output: join(directory, 'reports'), rateLimit: 2, fallbackOnRefusal: false });
     expect(mergeRunOptions(loaded, { rateLimit: 1, scope: ['other.fixture.test'], fallbackEnabled: false, verbose: undefined }))
       .toMatchObject({ scope: ['other.fixture.test'], exclude: ['admin.fixture.test'], rateLimit: 1, fallbackEnabled: false });
     expect(await readFile(path, 'utf8')).toBe(before);
@@ -35,7 +35,7 @@ describe('run configuration files', () => {
 
   it.each([
     null, [], { version: 2 }, { version: 1, typo: true }, { version: 1, fallbackEnabled: 'false' },
-    { version: 1, scope: null }, { version: 1, rateLimit: 0 }, { version: 1, provider: 'mock' },
+    { version: 1, scope: null }, { version: 1, excludeRisk: ['typo'] }, { version: 1, rateLimit: 0 }, { version: 1, provider: 'mock' },
     { version: 1, reportFormat: 'html' }, { version: 1, target: 'fixture.test' },
     { version: 1, target: 'https://fixture.test', exclude: ['fixture.test'] },
     { version: 1, output: 'bad\u001b[31m' }, { version: 1, apiKey: 'should-never-print' },

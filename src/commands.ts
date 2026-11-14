@@ -111,6 +111,7 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
   .option('--scope <host>', 'Additional authorized hostname or IP, including subdomains (repeatable)', collectOption)
   .option('--exclude <host>', 'Exclude a hostname/IP and its subdomains (repeatable)', collectOption)
   .option('--exclude-tool <id>', 'Exclude an exact tool ID (repeatable)', collectOption)
+  .option('--exclude-risk <class>', 'Exclude local_read, passive, active, intrusive, credential or dangerous tools (repeatable)', collectOption)
   .option('--rate-limit <number>', 'Maximum requests/sec per host (integer 1–1000; intensity may be slower)', Number)
   .option('--output <directory>', 'Report directory (project checkpoints stay in the shared project store)')
   .addOption(new Option('--report-format <format>', 'Export format (default: markdown)').choices(['markdown', 'json', 'both']))
@@ -123,12 +124,12 @@ inferenceOptions(program.command('run [url]').description('Run or resume a persi
   .action(async (url: string | undefined, flags: RunOptions & { config?: string }) => {
     const options = mergeRunOptions(flags.config ? await loadRunProfile(flags.config) : {}, flags);
     url ??= options.target;
-    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined || options.scope?.length || options.exclude?.length || options.excludeTool?.length || options.rateLimit !== undefined)) {
+    if (options.resume && (url !== undefined || options.name !== undefined || options.intensity !== undefined || options.scope?.length || options.exclude?.length || options.excludeTool?.length || options.excludeRisk?.length || options.rateLimit !== undefined)) {
       throw new Error('Use --resume <id> without a new target, name, intensity or assessment rules.');
     }
     if (!options.resume && !url) throw new Error('Provide a target URL or --resume <project-id>.');
     const assessment = normalizeAssessmentRules({ scopeHosts: options.scope, excludedHosts: options.exclude,
-      excludedTools: options.excludeTool, requestsPerSecond: options.rateLimit }, url);
+      excludedTools: options.excludeTool, excludedRisks: options.excludeRisk, requestsPerSecond: options.rateLimit }, url);
     const llm = resolveInference(config, options);
     const { ProjectStore } = await import('./projects/store.js');
     const { ProjectSession } = await import('./projects/session.js');

@@ -268,7 +268,7 @@ export class AnalysisEngine {
       for (const target of assessment.targets) lines.push(`- **Target:** ${markdownText(target)}`);
       for (const [label, values] of [
         ['Additional hosts', assessment.rules.scopeHosts], ['Excluded hosts', assessment.rules.excludedHosts],
-        ['Excluded tools', assessment.rules.excludedTools],
+        ['Excluded tools', assessment.rules.excludedTools], ['Excluded risk classes', assessment.rules.excludedRisks || []],
       ] as const) lines.push(`- **${label}:** ${values.length ? values.map(markdownText).join(', ') : 'None'}`);
       if (assessment.rules.requestsPerSecond) lines.push(`- **Rate ceiling:** ${assessment.rules.requestsPerSecond} requests/sec per host`);
       lines.push('', '### Coverage', '', 'Recorded runtime classifications; a completed check is not a guarantee of security.', '');

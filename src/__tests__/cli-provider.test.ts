@@ -102,9 +102,9 @@ describe('CLI provider selection over actual loopback HTTP', () => {
     const { directory, env } = await fixture();
     const profile = join(directory, 'run-profile.json');
     await writeFile(profile, JSON.stringify({ version: 1, target: 'http://127.0.0.1:1/', provider: 'local', model: 'installed:7b',
-      fallbackEnabled: false, scope: ['localhost'], exclude: ['blocked.localhost'], excludeTool: ['nmap_scan'], rateLimit: 1 }));
+      fallbackEnabled: false, scope: ['localhost'], exclude: ['blocked.localhost'], excludeTool: ['nmap_scan'], excludeRisk: ['credential'], rateLimit: 1 }));
     const child = spawn(process.execPath, ['--import', 'tsx', fileURLToPath(new URL('../cli.ts', import.meta.url)),
-      'run', '--config', profile, '--rate-limit', '2'],
+      'run', '--config', profile, '--rate-limit', '2', '--exclude-risk', 'dangerous'],
     { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = ''; let id: string | undefined; let interruption: ReturnType<typeof setTimeout> | undefined;
     const timeout = setTimeout(() => child.kill('SIGKILL'), 20000);
@@ -119,7 +119,7 @@ describe('CLI provider selection over actual loopback HTTP', () => {
       expect(code, output).toBe(130); expect(id).toBeDefined();
       const saved = JSON.parse(await readFile(join(directory, 'projects', `${id}.json`), 'utf8'));
       expect(saved.status).toBe('paused'); expect(saved.checkpoint.targets[0].address).toBe('http://127.0.0.1:1/');
-      expect(saved.assessment).toEqual({ scopeHosts: ['localhost'], excludedHosts: ['blocked.localhost'], excludedTools: ['nmap_scan'], requestsPerSecond: 2 });
+      expect(saved.assessment).toEqual({ scopeHosts: ['localhost'], excludedHosts: ['blocked.localhost'], excludedTools: ['nmap_scan'], excludedRisks: ['dangerous'], requestsPerSecond: 2 });
       expect(saved.checkpoint.assessment).toEqual(saved.assessment);
       expect(output).toContain('checkpoint retained');
     } finally { clearTimeout(timeout); clearTimeout(interruption); if (child.exitCode === null) child.kill('SIGKILL'); }

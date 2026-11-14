@@ -57,11 +57,15 @@ describe('durable interactive project flow', () => {
     f.input.write('\x1b[B\x1b[B\x1b[B\r'); await f.wait('Maximum requests/sec per host');
     f.input.write('2\r');
     await expect.poll(async () => (await f.store.list()).projects[0]?.assessment?.requestsPerSecond).toBe(2);
-    f.input.write('\x1b[B\x1b[B\x1b[B'); await f.wait('2/s per host maximum'); f.input.write('\x1b');
+    f.input.write('\x1b[B\x1b[B\x1b[B'); await f.wait('2/s per host maximum');
+    f.input.write('\x1b[B\r'); await f.wait('Excluded risk classes (comma separated):');
+    f.input.write('dangerous, credential\r');
+    await expect.poll(async () => (await f.store.list()).projects[0]?.assessment?.excludedRisks).toEqual(['credential', 'dangerous']);
+    f.input.write('\x1b');
     expect(f.open).not.toHaveBeenCalled();
     f.input.write('\x18'); expect(await result).toBeInstanceOf(TerminalInterrupted);
-    expect((await f.store.list()).projects[0].assessment).toMatchObject({ scopeHosts: ['api.fixture.test'], requestsPerSecond: 2 });
-  });
+    expect((await f.store.list()).projects[0].assessment).toMatchObject({ scopeHosts: ['api.fixture.test'], requestsPerSecond: 2, excludedRisks: ['credential', 'dangerous'] });
+  }, 15000);
 
   it('renders stable activity priority from real project process and model lifecycle events', async () => {
     const f = await fixture(); const screens = vi.spyOn(f.surface, 'show'); const result = f.start();

@@ -14,6 +14,7 @@ export interface RunOptions extends InferenceOptions {
   scope?: string[];
   exclude?: string[];
   excludeTool?: string[];
+  excludeRisk?: string[];
   rateLimit?: number;
   output?: string;
   reportFormat?: 'markdown' | 'json' | 'both';
@@ -21,7 +22,7 @@ export interface RunOptions extends InferenceOptions {
 
 const textFields = ['target', 'name', 'provider', 'model', 'reasoning', 'intensity', 'fallbackProvider', 'fallbackModel', 'output', 'reportFormat'];
 const booleanFields = ['verbose', 'fallbackEnabled', 'fallbackOnApiError', 'fallbackOnRateLimit', 'fallbackOnRefusal'];
-const listFields = ['scope', 'exclude', 'excludeTool'];
+const listFields = ['scope', 'exclude', 'excludeTool', 'excludeRisk'];
 
 /** Read-only run defaults. Secrets and provider endpoints remain in central settings. */
 export async function loadRunProfile(path: string): Promise<RunOptions> {
@@ -65,7 +66,7 @@ export async function loadRunProfile(path: string): Promise<RunOptions> {
   const result = options as RunOptions;
   if (result.name !== undefined) validateProjectName(result.name);
   if (result.target !== undefined && validateProjectTarget(result.target).kind !== 'url') throw new Error('Use an explicit HTTP or HTTPS target URL.');
-  normalizeAssessmentRules({ scopeHosts: result.scope, excludedHosts: result.exclude, excludedTools: result.excludeTool, requestsPerSecond: result.rateLimit }, result.target);
+  normalizeAssessmentRules({ scopeHosts: result.scope, excludedHosts: result.exclude, excludedTools: result.excludeTool, excludedRisks: result.excludeRisk, requestsPerSecond: result.rateLimit }, result.target);
   if (result.output) result.output = resolve(dirname(resolve(path)), result.output);
   return result;
 }

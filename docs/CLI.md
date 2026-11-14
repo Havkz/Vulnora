@@ -32,6 +32,7 @@ own configuration. `claude` selects the installed Claude Code CLI.
 | `--scope <host>` | Additional authorized hostname/IP; repeat for multiple hosts. Domains include their subdomains. |
 | `--exclude <host>` | Exclude a requested hostname/IP and its subdomains, even if an allow rule matches. Repeatable. |
 | `--exclude-tool <id>` | Remove an exact tool ID from model definitions and block its execution. Repeatable. |
+| `--exclude-risk <class>` | Exclude a risk class: `local_read`, `passive`, `active`, `intrusive`, `credential`, or `dangerous`. Repeatable; overrides tool approval. |
 | `--rate-limit <integer>` | Per-host ceiling, 1–1000 requests/second; existing intensity/backoff may be slower. |
 | `--resume` | Reopen a saved project without creating another one. |
 | `--config <file>` | Load a version 1 JSON run profile; explicit CLI flags take precedence. |
@@ -98,6 +99,7 @@ or saved settings. A profile uses the same options as `run`, in camelCase:
   "scope": ["api.authorized.example"],
   "exclude": ["admin.authorized.example"],
   "excludeTool": ["nmap_scan"],
+  "excludeRisk": ["dangerous", "credential"],
   "rateLimit": 2,
   "output": "./reports",
   "reportFormat": "both"
@@ -110,7 +112,7 @@ CLI executable settings remain in central settings/environment configuration;
 profiles cannot inject environment variables or shell commands.
 
 Precedence is explicit flags, then the run profile, then central settings/defaults.
-A supplied host/tool list replaces that entire profile list. Changing a provider
+A supplied host/tool/risk list replaces that entire profile list. Changing a provider
 with a flag clears the profile's model and reasoning for the previous provider;
 changing the fallback provider clears its profile model. Relative `output` paths
 in files resolve beside the file; paths supplied by flags resolve from the working
