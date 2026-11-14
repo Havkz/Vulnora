@@ -58,3 +58,17 @@ on graceful exit, including models selected during the session.
 Provider response formats:
 [OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
 [Claude stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons).
+
+Text streaming uses the same request lifecycle, finite model ladder and policy.
+A failure before the first text chunk can retry or fall back. Once any text has
+been delivered, errors stop the stream: Vulnora never appends a replacement
+model's response to partial output. Such decisions include `partialOutput` in
+the fallback audit. Safety filters still stop fallback; already delivered text
+cannot be withdrawn. Caller cancellation and early consumer exit close the
+transport. Idle timeouts also cover waiting for response headers.
+
+Tool-bearing requests use complete responses so fragmented tool calls are not
+lost through the text-only iterator. Codex/Claude CLI progress retains its
+existing event transport; this change does not introduce provider SSE there.
+The SSE parser handles provider error events as documented in the
+[OpenRouter streaming reference](https://github.com/OpenRouterTeam/docs/blob/main/api_reference/streaming.mdx).

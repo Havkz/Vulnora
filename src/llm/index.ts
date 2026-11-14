@@ -65,7 +65,7 @@ class DeterministicAdapter implements LLMProviderAdapter {
 export interface LLMProviderAdapter {
   name: string;
   chat(messages: LLMMessage[], options?: ChatOptions): Promise<LLMResponse>;
-  stream?(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<string, void, unknown>;
+  stream?(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<string, LLMResponse | void, unknown>;
   validateConfig(): { valid: boolean; error?: string };
 }
 
@@ -106,6 +106,7 @@ interface FallbackAuditEntry {
   fallbackResponse?: string;
   fallbackError?: string;
   durationMs?: number;
+  partialOutput?: boolean;
 }
 
 function fallbackAuditPath(): string | null {
@@ -339,87 +340,89 @@ class OpenRouterAdapter implements LLMProviderAdapter {
     };
   }
 
-  async *stream(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<string, void, unknown> {
+  async *stream(messages: LLMMessage[], options?: ChatOptions): AsyncGenerator<string, LLMResponse | void, unknown> {
     const validation = this.validateConfig();
-    if (!validation.valid) {
-      throw new Error(validation.error);
-    }
-
-    const baseUrl = this.config.baseUrl || 'https://openrouter.ai/api/v1';
-    const url = `${baseUrl}/chat/completions`;
-
-    const siteUrl = config.get('openrouter').siteUrl || 'https://github.com/Havkz/Vulnora';
-    const siteName = config.get('openrouter').siteName || 'VULNORA';
-
-    const requestBody = {
-      model: this.config.model,
-      messages: messages.map(m => ({
-        role: m.role,
-        content: m.content,
-      })),
-      max_tokens: options?.maxTokens || this.config.maxTokens || 4096,
-      temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-      stream: true,
-    };
-
-    // Stall guard: the streaming fetch previously had NO timeout, so a provider that opens the
-    // connection then goes silent could hang the read loop forever. This is an INACTIVITY
-    // (idle) timeout, deliberately NOT a total cap — it is reset on every received chunk, so a
-    // legitimately long ACTIVE stream is never cut off; only a genuinely stalled/silent stream
-    // is aborted (after config.timeout, default 60s of no data).
+    if (!validation.valid) throw new Error(validation.error);
+    // Tool-call fragments cannot be represented by the public text-only generator.
+    if (options?.tools?.length) return await this.chat(messages, options);
     const controller = new AbortController();
-    const idleMs = this.config.timeout || 60000;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.apiKey}`,
-        'HTTP-Referer': siteUrl,
-        'X-Title': siteName,
-      },
-      body: JSON.stringify(requestBody),
-      signal: AbortSignal.any([controller.signal, ...(options?.signal ? [options.signal] : [])]),
-    });
-
-    if (!response.ok) {
-      throw new Error(`OpenRouter API error: ${response.status}`);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-    const idleTimer = setTimeout(() => { try { controller.abort(); } catch { /* noop */ } }, idleMs);
-
+    const idleTimer = setTimeout(() => controller.abort(new Error('Model stream idle timeout')), this.config.timeout || 60000);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
+      const response = await fetch(`${this.config.baseUrl || 'https://openrouter.ai/api/v1'}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json', Authorization: `Bearer ${this.config.apiKey}`,
+          'HTTP-Referer': config.get('openrouter').siteUrl || 'https://github.com/Havkz/Vulnora',
+          'X-Title': config.get('openrouter').siteName || 'VULNORA',
+        },
+        body: JSON.stringify({ model: this.config.model, messages: this.formatMessages(messages),
+          max_tokens: options?.maxTokens || this.config.maxTokens || 4096,
+          temperature: options?.temperature ?? this.config.temperature ?? 0.7,
+          top_p: options?.topP, stop: options?.stopSequences, stream: true }),
+        signal: AbortSignal.any([controller.signal, ...(options?.signal ? [options.signal] : [])]),
+      });
+      idleTimer.refresh();
+      if (!response.ok) {
+        const diagnostic = await response.text();
+        const retryAfter = Number(response.headers.get('retry-after'));
+        throw new LLMApiError(`OpenRouter API error: ${response.status} - ${diagnostic}`, response.status,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : undefined);
+      }
+      reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+      const decoder = new TextDecoder();
+      let buffer = ''; let eventData: string[] = [];
+      const result: LLMResponse = { content: '', model: this.config.model };
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
-        idleTimer.refresh(); // a chunk arrived — restart the inactivity countdown
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') return;
-
-            try {
-              const json = JSON.parse(data);
-              const content = json.choices?.[0]?.delta?.content;
-              if (content) yield content;
-            } catch {
-              // Ignore parse errors in stream
-            }
+        idleTimer.refresh();
+        buffer += done ? decoder.decode() + '\n\n' : decoder.decode(value, { stream: true });
+        // Bound malformed events that never terminate, while keeping normal token streams incremental.
+        if (buffer.length + eventData.join('\n').length > 1024 * 1024) throw new Error('Model stream event exceeds 1 MiB');
+        let newline: number;
+        while ((newline = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, newline).replace(/\r$/, ''); buffer = buffer.slice(newline + 1);
+          if (line.startsWith('data:')) { eventData.push(line.slice(5).replace(/^ /, '')); continue; }
+          if (line || !eventData.length) continue;
+          const data = eventData.join('\n'); eventData = [];
+          if (data === '[DONE]') return result;
+          let chunk;
+          try { chunk = JSON.parse(data); } catch { throw new Error('Malformed model stream event'); }
+          const choice = chunk?.choices?.[0];
+          if (chunk?.error || choice?.finish_reason === 'error') {
+            throw new LLMApiError(String(chunk.error?.message || 'Provider stream failed'), Number(chunk.error?.code) || 502);
           }
+          if (typeof chunk?.model === 'string' && chunk.model !== result.model) {
+            result.model = chunk.model;
+            options?.onProgress?.({ agent: this.name, type: 'stream.progress', model: result.model });
+          }
+          if (choice?.delta?.refusal || ['content_filter', 'refusal'].includes(choice?.finish_reason)) {
+            result.finishReason = 'content_filter';
+            result.content += typeof choice?.delta?.refusal === 'string' ? choice.delta.refusal : '';
+            return result;
+          }
+          if (choice?.delta?.tool_calls?.length) throw new Error('Unexpected tool calls in a text-only model stream');
+          if (typeof choice?.finish_reason === 'string') result.finishReason = choice.finish_reason;
+          if (typeof choice?.delta?.content === 'string' && choice.delta.content) {
+            result.content += choice.delta.content;
+            yield choice.delta.content;
+          }
+          if (chunk?.usage) {
+            result.usage = { promptTokens: chunk.usage.prompt_tokens,
+              completionTokens: chunk.usage.completion_tokens, totalTokens: chunk.usage.total_tokens };
+          }
+        }
+        if (done) {
+          if (!result.finishReason) throw new Error('Model stream disconnected before completion');
+          return result;
         }
       }
     } finally {
       clearTimeout(idleTimer);
-      reader.releaseLock();
+      controller.abort();
+      try { await reader?.cancel(); } catch { /* Transport may already have failed. */ }
+      reader?.releaseLock();
     }
   }
 }
@@ -1458,6 +1461,13 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     messages: LLMMessage[],
     options?: ChatOptions
   ): Promise<LLMResponse> {
+    const request = this.request(messages, options, false);
+    const result = await request.next();
+    if (!result.done || !result.value) throw new Error('Non-streaming request unexpectedly yielded a token.');
+    return result.value;
+  }
+
+  private async *request(messages: LLMMessage[], options: ChatOptions | undefined, streaming: boolean): AsyncGenerator<string, LLMResponse | void> {
     const startTime = Date.now();
     const requestId = randomUUID();
     const requestConfig = this.config; const requestAdapter = this.adapter; const retryAttempts = this.retryAttempts;
@@ -1465,7 +1475,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     this.emit('request:start', { messages });
     this.emit('request:trace', { requestId, stage: 'request', ...providerIdentity(requestConfig), messages: structuredClone(messages), tools: options?.tools });
     try {
-      const response = await this.chatWithFallback(messages, options, startTime, requestId, requestConfig, requestAdapter, retryAttempts);
+      const response = yield* this.requestWithFallback(messages, options, startTime, requestId, requestConfig, requestAdapter, retryAttempts, streaming);
+      if (!response) return;
       this.emit('request:trace', { requestId, stage: 'response', ...this.activeProvider, response });
       return response;
     } catch (error) {
@@ -1475,8 +1486,8 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     finally { this.activeRequests--; this.emit('request:end', undefined); }
   }
 
-  private async chatWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string,
-    requestConfig: LLMConfig, requestAdapter: LLMProviderAdapter, retryAttempts: number): Promise<LLMResponse> {
+  private async *requestWithFallback(messages: LLMMessage[], options: ChatOptions | undefined, startTime: number, requestId: string,
+    requestConfig: LLMConfig, requestAdapter: LLMProviderAdapter, retryAttempts: number, streaming: boolean): AsyncGenerator<string, LLMResponse | void> {
 
     const seen = new Set<string>();
     const ladder: FallbackEntry[] = [
@@ -1510,15 +1521,32 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
 
       // ── same-model retry loop: only transient hard errors retry in place ──
       let response: LLMResponse | null = null;
+      let emitted = false;
       for (let attempt = 1; attempt <= retryAttempts; attempt++) {
         try {
           options?.signal?.throwIfAborted();
-          response = await adapter.chat(messages, { ...options, onProgress: event => {
+          const requestOptions: ChatOptions = { ...options, onProgress: event => {
             const safe = { ...event, ...(event.text ? { text: String(redactSecrets(event.text)) } : {}) };
             this.activeProvider = { ...providerIdentity(hop), model: event.model || providerIdentity(hop).model };
             this.emit('request:progress', { ...safe, ...this.activeProvider });
             options?.onProgress?.(safe);
-          } });
+          } };
+          if (streaming && adapter.stream && !options?.tools?.length) {
+            let content = '';
+            const tokens = adapter.stream(messages, requestOptions);
+            try {
+              while (true) {
+                const next = await tokens.next();
+                options?.signal?.throwIfAborted();
+                if (next.done) { response = next.value || { content, model: this.activeProvider.model }; break; }
+                if (!next.value) continue;
+                content += next.value; emitted = true;
+                yield next.value;
+              }
+            } finally { await tokens.return(); }
+          } else {
+            response = await adapter.chat(messages, requestOptions);
+          }
           options?.signal?.throwIfAborted();
           this.activeProvider = { ...providerIdentity(hop), model: response.model || this.activeProvider.model };
           break;
@@ -1529,7 +1557,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
           if (lastError.stack) lastError.stack = redactString(lastError.stack);
           // auth / forbidden / missing-model won't fix on retry — bail to next hop
           const permanent = error instanceof LLMUnavailableError || ['security_refusal', 'quota', 'auth', 'model_unavailable', 'context_length', 'bad_request'].includes(classifyErrorKind(lastError));
-          if (permanent || attempt >= retryAttempts) break;
+          if (emitted || permanent || attempt >= retryAttempts) break;
           let delayMs = this.retryDelayMs * Math.pow(2, attempt - 1);
           if (error instanceof LLMApiError && error.retryAfterMs) {
             // Honor Retry-After but CAP it (2 min) so a hostile/oversized header can't pin the
@@ -1557,7 +1585,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             durationMs: Date.now() - startTime,
           });
         }
-        if (hasNext && permitsFallback(reason, requestConfig.fallbackPolicy)) {
+        if (!emitted && hasNext && permitsFallback(reason, requestConfig.fallbackPolicy)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1571,7 +1599,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason });
           continue;
         }
-        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, reason, sourceError: lastError?.message });
+        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, partialOutput: emitted, reason, sourceError: lastError?.message });
         break;
       }
 
@@ -1595,7 +1623,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
         if (soft.endsWith('_refusal')) {
           this.emit('request:refusal', { provider: hop.provider, model: hop.model, preview: (response.content || '').slice(0, 160) });
         }
-        if (hasNext && permitsFallback(soft, requestConfig.fallbackPolicy)) {
+        if (!emitted && hasNext && permitsFallback(soft, requestConfig.fallbackPolicy)) {
           await appendFallbackAudit({
             ...auditContext,
             event: 'fallback_trigger',
@@ -1609,7 +1637,7 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
             fromProvider: hop.provider, toProvider: ladder[rung + 1].provider, engaged: true, reason: soft });
           continue;
         }
-        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, reason: soft, sourceResponse: redactLedgerText(response.content || '', 30000) });
+        await appendFallbackAudit({ ...auditContext, event: 'fallback_stopped', from: { provider: hop.provider, model: hop.model }, partialOutput: emitted, reason: soft, sourceResponse: redactLedgerText(response.content || '', 30000) });
         this.emit('request:complete', { response, durationMs: Date.now() - startTime });
         return response;
       }
@@ -1719,16 +1747,23 @@ export class LLMBackbone extends EventEmitter<LLMEvents> {
     messages: LLMMessage[],
     options?: ChatOptions
   ): AsyncGenerator<string, void, unknown> {
-    if (this.adapter.stream) {
-      for await (const token of this.adapter.stream(messages, options)) {
-        this.emit('token:stream', { token });
-        yield token;
+    const request = this.request(messages, options, true);
+    let emitted = false;
+    try {
+      while (true) {
+        const next = await request.next();
+        if (next.done) {
+          if (!emitted && next.value?.content) {
+            this.emit('token:stream', { token: next.value.content });
+            yield next.value.content;
+          }
+          return;
+        }
+        emitted = true;
+        this.emit('token:stream', { token: next.value });
+        yield next.value;
       }
-    } else {
-      // Fallback: simulate streaming with the full response
-      const response = await this.chat(messages, options);
-      yield response.content;
-    }
+    } finally { await request.return(); }
   }
 
   /**
