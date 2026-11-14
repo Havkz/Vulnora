@@ -54,7 +54,7 @@ describe('website execution repairs', () => {
   });
   it('uses the native TRACE response body to distinguish reflection from method availability', async () => {
     const server = createServer((request, response) => {
-      response.writeHead(200); response.end(request.method === 'TRACE' ? 'TRACE / HTTP/1.1\r\nHost: localhost' : 'Normal response');
+      response.writeHead(200); response.end(request.method === 'TRACE' ? `TRACE / HTTP/1.1\r\nX-Vulnora-Probe: ${request.headers['x-vulnora-probe']}` : 'Normal response');
     });
     servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'http_methods_test'));

@@ -2,16 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createOperator } from '../operators/index.js';
 import type { Finding } from '../types/index.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HONESTY SPINE — LOAD-BEARING IN THE LIVE PATH.
-//
-// The provenance gate (gateLiveFinding) must run where findings are CREATED, not as
-// an opt-in verifyFinding(id) call nothing invokes. This test pins that invariant to
-// the operator's recordFinding chokepoint — the same path executeTask() uses to record
-// every agent finding. A model-asserted finding (no tool evidence) must be recorded
-// UNVERIFIED; a tool-backed finding must verify. If this regresses, a model can assert a
-// "critical" into the record for free again — the exact failure the whole project prevents.
-// ─────────────────────────────────────────────────────────────────────────────
+// Output labels alone must never establish a verified vulnerability.
 
 function baseFinding(over: Partial<Finding>): Finding {
   return {
@@ -44,7 +35,7 @@ describe('honesty spine is load-bearing at finding creation (operator.recordFind
     expect(blocked!.reasons.join(' ')).toMatch(/provenance|evidence/i);
   });
 
-  it('a tool-backed finding (real tool-output evidence) verifies', () => {
+  it('tool output establishes provenance but does not verify a vulnerability', () => {
     const op = createOperator('test-recon2', 'recon');
     const f = baseFinding({
       title: 'nmap found open port',
@@ -53,9 +44,9 @@ describe('honesty spine is load-bearing at finding creation (operator.recordFind
     });
     op.recordFinding(f);
 
-    expect(f.verifyGate?.passed).toBe(true);
+    expect(f.verifyGate?.passed).toBe(false);
     expect(f.verifyGate?.provenance).toBe('tool');
-    expect(f.verifiedAt).toBeTypeOf('number');
+    expect(f.verifiedAt).toBeUndefined();
   });
 
   it('getVerified-style filter only surfaces gate-passed findings', () => {
@@ -63,6 +54,6 @@ describe('honesty spine is load-bearing at finding creation (operator.recordFind
     op.recordFinding(baseFinding({ title: 'prose claim', evidence: [] }));
     op.recordFinding(baseFinding({ title: 'tool claim', evidence: [{ type: 'output', content: 'x'.repeat(20), timestamp: Date.now() }] }));
     const verified = op.getFindings().filter((f) => f.verifyGate?.passed);
-    expect(verified.map((f) => f.title)).toEqual(['tool claim']);
+    expect(verified).toEqual([]);
   });
 });

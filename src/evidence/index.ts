@@ -13,7 +13,8 @@ import type {
   Severity,
   Vulnerability,
 } from '../types/index.js';
-import { gateLiveFinding } from './gate.js';
+import { applyFindingVerification } from './gate.js';
+import type { EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 
 // =============================================================================
 // CREDENTIAL REDACTION — secrets NEVER leave the process in an API/LLM output
@@ -65,25 +66,8 @@ export function cvssToSeverity(cvss: number): Severity {
   return 'info';
 }
 
-function cloneEvidence(evidence: Evidence): Evidence {
-  return {
-    ...evidence,
-    metadata: evidence.metadata ? { ...evidence.metadata } : undefined,
-  };
-}
-
-function cloneFinding(finding: Finding): Finding {
-  return {
-    ...finding,
-    cve: finding.cve ? [...finding.cve] : undefined,
-    cwe: finding.cwe ? [...finding.cwe] : undefined,
-    references: finding.references ? [...finding.references] : undefined,
-    evidence: Array.isArray(finding.evidence) ? finding.evidence.map(cloneEvidence) : [],
-    verifyGate: finding.verifyGate
-      ? { ...finding.verifyGate, reasons: [...finding.verifyGate.reasons] }
-      : undefined,
-  };
-}
+function cloneEvidence(evidence: Evidence): Evidence { return structuredClone(evidence); }
+function cloneFinding(finding: Finding): Finding { return structuredClone({ ...finding, evidence: Array.isArray(finding.evidence) ? finding.evidence : [] }); }
 
 function hasPassedVerificationGate(finding: Finding): boolean {
   return finding.verifiedAt !== undefined && finding.verifyGate?.passed === true;
@@ -97,8 +81,12 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
   private findings: Map<string, Finding> = new Map();
   private credentials: Map<string, Credential> = new Map();
 
+  constructor(private readonly getRecords: () => EvidenceRecord[] = () => []) { super(); }
+
   restoreCheckpoint(state: { findings: Finding[]; credentials: Credential[] }): void {
     const saved = structuredClone(state);
+    const records = this.getRecords();
+    for (const finding of saved.findings) applyFindingVerification(finding, records);
     this.findings = new Map(saved.findings.map(finding => [finding.id, finding]));
     this.credentials = new Map(saved.credentials.map(credential => [credential.id, credential]));
   }
@@ -111,6 +99,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
       finding.id = randomUUID();
     }
     const stored = cloneFinding(finding);
+    applyFindingVerification(stored, this.getRecords());
     this.findings.set(stored.id, stored);
     this.emit('finding:added', cloneFinding(stored));
     return cloneFinding(stored);
@@ -132,6 +121,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
       if (sanitized.cwe) sanitized.cwe = [...sanitized.cwe];
       if (sanitized.references) sanitized.references = [...sanitized.references];
       Object.assign(finding, sanitized);
+      applyFindingVerification(finding, this.getRecords());
       this.emit('finding:updated', cloneFinding(finding));
     }
     return finding ? cloneFinding(finding) : undefined;
@@ -139,15 +129,14 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
 
   /**
    * Verify a finding — through the honesty gate. A finding is marked verified ONLY
-   * if it passes the live verification gate (real tool-output provenance). Otherwise
+   * if matching runtime evidence validates the same claim and target. Otherwise
    * it is left UNVERIFIED with the gate's reasons recorded — the gate is the door.
    */
   verifyFinding(findingId: string): Finding | undefined {
     const finding = this.findings.get(findingId);
     if (!finding) return finding;
-    const gate = gateLiveFinding(finding);
-    finding.verifyGate = { passed: gate.passed, provenance: gate.provenance, reasons: gate.reasons, checkedAt: gate.checkedAt };
-    if (gate.passed) {
+    applyFindingVerification(finding, this.getRecords());
+    if (finding.verifyGate?.passed) {
       finding.verifiedAt = Date.now();
       this.emit('finding:verified', cloneFinding(finding));
     } else {
@@ -166,6 +155,7 @@ export class EvidenceVault extends EventEmitter<EvidenceVaultEvents> {
     if (finding) {
       const storedEvidence = cloneEvidence(evidence);
       finding.evidence.push(storedEvidence);
+      applyFindingVerification(finding, this.getRecords());
       this.emit('evidence:added', { findingId, evidence: cloneEvidence(storedEvidence) });
     }
     return finding ? cloneFinding(finding) : undefined;

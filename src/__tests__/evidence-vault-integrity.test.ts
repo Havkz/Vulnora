@@ -28,7 +28,7 @@ describe('EvidenceVault verification integrity', () => {
 
     const stored = vault.getFinding('finding-1');
     expect(stored?.verifiedAt).toBeUndefined();
-    expect(stored?.verifyGate).toBeUndefined();
+    expect(stored?.verifyGate?.passed).toBe(false);
     expect(vault.getVerifiedFindings()).toEqual([]);
   });
 
@@ -45,7 +45,7 @@ describe('EvidenceVault verification integrity', () => {
 
     const stored = vault.getFinding('finding-1');
     expect(stored?.verifiedAt).toBeUndefined();
-    expect(stored?.verifyGate).toBeUndefined();
+    expect(stored?.verifyGate?.passed).toBe(false);
     expect(stored?.evidence).toEqual([]);
     expect(vault.getVerifiedFindings()).toEqual([]);
   });

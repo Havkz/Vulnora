@@ -63,7 +63,7 @@ export function evaluateExploitExecution(result: Pick<AgentResult, 'steps'>): {
 }
 import type { Target } from '../types/index.js';
 import { OPERATOR_SYSTEM_PROMPTS } from '../prompts/index.js';
-import { gateLiveFinding } from '../evidence/gate.js';
+import { applyFindingVerification } from '../evidence/gate.js';
 
 // =============================================================================
 // OPERATOR EVENTS
@@ -313,6 +313,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   private _state: OperatorState;
   private llm?: LLMBackbone;
   private agentLoop?: AgentLoop;
+  private arsenal?: Arsenal;
   /** Shared pack board (Phase-2). Attached only when swarm coordination is on; absent = solo baseline. */
   private board?: PackBoard;
   private activeTask?: { task: Task; controller: AbortController };
@@ -538,8 +539,11 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
   /**
    * Attach an Arsenal and AgentLoop for autonomous tool-using execution
    */
-  attachArsenal(_arsenal: Arsenal, agentLoop: AgentLoop): void {
+  attachArsenal(arsenal: Arsenal, agentLoop: AgentLoop): void {
     this.agentLoop = agentLoop;
+    this.arsenal = arsenal;
+    const records = arsenal.getOrchestrator().getEvidence();
+    for (const finding of this.findings) applyFindingVerification(finding, records);
   }
 
   /** Attach the shared pack board so this operator sees the swarm's live lead-board (Phase-2). */
@@ -604,6 +608,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
           description: finding.details,
           severity: finding.severity,
           targetId: target?.id || 'unknown',
+          targetAddress: target?.address,
           operatorId: this.id,
           phase: task.phase as KillChainPhase,
           cvss: finding.cvss,
@@ -614,7 +619,7 @@ export class OperatorAgent extends EventEmitter<OperatorEvents> {
                 type: 'output',
                 content: finding.toolOutput || finding.details || '',
                 timestamp: Date.now(),
-                metadata: { tool: finding.toolName },
+                metadata: { tool: finding.toolName, recordIds: finding.evidenceRecordIds, findingId: finding.findingId },
               }]
             : [],
           remediation: finding.remediation,
@@ -775,22 +780,11 @@ Respond in a structured format.`;
    * Record a finding
    */
   recordFinding(finding: Finding): void {
-    // HONESTY SPINE — load-bearing, IN the live path (not an opt-in verifyFinding call).
-    // A finding is stamped verified ONLY if it passes the provenance gate (real tool
-    // output). A model-asserted finding is still recorded — but left UNVERIFIED with the
-    // gate's reasons attached. This enforces the invariant the project sells, at the point
-    // of creation, so a model can no longer assert a "critical" into the record for free.
-    const gate = gateLiveFinding(finding);
-    finding.verifyGate = { passed: gate.passed, provenance: gate.provenance, reasons: gate.reasons, checkedAt: gate.checkedAt };
-    if (gate.passed) {
-      finding.verifiedAt = finding.verifiedAt ?? Date.now();
-    } else {
-      delete finding.verifiedAt;
-    }
-    this.findings.push(finding);
+    applyFindingVerification(finding, this.arsenal?.getOrchestrator().getEvidence());
+    this.findings.push(structuredClone(finding));
     this._state.findingsCount++;
-    this.emit('finding:discovered', { finding });
-    if (!gate.passed) this.emit('finding:gate-blocked', { finding, reasons: gate.reasons });
+    this.emit('finding:discovered', { finding: structuredClone(finding) });
+    if (!finding.verifyGate?.passed) this.emit('finding:gate-blocked', { finding, reasons: finding.verifyGate?.reasons || [] });
   }
 
   /**
@@ -806,7 +800,7 @@ Respond in a structured format.`;
    * Get all findings
    */
   getFindings(): Finding[] {
-    return [...this.findings];
+    return structuredClone(this.findings);
   }
 
   /**

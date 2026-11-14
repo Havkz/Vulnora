@@ -224,6 +224,8 @@ export interface Finding {
   description: string;
   severity: Severity;
   targetId: string;
+  /** Assessment target used to bind runtime verification evidence. */
+  targetAddress?: string;
   operatorId: string;
   phase: KillChainPhase;
   cvss?: number;
@@ -235,8 +237,8 @@ export interface Finding {
   discoveredAt: number;
   verifiedAt?: number;
   exploitedAt?: number;
-  /** Result of the live verification gate — present once verifyFinding() has run. */
-  verifyGate?: { passed: boolean; provenance: 'none' | 'context' | 'tool'; reasons: string[]; checkedAt: number };
+  /** Runtime verification result, recomputed when findings enter or change in the vault. */
+  verifyGate?: { passed: boolean; provenance: 'none' | 'context' | 'tool'; evidenceStatus?: 'validated' | 'exploitable'; reasons: string[]; checkedAt: number };
 }
 
 export interface Evidence {
@@ -476,7 +478,7 @@ export interface ToolFinding {
   remediation?: string;
   /**
    * How this finding was produced — the provenance flag the honesty gate keys on:
-   *  'tool'  = parsed from real tool output (has provenance, can be verified)
+   *  'tool'  = parsed from tool output; verification separately requires a validated runtime record
    *  'model' = asserted by the model in its debrief prose (NO provenance — the gate
    *            records it but refuses to mark it verified; prose is not evidence).
    */

@@ -2736,9 +2736,9 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
     ],
     handler: async (context) => {
       const url = context.parameters.url as string;
-      const methods = ['GET', 'HEAD', 'OPTIONS', 'TRACE'];
+      const methods = ['GET', 'HEAD', 'OPTIONS', 'TRACE', 'TRACE'];
       const results: { method: string; status: number; allowed: boolean }[] = [];
-      const dangerousMethods: string[] = [];
+      const reflections: { requestLine: string; probeHeader: string; status: number }[] = [];
 
       // First try OPTIONS to see if Allow header is returned
       let optionsAllow: string | null = null;
@@ -2762,18 +2762,24 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       for (const method of methods) {
         try {
           let status: number; let body: string;
+          const marker = method === 'TRACE' ? randomUUID() : undefined;
+          const headers = marker ? { 'X-Vulnora-Probe': marker } : undefined;
           if (method === 'TRACE' && !(fetchContext.getStore()?.scope && await isToolAvailable('curl'))) {
-            const response = await nativeHttpRequest(url, method, undefined, undefined, 5000);
+            const response = await nativeHttpRequest(url, method, headers, undefined, 5000);
             status = response.status; body = response.body;
           } else {
-            const response = await targetFetch(url, { method, signal: requestTimeoutSignal(5000), redirect: 'manual' });
+            const response = await targetFetch(url, { method, headers, signal: requestTimeoutSignal(5000), redirect: 'manual' });
             status = response.status; body = await response.text();
           }
           const allowed = status >= 200 && status < 300;
           results.push({ method, status, allowed });
 
-          if (allowed && method === 'TRACE' && /^TRACE\s+\S+\s+HTTP\/1\.[01]/m.test(body)) {
-            dangerousMethods.push(method);
+          if (allowed && marker) {
+            const lines = body.split(/\r?\n/);
+            const target = new URL(url);
+            const requestLine = lines.find(line => line === `TRACE ${target.pathname}${target.search} HTTP/1.1` || line === `TRACE ${target.pathname}${target.search} HTTP/1.0`);
+            const probeHeader = lines.find(line => line.trim().toLowerCase() === `x-vulnora-probe: ${marker}`);
+            if (requestLine && probeHeader) reflections.push({ requestLine, probeHeader, status });
           }
 
         } catch {
@@ -2793,16 +2799,19 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       }
       sections.push('\nPOST, PUT, DELETE, PATCH and CONNECT were not executed; method availability alone is not a vulnerability.');
 
+      for (const reflection of reflections) sections.push(`Observed response ${reflection.status}: ${reflection.requestLine}\n${reflection.probeHeader}`);
       const incomplete = results.some(result => result.status === 0 || result.status === 429 || result.status >= 500);
       return {
         success: !incomplete,
         error: incomplete ? 'HTTP method inspection incomplete: one or more requests failed or were rate limited.' : undefined,
-        metadata: incomplete ? { orchestrationStatus: 'target_error' } : dangerousMethods.length === 0 ? { orchestrationStatus: 'valid_negative_result' } : undefined,
+        metadata: { ...(incomplete ? { orchestrationStatus: 'target_error' } : reflections.length === 0 ? { orchestrationStatus: 'valid_negative_result' } : {}),
+          traceReflections: reflections },
         output: sections.join('\n'),
-        findings: dangerousMethods.length > 0 ? [{
+        findings: reflections.length > 0 ? [{
           title: 'HTTP TRACE Reflects Request',
           severity: 'low' as const,
-          details: 'A successful TRACE response reflected an HTTP request. Sensitive header exposure and exploitable impact have not been established.',
+          evidenceStatus: !incomplete && reflections.length === 2 ? 'validated' : 'observed',
+          details: `${reflections.length} TRACE response(s) reflected the matching request line and an independently generated probe header. Sensitive header exposure and exploitable impact have not been established.`,
         }] : undefined,
       };
     },

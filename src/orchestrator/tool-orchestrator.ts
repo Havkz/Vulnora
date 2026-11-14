@@ -81,6 +81,7 @@ export interface EvidenceRecord {
   normalizedSignature: string;
   equivalentSignature: string;
   target: string;
+  targetId?: string;
   timestamp: number;
   requestParameters: Record<string, unknown>;
   rawOutput: string;
@@ -412,7 +413,7 @@ export class ToolOrchestrator {
   }
   private readonly defaultBudgets: TargetBudgets;
 
-  getEvidence(): EvidenceRecord[] { return this.records.map(record => ({ ...record, requestParameters: { ...record.requestParameters } })); }
+  getEvidence(): EvidenceRecord[] { return structuredClone(this.records); }
   getActiveCalls(): { host: string; toolName: string; parameters: unknown }[] {
     return [...this.activeExecutions.values()].map(({ host, toolName, parameters }) => ({ host, toolName, parameters: redactSecrets(redactConfiguredSecrets(parameters)) }));
   }
@@ -769,6 +770,10 @@ export class ToolOrchestrator {
   }
 
   async execute(tool: CustomTool, context: ToolContext, runner: () => Promise<ToolResult>): Promise<ToolResult> {
+    return structuredClone(await this.executeShared(tool, context, runner));
+  }
+
+  private async executeShared(tool: CustomTool, context: ToolContext, runner: () => Promise<ToolResult>): Promise<ToolResult> {
     if (context.purpose === 'reporting' || context.repeatReason) return this.executeAdmitted(tool, context, runner);
     const call = normalizeToolCall(tool.name, context);
     const pending = this.admissions.get(call.normalizedSignature);
@@ -968,7 +973,7 @@ export class ToolOrchestrator {
     const record: EvidenceRecord = {
       id, toolName: call.toolName, toolCategory: call.toolCategory,
       normalizedSignature: call.normalizedSignature, equivalentSignature: call.equivalentSignature,
-      target: call.normalizedTarget, timestamp: Date.now(), requestParameters: { ...context.parameters },
+      target: call.normalizedTarget, targetId: context.target?.id, timestamp: Date.now(), requestParameters: { ...context.parameters },
       rawOutput: String(result.output || result.error || ''), parsedOutput: result.metadata,
       status: classified === 'duplicate_skipped' || classified === 'redundant_skipped' || classified === 'scope_denied' || classified === 'not_authorized'
         ? 'skipped'

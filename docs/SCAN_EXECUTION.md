@@ -62,3 +62,25 @@ exclusions still apply.
 - [HTTP semantics, RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2) distinguishes safe automatic retry behavior from requests that can change server state.
 
 The retry count, backoff intervals and inactivity window above are implementation choices. They are covered by local regression tests; they are not universal pentesting limits.
+
+
+## Finding verification
+
+Tool output establishes an observation, not a confirmed vulnerability. A verified
+finding must reference a successful runtime record for the same assessment target
+and origin, with matching output, finding identity, claim and severity. The
+underlying check must explicitly validate that claim. Generic scanner findings,
+reflection candidates, prose and command labels remain **Needs review**.
+
+The HTTP-method check verifies request reflection only after two TRACE responses
+echo their matching request lines and independently generated probe headers.
+It records those observations without claiming sensitive-header disclosure or
+exploitable impact. One reflection remains an observation; a static TRACE example
+is not confirmation. This adds one read-only TRACE request to the method check.
+
+Evidence links survive checkpoints and reports. Restored findings are rechecked;
+legacy verification stamps without matching runtime evidence are downgraded while
+the observations are retained. Editing a claim invalidates unsupported
+verification, and callers receive detached evidence snapshots. This does not yet
+provide browser execution proof, authenticated vulnerability verification or
+verified attack chains; those integrations remain in development.

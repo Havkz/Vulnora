@@ -1,47 +1,51 @@
-/**
- * The live verification gate — the honesty spine, IN the engine path.
- *
- * The disclosure-grade gates (scripts/verify-finding.mjs: anchors, poc ladder,
- * refuter panel, novelty) run on hand-authored finding JSON at the CLI. This is
- * their in-process counterpart for live, operator-produced findings: it refuses
- * to let a Finding be marked `verified` unless it is actually backed by real tool
- * output — provenance-strict, applied to the autonomous swarm, not beside it.
- *
- * The principle is the same one disclosure-gen enforces: a claim is only as strong
- * as its provenance. Prose is not evidence. A severity assertion with no evidence
- * is an overclaim. This is the door — not a decoration next to it.
- */
-
+/** Tool provenance and vulnerability verification are separate claims. */
 import type { Finding } from '../types/index.js';
+import type { EvidenceRecord } from '../orchestrator/tool-orchestrator.js';
 
-/** Evidence types that represent real machine/tool output (vs a human note). */
 const TOOL_EVIDENCE = new Set(['output', 'command', 'response', 'request', 'log', 'file']);
-
 export type LiveProvenance = 'none' | 'context' | 'tool';
-
 export interface LiveGateResult {
   passed: boolean;
   provenance: LiveProvenance;
+  evidenceStatus?: 'validated' | 'exploitable';
   reasons: string[];
   checkedAt: number;
 }
 
-/**
- * Gate a live finding. PASS only when the claim is backed by real tool output.
- * Honest by construction: it never invents provenance, and it states WHY it blocked.
- */
-export function gateLiveFinding(f: Finding): LiveGateResult {
-  const reasons: string[] = [];
+function sameOrigin(target: string, expected?: string): boolean {
+  try { return !!expected && new URL(target).origin === new URL(expected).origin; }
+  catch { return false; }
+}
+
+/** Resolve runtime records, not model-supplied status or output labels. */
+export function gateLiveFinding(f: Finding, records: readonly EvidenceRecord[] = []): LiveGateResult {
   const evidence = Array.isArray(f.evidence) ? f.evidence : [];
-  const toolEv = evidence.filter((e) => e && TOOL_EVIDENCE.has(e.type) && String(e.content || '').trim().length > 0);
+  const toolEvidence = evidence.filter(e => e && TOOL_EVIDENCE.has(e.type) && String(e.content || '').trim());
+  const provenance: LiveProvenance = toolEvidence.length ? 'tool' : evidence.length ? 'context' : 'none';
+  let evidenceStatus: LiveGateResult['evidenceStatus'];
+  const supported = toolEvidence.some(e => records.some(record => {
+    const ids = e.metadata?.recordIds;
+    if (!Array.isArray(ids) || !ids.includes(record.id) || record.status !== 'success'
+      || record.executionStatus !== 'executed' || !record.result.success || record.targetId !== f.targetId || !sameOrigin(record.target, f.targetAddress)
+      || e.content !== record.rawOutput.slice(0, 4000)) return false;
+    const source = Array.isArray(record.result.findings) && record.result.findings.find(source => source && source.findingId === e.metadata?.findingId
+      && ['validated', 'exploitable'].includes(source.evidenceStatus || '')
+      && source.title === f.title && source.details === f.description && source.severity === f.severity
+      && (['cvss', 'cve', 'cwe'] as const).every(key => JSON.stringify(source[key]) === JSON.stringify(f[key])));
+    if (!source) return false;
+    evidenceStatus = source.evidenceStatus === 'exploitable' ? 'exploitable' : 'validated';
+    return true;
+  }));
+  const reasons = supported ? [] : [toolEvidence.length
+    ? 'Tool output is an observation; no matching successful runtime record validates this claim on the target.'
+    : 'No tool-output evidence; model prose cannot verify a finding.'];
+  return { passed: supported, provenance, evidenceStatus, reasons, checkedAt: Date.now() };
+}
 
-  if (toolEv.length === 0) {
-    reasons.push('no tool-output evidence (output/command/response/log/file) — provenance-strict requires a finding be backed by real tool output, not prose');
-  }
-  if ((f.severity === 'critical' || f.severity === 'high') && evidence.length === 0) {
-    reasons.push(`${f.severity} severity asserted with zero evidence — severity must be backed by evidence`);
-  }
-
-  const provenance: LiveProvenance = toolEv.length > 0 ? 'tool' : (evidence.length > 0 ? 'context' : 'none');
-  return { passed: reasons.length === 0, provenance, reasons, checkedAt: Date.now() };
+export function applyFindingVerification(finding: Finding, records: readonly EvidenceRecord[] = []): void {
+  finding.verifyGate = gateLiveFinding(finding, records);
+  if (finding.verifyGate.passed) finding.verifiedAt ??= Date.now();
+  else delete finding.verifiedAt;
+  if (finding.verifyGate.evidenceStatus === 'exploitable') finding.exploitedAt ??= Date.now();
+  else delete finding.exploitedAt;
 }

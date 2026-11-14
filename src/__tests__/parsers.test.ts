@@ -147,10 +147,10 @@ describe('parseToolOutput — source / supply-chain scanners', () => {
   });
 });
 
-describe('end-to-end: a parsed finding passes the live provenance gate', () => {
+describe('parsed findings retain provenance without claiming verification', () => {
   // Mirror how the agent loop stamps provenance (src/agent/index.ts) and how the operator
   // materialises a ToolFinding into a Finding with output-evidence (src/operators/index.ts),
-  // then run the real gate. This proves parsed output is accepted by the honesty spine.
+  // then run the real gate. Parsing preserves observations but is not verification.
   const materialise = (tf: ToolFinding, rawOutput: string, toolName: string): Finding => {
     const stamped = { ...tf, provenance: 'tool' as const, toolName, toolOutput: rawOutput.slice(0, 4000) };
     return {
@@ -172,15 +172,15 @@ describe('end-to-end: a parsed finding passes the live provenance gate', () => {
     };
   };
 
-  it('a parsed nuclei critical finding is gated PASS with provenance=tool', () => {
+  it('a parsed nuclei finding needs runtime verification despite tool provenance', () => {
     const raw = fixture('nuclei.jsonl');
     const tf = parseToolOutput('nuclei', raw)[0];
     const gate = gateLiveFinding(materialise(tf, raw, 'nuclei_tool'));
-    expect(gate.passed).toBe(true);
+    expect(gate.passed).toBe(false);
     expect(gate.provenance).toBe('tool');
   });
 
-  it('every parsed finding across all scanners is gate-passable (real tool evidence)', () => {
+  it('raw scanner output alone never passes verification', () => {
     for (const [id, file] of [
       ['nuclei', 'nuclei.jsonl'], ['httpx', 'httpx.jsonl'], ['dalfox', 'dalfox.json'],
       ['ffuf', 'ffuf.json'], ['katana', 'katana.jsonl'],
@@ -190,7 +190,7 @@ describe('end-to-end: a parsed finding passes the live provenance gate', () => {
       const raw = fixture(file);
       for (const tf of parseToolOutput(id, raw)) {
         const gate = gateLiveFinding(materialise(tf, raw, `${id}_tool`));
-        expect(gate.passed, `${id} finding "${tf.title}" should pass the gate`).toBe(true);
+        expect(gate.passed, `${id} finding "${tf.title}" needs verification`).toBe(false);
         expect(gate.provenance).toBe('tool');
       }
     }

@@ -445,8 +445,8 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     this.cell = new OperatorCell(config.operators?.maxConcurrent || 10, this.llm);
     this.mission = new MissionControl();
     this.targetEnv = new TargetEnvironment();
-    this.vault = new EvidenceVault();
     this.arsenal = new Arsenal();
+    this.vault = new EvidenceVault(() => this.arsenal.getOrchestrator().getEvidence());
     if (this.hooks.onStateCheckpoint) this.arsenal.getOrchestrator().setCheckpointWriter(() => this.persistState());
     this.opsec = new OpsecController(config.opsec);
     if (config.scanningBehavior) this.setScanningBehavior(config.scanningBehavior);
@@ -717,7 +717,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
       // Dedup + a per-run cap keep the loop bounded. Gated by VULNORA_SWARM_COORD for the bake-off.
       if (
         this.coordinationEnabled &&
-        finding.verifyGate?.provenance === 'tool' &&
+        finding.verifyGate?.passed === true &&
         !this.spawnedFollowups.has(finding.id) &&
         this.spawnedFollowups.size < this.maxFollowups
       ) {
@@ -836,7 +836,7 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
         exploitAvailable: (finding.exploitedAt !== null && finding.exploitedAt !== undefined),
         evidenceStatus: (finding.exploitedAt !== null && finding.exploitedAt !== undefined)
           ? 'exploitable'
-          : (finding.verifiedAt !== null && finding.verifiedAt !== undefined) || finding.verifyGate?.passed
+          : finding.verifiedAt !== undefined && finding.verifyGate?.passed === true
             ? 'validated'
             : finding.evidence.length > 0
               ? 'observed'
@@ -956,10 +956,19 @@ export class VulnoraCommand extends EventEmitter<CommandEvents> {
     if (saved.operators.length > this.cell.getCapacity()) throw new Error('Configured operator capacity is smaller than the saved project. Restore its recorded limit first.');
     this.assessmentRules = normalizeAssessmentRules(saved.assessment);
     this.taskTimeoutMs = saved.limits.taskTimeoutMs;
-    this.targetEnv.restoreCheckpoint(saved.targets);
     this.mission.restoreCheckpoint(saved.mission);
-    this.vault.restoreCheckpoint(saved.vault);
     this.arsenal.getOrchestrator().restoreCheckpoint(saved.orchestrator);
+    this.vault.restoreCheckpoint(saved.vault);
+    const verifiedIds = new Set(this.vault.getVerifiedFindings().map(finding => finding.id));
+    const recordedIds = new Set(saved.vault.findings.map(finding => finding.id));
+    for (const target of saved.targets) {
+      for (const vulnerability of target.vulnerabilities || []) {
+        if (recordedIds.has(vulnerability.id) && !verifiedIds.has(vulnerability.id)) {
+          vulnerability.evidenceStatus = 'observed'; vulnerability.exploitAvailable = false;
+        }
+      }
+    }
+    this.targetEnv.restoreCheckpoint(saved.targets);
     this.opsec.restoreCheckpoint(saved.opsec);
     const restoredBehavior = this.arsenal.getOrchestrator().scanPolicy.behavior;
     if (restoredBehavior) this.setScanningBehavior(restoredBehavior);
