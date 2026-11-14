@@ -1346,15 +1346,15 @@ export const BUILTIN_TOOLS: CustomTool[] = [
   // =============================================================================
   {
     name: 'web_surface_review',
-    description: 'Review observed public pages, login boundaries, GET forms and API query parameters; never submit login or POST forms.',
+    description: 'Inventory public links, forms, linked scripts, API query parameters and authentication boundaries; read up to 32 same-origin responses without submitting forms or executing JavaScript.',
     category: 'web',
     parameters: [{ name: 'url', type: 'string', description: 'Original website URL', required: true }],
     handler: async context => {
       try {
         return await reviewWebsiteSurface(String(context.parameters.url), fetchContext.getStore()?.orchestrator?.getEvidence() || [], async url => {
           const response = await targetFetch(url, { method: 'GET', signal: requestTimeoutSignal(webRequestTimeoutMs()) });
-          return { status: response.status, body: await response.text() };
-        });
+          return { status: response.status, body: await response.text(), url: response.url || url, contentType: response.headers.get('content-type') || undefined };
+        }, context.abortSignal);
       } catch (error) { return { success: false, error: `Website surface review failed: ${error instanceof Error ? error.message : String(error)}` }; }
     },
   },

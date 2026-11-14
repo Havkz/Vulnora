@@ -22,6 +22,7 @@ The focus is a recoverable workflow: define a target, confirm the scan, inspect 
 ## Features
 
 - **Website and API assessment** — DNS, HTTP, TLS, content discovery and vulnerability checks, with integrations for tools such as Nmap, Nuclei, ffuf, curl and testssl.sh.
+- **Observed website surface** — same-origin links, forms, GET parameters, linked scripts and OpenAPI query inputs feed targeted checks; script API URLs remain unverified hints.
 - **Persistent projects** — saved targets, task checkpoints, evidence and complete event journals; recover interrupted work where safe replay is supported.
 - **Terminal workspace** — guided project creation, explicit start confirmation, current-stage display, command output, settings and full-output view with `Ctrl+T`.
 - **Flexible AI providers** — installed Codex and Claude CLIs reuse their supported login workflows; an installed Ollama model can serve as fallback. Supported deterministic checks remain available without AI.

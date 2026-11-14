@@ -111,3 +111,11 @@ None of these milestones substitutes for completion of the entire objective.
 - Follow-on browser source review: Strix `tools/agent_browser/README.md` and the core/snapshot/session sections of `skills/tooling/agent_browser.md` describe an external `agent-browser` Chromium/CDP CLI, compact accessibility snapshots and per-agent sessions. Vulnora currently has neither that executable nor a browser dependency in this environment. Browser/session/egress integration remains work to implement and validate, not an existing feature.
 
 - Risk milestone final checks: TypeScript build exited 0; changed-file ESLint reported zero errors and 16 existing style warnings. No native Windows result is claimed.
+
+
+## Static website discovery integration — 2026-11-14
+
+- Reviewed NeuroSploit `crates/harness/src/probe.rs`: its deterministic probe collects bounded form details, script sources, technology/SPA hints and response observations before model recon. Its form parser is string-based and auto-account workflows have separate risks; Vulnora adopts the observation-first concept, not that parser or automatic submission.
+- Replaced Vulnora's HTML regex extraction with pinned parse5 8.1.1 (MIT; its entities dependency is BSD-2-Clause). Node has no built-in HTML DOM parser. HTML entities, base URLs, form ownership and real elements now follow parsing semantics; comments/script text do not become forms. No reference code was copied.
+- Existing HTTP observations seed a bounded same-origin link/script traversal. Form/query/OpenAPI inputs feed the existing validation planner; script URL literals are unverified hints only. Body/node/page/input limits and unavailable responses preserve incomplete coverage. No script execution or browser claims are made.
+- Thirty-five parser/coverage tests passed. The actual loopback assessment now discovers a form on a linked page, reads a linked script without calling its hinted API, and executes both observed-input checks before leaving Scanning; its execution/rule regression run passed 29 cases. Final parser/coverage verification passed all 35 cases; TypeScript build exited 0. Changed-file lint has zero errors and 14 existing style warnings. Windows validation remains outstanding.

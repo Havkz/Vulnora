@@ -137,6 +137,11 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
       status: review.postForms ? 'blocked' : 'not_applicable',
       reason: review.postForms ? 'Only POST forms were found; testing requires separately authorized form submissions and test data.' : 'No query parameters, GET-form inputs or OpenAPI GET query parameters found in reviewed public responses.',
     };
+    if (review.complete === false) {
+      for (const capability of ['authentication_testing', 'input_surface'] as const) {
+        entries[capability] = { ...entries[capability], status: 'incomplete', reason: 'Public surface review has unresolved responses or parsing/discovery limits.' };
+      }
+    }
   }
   // A successful HTTP/TLS observation is sufficient to seed the corresponding web port.
   if (entries.port_discovery.status === 'not_started' && (httpAvailable || ['completed', 'completed_negative'].includes(entries.tls_analysis.status))) {

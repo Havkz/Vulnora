@@ -17,8 +17,10 @@ describe('real website coverage recovery flow', () => {
     const server = createServer((request, response) => {
       paths.push(request.url || '/');
       if (request.url === '/api/private') { response.writeHead(401); response.end('Authentication required'); return; }
+      if (request.url === '/app.js') { response.writeHead(200, { 'content-type': 'text/javascript' }); response.end("fetch('/api/unverified')"); return; }
       response.writeHead(200, { 'content-type': 'text/html' });
-      response.end(request.url === '/' ? '<form action="/search" method="get"><input name="q"></form>' : 'A fixed response with safely encoded inputs.');
+      response.end(request.url === '/' ? '<a href=/docs>Documentation</a><script src=/app.js></script>'
+        : request.url === '/docs' ? '<form action=/search method=get><input name=q></form>' : 'A fixed response with safely encoded inputs.');
     }); servers.push(server);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing local address');
@@ -60,6 +62,8 @@ describe('real website coverage recovery flow', () => {
       expect(['completed', 'completed_negative', 'not_applicable']).toContain(snapshot.entries[capability].status);
     }
     expect(paths.some(path => path.startsWith('/search?q='))).toBe(true);
-    expect(paths.every(path => path === '/' || path === '/api/private' || path.startsWith('/search?q='))).toBe(true);
+    expect(paths).toContain('/docs'); expect(paths).toContain('/app.js');
+    expect(paths).not.toContain('/api/unverified');
+    expect(paths.every(path => path === '/' || path === '/api/private' || path === '/docs' || path === '/app.js' || path.startsWith('/search?q='))).toBe(true);
   }, 15000);
 });

@@ -72,8 +72,67 @@ describe('evidence-driven website coverage', () => {
   it('does not turn server failures into completed negative surface evidence', async () => {
     expect((await reviewWebsiteSurface(url, [], async () => ({ status: 503, body: 'Unavailable' }))).success).toBe(false);
   });
+  it('parses actual HTML elements, form ownership and entities without executing scripts', async () => {
+    const requested: string[] = [];
+    const result = await reviewWebsiteSurface(url, [], async address => {
+      requested.push(address);
+      if (address === url) { return { status: 200, contentType: 'text/html', body: `
+        <base href=/app/>
+        <!-- <a href="/comment">Fake link</a><form><input name="fake"></form> -->
+        <script>const markup = '<form><input name="fake"></form>'; fetch('/api/inline');</script>
+        <script src=client.js></script><script src=https://foreign.test/code.js></script>
+        <a href="page?category=one&amp;sort=asc">More</a><a href=/logout>Leave</a>
+        <form id=search action=search method=GET><input name=q><input disabled name=disabled></form>
+        <input form=search name="lang" value="en">
+        <form action=/login method=post><input name=user><input type=password name=password>
+          <input type=hidden name=csrf_token value="do-not-store"></form>` }; }
+      if (address.endsWith('client.js')) return { status: 200, contentType: 'text/javascript', body: "fetch('/api/items'); axios.post('/api/write');" };
+      return { status: 200, contentType: 'text/html', body: '<a href="/">Home</a><form action=/nested><textarea name=message></textarea></form>' };
+    });
+    const surface = result.metadata?.websiteSurface;
+    expect(surface).toMatchObject({ complete: true, postForms: 1,
+      scripts: [url + 'app/client.js'], apiHints: expect.arrayContaining([url + 'api/inline', url + 'api/items', url + 'api/write']),
+      inputTargets: expect.arrayContaining([{ url: url + 'app/search?q=', param: 'q' }, { url: url + 'app/search?lang=', param: 'lang' }, { url: url + 'nested?message=', param: 'message' }]),
+      forms: expect.arrayContaining([expect.objectContaining({ action: url + 'login', method: 'post', hasCsrf: true })]) });
+    expect(JSON.stringify(surface)).not.toContain('do-not-store');
+    expect(JSON.stringify(surface)).not.toContain('"param":"fake"');
+    expect(JSON.stringify(surface)).not.toContain('"param":"disabled"');
+    expect(requested).toEqual([url, url + 'app/client.js', url + 'app/page?category=one&sort=asc']);
+  });
+
+  it('keeps failed or bounded discovery incomplete instead of declaring absent input/auth surfaces', async () => {
+    const read = vi.fn(async () => ({ status: 200, body: Array.from({ length: 50 }, (_, i) => `<a href="/page${i}">Next</a>`).join('') }));
+    const result = await reviewWebsiteSurface(url, [], read);
+    expect(read).toHaveBeenCalledTimes(32);
+    expect(result.metadata?.websiteSurface).toMatchObject({ complete: false });
+    const snapshot = evaluateCoverage(url, [record('web_surface_review', result)]);
+    expect(snapshot.entries.authentication_testing.status).toBe('incomplete');
+    expect(snapshot.entries.input_surface.status).toBe('incomplete');
+    const failed = await reviewWebsiteSurface(url, [], async address => {
+      if (address === url) return { status: 200, body: '<a href=/missing>More</a>' };
+      throw new Error('Request failed');
+    });
+    expect(failed.metadata?.websiteSurface).toMatchObject({ complete: false, reviewedUrls: [url] });
+  });
+
+  it('uses the final response URL as the relative-link base and rejects a foreign base element', async () => {
+    const requested: string[] = [];
+    await reviewWebsiteSurface(url, [], async address => {
+      requested.push(address);
+      return address === url ? { status: 200, url: url + 'docs/', body: '<a href=page>Page</a>' }
+        : { status: 200, body: '<base href=https://foreign.test/><a href=escape>External</a><form action=submit><input name=q></form>' };
+    });
+    expect(requested).toEqual([url, url + 'docs/page']);
+  });
+
+  it('propagates cancellation rather than converting it into an unavailable page', async () => {
+    const controller = new AbortController();
+    await expect(reviewWebsiteSurface(url, [], async () => { controller.abort(); throw new Error('cancelled'); }, controller.signal)).rejects.toThrow();
+  });
+
   it('does not repeatedly scan malformed, unterminated form markup', async () => {
     const result = await reviewWebsiteSurface(url, [], async () => ({ status: 200, body: '<form><input name="q"'.repeat(20000) }));
-    expect(result.metadata?.websiteSurface).toMatchObject({ inputTargets: [], postForms: 0 });
+    expect(result.metadata?.websiteSurface).toMatchObject({ inputTargets: [{ url: url + '?q=', param: 'q' }], postForms: 0, complete: false });
+    expect(evaluateCoverage(url, [record('web_surface_review', result)]).entries.input_surface.status).toBe('incomplete');
   });
 });
