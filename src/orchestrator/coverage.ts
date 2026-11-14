@@ -67,16 +67,26 @@ function belongs(record: EvidenceRecord, capability: CoverageCapability): boolea
   return record.toolCategory === 'reporting';
 }
 
-function classify(records: EvidenceRecord[]): CoverageStatus {
+function completedCheck(record: EvidenceRecord): boolean {
+  return record.executionStatus === 'executed' && !record.result?.metadata?.wordlistTruncated
+    && ['positive', 'negative'].includes(record.resultType);
+}
+
+function classify(records: EvidenceRecord[], capability: CoverageCapability): CoverageStatus {
   if (!records.length) return 'not_started';
-  const complete = records.filter(record => !record.result?.metadata?.wordlistTruncated);
+  const complete = records.filter(completedCheck);
   if (complete.some(record => record.executionStatus === 'executed' && record.resultType === 'positive')) return 'completed';
-  if (complete.some(record => record.executionStatus === 'executed' && ['negative', 'empty', 'inconclusive'].includes(record.resultType))) return 'completed_negative';
+  if (complete.some(record => record.resultType === 'negative')) return 'completed_negative';
+  // Recon observations establish collected data, not a negative vulnerability test.
+  if (RECON_COVERAGE.includes(capability) && records.some(record => record.executionStatus === 'executed'
+    && record.resultType === 'inconclusive' && !record.result?.metadata?.wordlistTruncated
+    && String(record.rawOutput || record.result?.output || '').trim())) return 'completed';
   if (records.some(record => record.executionStatus === 'executed' && record.result?.metadata?.wordlistTruncated)) return 'incomplete';
   const last = records.at(-1)!;
   if (last.executionStatus === 'blocked' || (last.errorType && terminalErrors.has(last.errorType))) return 'failed_terminal';
   if (last.executionStatus === 'deferred') return last.errorType === 'waf_blocked' ? 'failed_terminal' : 'failed_retryable';
   if (last.errorType && retryableErrors.has(last.errorType)) return 'failed_retryable';
+  if (records.some(record => record.executionStatus === 'executed' && ['empty', 'inconclusive'].includes(record.resultType))) return 'incomplete';
   return last.executionStatus === 'skipped' ? 'incomplete' : 'failed_retryable';
 }
 
@@ -93,7 +103,7 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
   });
   const entries = Object.fromEntries(CAPABILITIES.map(capability => {
     const matching = hostRecords.filter(record => belongs(record, capability));
-    const status = capability === 'reporting' && reportingCompleted ? 'completed' : classify(matching);
+    const status = capability === 'reporting' && reportingCompleted ? 'completed' : classify(matching, capability);
     return [capability, { capability, status, evidenceRecordIds: matching.map(record => record.id) } satisfies CoverageEntry];
   })) as Record<CoverageCapability, CoverageEntry>;
 
@@ -121,7 +131,7 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
     const inputRecords = hostRecords.filter(record => /^(?:xss_scan|sqli_scan)$/.test(record.toolName));
     const pending = review.inputTargets.some(input => ['xss_scan', 'sqli_scan'].some(toolName => !inputRecords.some(record =>
       record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param
-      && record.executionStatus === 'executed' && ['positive', 'negative', 'empty', 'inconclusive'].includes(record.resultType))));
+      && completedCheck(record))));
     if (pending) entries.input_surface = { ...entries.input_surface, status: 'not_started', reason: 'Observed GET inputs still need targeted XSS and SQL injection checks.' };
     else if (!review.inputTargets.length) entries.input_surface = { ...entries.input_surface,
       status: review.postForms ? 'blocked' : 'not_applicable',
@@ -207,17 +217,25 @@ export function planCoverageRecovery(params: {
       capability: open('authentication_testing') ? 'authentication_testing' : 'input_surface', toolName: 'web_surface_review', parameters: { url },
       description: 'Inspect existing public responses and observed routes for authentication boundaries and concrete GET inputs',
     };
+    const pendingChecks: { action: CoverageRecoveryAction; priorAttempts: number }[] = [];
     for (const input of review?.inputTargets || []) {
       for (const toolName of ['xss_scan', 'sqli_scan']) {
         if (new URL(input.url).origin !== address.origin || !availableTools.has(toolName)) continue;
         const checked = params.records.some(record => record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param
-          && record.executionStatus === 'executed' && ['positive', 'negative', 'empty', 'inconclusive'].includes(record.resultType));
+          && completedCheck(record));
+        const priorAttempts = params.records.filter(record => record.toolName === toolName
+          && record.requestParameters.url === input.url && record.requestParameters.param === input.param
+          && record.executionStatus !== 'skipped').length;
         if (!checked) {
-          return { capability: 'input_surface', toolName, parameters: { url: input.url, param: input.param },
+          pendingChecks.push({ priorAttempts, action: { capability: 'input_surface', toolName, parameters: { url: input.url, param: input.param },
             repeatReason: params.records.some(record => record.toolName === toolName && record.requestParameters.url === input.url && record.requestParameters.param === input.param) ? 'previous_failure' : undefined,
-            description: `Validate observed GET parameter ${input.param} with ${toolName}` };
+            description: `Validate observed GET parameter ${input.param} with ${toolName}` } });
         }
       }
+    }
+    // Share a finite recovery allowance fairly; explicit resume resets the existing counter.
+    if (count('input_surface') < (review?.inputTargets.length || 0) * 6) {
+      return pendingChecks.sort((a, b) => a.priorAttempts - b.priorAttempts)[0]?.action;
     }
   }
   return undefined;
@@ -239,7 +257,7 @@ export function openCoverage(snapshot: CoverageSnapshot, required: CoverageCapab
 
 export function missionCompletionStatus(snapshots: CoverageSnapshot[]): 'COMPLETED' | 'COMPLETED_WITH_WARNINGS' | 'PARTIALLY_COMPLETED' | 'BLOCKED' | 'FAILED' {
   const entries = snapshots.flatMap(snapshot => Object.values(snapshot.entries));
-  if (entries.some(entry => entry.status === 'failed_retryable' || entry.status === 'not_started' || entry.status === 'incomplete')) return 'PARTIALLY_COMPLETED';
+  if (entries.some(entry => ['failed_retryable', 'not_started', 'in_progress', 'incomplete'].includes(entry.status))) return 'PARTIALLY_COMPLETED';
   if (entries.some(entry => entry.status === 'failed_terminal' || entry.status === 'blocked')) return 'COMPLETED_WITH_WARNINGS';
   return 'COMPLETED';
 }

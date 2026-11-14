@@ -337,7 +337,7 @@ async function nativeHttpRequest(
   explicitHeaders?: Record<string, string>,
   body?: string,
   timeoutMs = 30000
-): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]> }> {
+): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]>; body: string }> {
   const context = fetchContext.getStore();
   if (context?.orchestrator?.scanPolicy.behavior) {
     const policy = context.orchestrator.scanPolicy;
@@ -356,7 +356,9 @@ async function nativeHttpRequest(
 }
 
 async function nativeHttpRequestRaw(url: string, method: string, explicitHeaders?: Record<string, string>, body?: string,
-  timeoutMs = 30000): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]> }> {
+  timeoutMs = 30000): Promise<{ status: number; statusText: string; headers: Record<string, string | string[]>; body: string }> {
+  const denied = scopeViolation(fetchContext.getStore()?.scope || null, { parameters: { url } });
+  if (denied) throw new Error(`SCOPE DENIED: target '${denied}' is not authorized`);
   const target = new URL(url);
   if (!['http:', 'https:'].includes(target.protocol)) throw new Error(`Unsupported protocol: ${target.protocol}`);
   const mergedHeaders = targetHeadersForUrl(target, explicitHeaders);
@@ -368,13 +370,18 @@ async function nativeHttpRequestRaw(url: string, method: string, explicitHeaders
     const request = transport.request(target, { method, headers, signal }, response => {
       const responseHeaders = Object.fromEntries(Object.entries(response.headers)
         .filter((entry): entry is [string, string | string[]] => entry[1] !== undefined));
+      const chunks: Buffer[] = []; let size = 0;
+      response.on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > 16 * 1024 * 1024) { response.destroy(new Error('HTTP response exceeds 16 MiB')); return; }
+        chunks.push(chunk);
+      });
       response.on('error', reject);
       response.on('end', () => resolve({
         status: response.statusCode || 0,
         statusText: response.statusMessage || '',
-        headers: responseHeaders,
+        headers: responseHeaders, body: Buffer.concat(chunks).toString('utf8'),
       }));
-      response.resume();
     });
     request.setTimeout(timeoutMs, () => request.destroy(new Error(`Request timed out after ${timeoutMs}ms`)));
     request.on('error', reject);
@@ -1627,7 +1634,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         { payload: '{{constructor.constructor("alert(1)")()}}', name: 'Template injection' },
       ];
 
-      const results: { payload: string; name: string; reflected: boolean; encoded: boolean }[] = [];
+      const results: { payload: string; name: string; reflected: boolean; encoded: boolean; failed?: boolean }[] = [];
       const vulnerable: string[] = [];
       const requestErrors: string[] = [];
 
@@ -1641,6 +1648,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             signal: requestTimeoutSignal(5000),
           });
           const body = await response.text();
+          if (!response.ok || !body.trim()) throw new Error(`HTTP ${response.status}: no usable input-test response`);
 
           // Check if payload is reflected
           const reflected = body.includes(payload);
@@ -1655,12 +1663,12 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         } catch (error) {
           context.abortSignal?.throwIfAborted();
           requestErrors.push(error instanceof Error ? error.message : String(error));
-          results.push({ payload, name, reflected: false, encoded: false });
+          results.push({ payload, name, reflected: false, encoded: false, failed: true });
         }
       }
 
       const output = results.map(r => {
-        const status = r.reflected ? ' REFLECTED (potentially vulnerable)' :
+        const status = r.failed ? 'Incomplete: request failed' : r.reflected ? ' REFLECTED (potentially vulnerable)' :
                        r.encoded ? '✓ Encoded/Filtered' : '✓ Not reflected';
         return `[${r.name}] ${status}`;
       }).join('\n');
@@ -1669,6 +1677,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         success: requestErrors.length === 0,
         error: requestErrors.length ? `XSS inspection incomplete: ${requestErrors.join('; ')}` : undefined,
         output: `XSS scan on ${baseUrl} (param: ${param}):\n${output}`,
+        metadata: requestErrors.length === 0 && vulnerable.length === 0 ? { orchestrationStatus: 'valid_negative_result' } : undefined,
         findings: vulnerable.length > 0 ? [{
           title: 'Potential XSS Vulnerability',
           severity: 'high',
@@ -1720,6 +1729,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         baselineUrl.searchParams.set(param, 'normalvalue');
         const baselineResp = await targetFetch(baselineUrl.toString(), { signal: requestTimeoutSignal(5000) });
         const baselineBody = await baselineResp.text();
+        if (!baselineResp.ok || !baselineBody.trim()) throw new Error(`HTTP ${baselineResp.status}: no usable baseline response`);
         baselineLength = baselineBody.length;
       } catch (error) {
         context.abortSignal?.throwIfAborted();
@@ -1764,6 +1774,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
             indicator = 'Authentication bypass indicators detected';
           }
 
+          if (!vulnerable && (!response.ok || !body.trim())) throw new Error(`HTTP ${response.status}: no usable input-test response`);
           results.push({ payload, name, type, vulnerable, indicator });
           if (vulnerable) {
             vulnerabilities.push(name);
@@ -1784,6 +1795,7 @@ export const BUILTIN_TOOLS: CustomTool[] = [
         success: requestErrors.length === 0,
         error: requestErrors.length ? `SQL injection inspection incomplete: ${requestErrors.join('; ')}` : undefined,
         output: `SQL Injection scan on ${baseUrl} (param: ${param}):\n${output}`,
+        metadata: requestErrors.length === 0 && vulnerabilities.length === 0 ? { orchestrationStatus: 'valid_negative_result' } : undefined,
         findings: vulnerabilities.length > 0 ? [{
           title: 'Potential SQL Injection Vulnerability',
           severity: 'critical',
@@ -2697,20 +2709,21 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
         }
         await optResp.text().catch(() => {});
       } catch {
+        context.abortSignal?.throwIfAborted();
         // OPTIONS request failed, continue with individual tests
       }
 
       // Test each method individually
       for (const method of methods) {
         try {
-          const response = await targetFetch(url, {
-            method,
-            signal: requestTimeoutSignal(5000),
-            redirect: 'manual',
-          });
-
-          const status = response.status;
-          const body = await response.text().catch(() => '');
+          let status: number; let body: string;
+          if (method === 'TRACE' && !(fetchContext.getStore()?.scope && await isToolAvailable('curl'))) {
+            const response = await nativeHttpRequest(url, method, undefined, undefined, 5000);
+            status = response.status; body = response.body;
+          } else {
+            const response = await targetFetch(url, { method, signal: requestTimeoutSignal(5000), redirect: 'manual' });
+            status = response.status; body = await response.text();
+          }
           const allowed = status >= 200 && status < 300;
           results.push({ method, status, allowed });
 
@@ -2719,6 +2732,7 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
           }
 
         } catch {
+          context.abortSignal?.throwIfAborted();
           results.push({ method, status: 0, allowed: false });
         }
       }
@@ -2734,8 +2748,11 @@ ${issues.length ? `Issues:\n${issues.join('\n')}` : '✓ No obvious issues'}`,
       }
       sections.push('\nPOST, PUT, DELETE, PATCH and CONNECT were not executed; method availability alone is not a vulnerability.');
 
+      const incomplete = results.some(result => result.status === 0 || result.status === 429 || result.status >= 500);
       return {
-        success: true,
+        success: !incomplete,
+        error: incomplete ? 'HTTP method inspection incomplete: one or more requests failed or were rate limited.' : undefined,
+        metadata: incomplete ? { orchestrationStatus: 'target_error' } : dangerousMethods.length === 0 ? { orchestrationStatus: 'valid_negative_result' } : undefined,
         output: sections.join('\n'),
         findings: dangerousMethods.length > 0 ? [{
           title: 'HTTP TRACE Reflects Request',

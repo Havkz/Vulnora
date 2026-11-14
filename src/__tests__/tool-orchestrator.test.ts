@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { ToolOrchestrator, normalizeToolCall, websiteEdgeProvider } from '../orchestrator/tool-orchestrator.js';
+import { ToolOrchestrator, normalizeToolCall, websiteEdgeProvider, errorType } from '../orchestrator/tool-orchestrator.js';
 import { JsonlEvidenceStore } from '../orchestrator/evidence-store.js';
 import type { CustomTool, ToolContext, ToolResult } from '../types/index.js';
 
@@ -38,6 +38,10 @@ function httpResult(status = 200, body = '<title>Home</title>'): ToolResult {
 }
 
 describe('central tool orchestrator', () => {
+  it('does not infer a negative security test from arbitrary missing/not-found text', () => {
+    expect(errorType({ success: true, output: 'Required template missing; usable checks not found.' })).toBeUndefined();
+    expect(errorType({ success: true, output: 'No findings', metadata: { orchestrationStatus: 'valid_negative_result' } })).toBe('valid_negative_result');
+  });
   it('distinguishes Cloudflare DNS hosting from actual HTTP proxy evidence, including after restore', async () => {
     const orchestrator = new ToolOrchestrator();
     await orchestrator.execute(tool('dns_lookup'), context({ domain: 'fixture.test', type: 'NS' }), async () => ({ success: true, output: 'Nameservers: ivan.ns.cloudflare.com' }));

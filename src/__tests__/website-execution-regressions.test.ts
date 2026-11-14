@@ -26,7 +26,49 @@ describe('website execution repairs', () => {
     const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === name));
     const result = await arsenal.execute(name, { parameters: { url: 'https://fixture.test/search?q=hello', param: 'q' } });
     expect(result.success).toBe(false); expect(result.error).toContain('inspection incomplete');
+    if (name === 'xss_scan') { expect(result.output).toContain('Incomplete: request failed'); expect(result.output).not.toContain('✓ Not reflected'); }
     expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('error');
+  });
+  it.each(['xss_scan', 'sqli_scan'])('does not count unavailable HTTP responses as a negative %s check', async name => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Unavailable', { status: 503 })));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === name));
+    const result = await arsenal.execute(name, { parameters: { url: 'https://fixture.test/search?q=hello', param: 'q' } });
+    expect(result.success).toBe(false);
+    expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('error');
+  });
+  it.each(['xss_scan', 'sqli_scan'])('records an explicit negative only after usable %s responses', async name => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('Fixed safe response', { status: 200 })));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === name));
+    const result = await arsenal.execute(name, { parameters: { url: 'https://fixture.test/search?q=hello', param: 'q' } });
+    expect(result.success).toBe(true);
+    expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('negative');
+  });
+  it('keeps failed HTTP method requests incomplete and actually sends TRACE', async () => {
+    const methods: string[] = [];
+    const server = createServer((request, response) => { methods.push(request.method || ''); response.writeHead(503); response.end('Unavailable'); });
+    servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'http_methods_test'));
+    const result = await arsenal.execute('http_methods_test', { parameters: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}` } });
+    expect(result.success).toBe(false); expect(methods).toContain('TRACE');
+    expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('error');
+  });
+  it('uses the native TRACE response body to distinguish reflection from method availability', async () => {
+    const server = createServer((request, response) => {
+      response.writeHead(200); response.end(request.method === 'TRACE' ? 'TRACE / HTTP/1.1\r\nHost: localhost' : 'Normal response');
+    });
+    servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'http_methods_test'));
+    const result = await arsenal.execute('http_methods_test', { parameters: { url: `http://127.0.0.1:${(server.address() as { port: number }).port}` } });
+    expect(result.success).toBe(true);
+    expect(result.findings?.[0]?.title).toBe('HTTP TRACE Reflects Request');
+  });
+  it('retains candidate SQL error evidence in HTTP 500 responses', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) => new URL(input).searchParams.get('q') === 'normalvalue'
+      ? new Response('Normal baseline', { status: 200 }) : new Response('SQL syntax error', { status: 500 })));
+    const arsenal = new Arsenal(); arsenal.registerMany(BUILTIN_TOOLS.filter(tool => tool.name === 'sqli_scan'));
+    const result = await arsenal.execute('sqli_scan', { parameters: { url: 'https://fixture.test/search', param: 'q' } });
+    expect(result.findings?.[0]?.title).toBe('Potential SQL Injection Vulnerability');
+    expect(arsenal.getOrchestrator().getEvidence().at(-1)?.resultType).toBe('positive');
   });
   it('rejects redirects to a raw IP unless that IP was explicitly scoped', async () => {
     const paths: string[] = [];

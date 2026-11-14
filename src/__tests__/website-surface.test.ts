@@ -9,9 +9,9 @@ const record = (toolName: string, result: EvidenceRecord['result'], parameters: 
   status: 'success', resultType: 'negative', toolCategory: toolName === 'http_request' ? 'http_fetch' : 'active_validation',
   rawOutput: result.output || '', result,
 } as EvidenceRecord);
-const plan = (records: EvidenceRecord[], tools = ['web_surface_review', 'xss_scan', 'sqli_scan']) => {
+const plan = (records: EvidenceRecord[], tools = ['web_surface_review', 'xss_scan', 'sqli_scan'], inputAttempts = 0) => {
   const snapshot = evaluateCoverage(url, records); snapshot.retryable = snapshot.retryable.filter(item => ['authentication_testing', 'input_surface'].includes(item));
-  return planCoverageRecovery({ snapshot, records, availableTools: new Set(tools), attempts: {}, includeValidation: true,
+  return planCoverageRecovery({ snapshot, records, availableTools: new Set(tools), attempts: { input_surface: inputAttempts }, includeValidation: true,
     network: { edgeSurface: false, blockState: 'clear', consecutiveTimeouts: 0, blockingResponses: 0 },
     budget: { remaining: { tool_call_budget: 100, total_request_budget: 1000 } as TargetBudgets } });
 };
@@ -35,6 +35,20 @@ describe('evidence-driven website coverage', () => {
     const sqli = record('sqli_scan', { success: true }, xss.requestParameters);
     expect(evaluateCoverage(url, [...records, xss, sqli]).entries.input_surface.status).toBe('completed_negative');
     expect(plan([...records, xss, sqli])).toBeUndefined();
+  });
+  it('retries inconclusive inputs finitely and preserves the coverage gap after exhaustion', () => {
+    const input = { url: url + 'search?q=', param: 'q' };
+    const review = record('web_surface_review', { success: true, metadata: {
+      websiteSurface: { reviewedUrls: [url], inputTargets: [input], authentication: [], postForms: 0 },
+    } });
+    const xss = { ...record('xss_scan', { success: true, output: 'No verdict' }, input), resultType: 'inconclusive' as const };
+    const sqli = record('sqli_scan', { success: true }, input);
+    expect(plan([review, sqli, xss])).toMatchObject({ toolName: 'xss_scan', repeatReason: 'previous_failure' });
+    const exhausted = [review, sqli, xss, { ...xss, id: 'retry-1' }, { ...xss, id: 'retry-2' }];
+    expect(plan(exhausted, undefined, 6)).toBeUndefined();
+    expect(plan(exhausted, undefined, 0)).toMatchObject({ toolName: 'xss_scan' });
+    expect(plan([review, xss])).toMatchObject({ toolName: 'sqli_scan' });
+    expect(evaluateCoverage(url, exhausted).entries.input_surface.status).toBe('not_started');
   });
   it('schedules a surface review for untested authentication and inputs rather than silently ending Scanning', () => {
     expect(plan([])).toMatchObject({ capability: 'authentication_testing', toolName: 'web_surface_review' });

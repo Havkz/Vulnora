@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateCoverage, planCoverageRecovery } from '../orchestrator/coverage.js';
+import { evaluateCoverage, planCoverageRecovery, missionCompletionStatus } from '../orchestrator/coverage.js';
 import type { EvidenceRecord, TargetBudgets } from '../orchestrator/tool-orchestrator.js';
 
 function plan(target: string, tool: string) {
@@ -9,6 +9,23 @@ function plan(target: string, tool: string) {
 }
 
 describe('coverage recovery target handling', () => {
+  it.each(['empty', 'inconclusive'] as const)('keeps %s validation results open without misclassifying HTTP observations', resultType => {
+    const target = 'https://fixture.test/';
+    const record = { id: 'unclear', target, toolName: 'nuclei_scan', toolCategory: 'active_validation',
+      executionStatus: 'executed', resultType, rawOutput: resultType === 'empty' ? '' : 'Scan ended without a verdict.' } as EvidenceRecord;
+    const snapshot = evaluateCoverage(target, [record]);
+    expect(snapshot.entries.vulnerability_scanning.status).toBe('incomplete');
+    expect(snapshot.retryable).toContain('vulnerability_scanning');
+    expect(missionCompletionStatus([snapshot])).toBe('PARTIALLY_COMPLETED');
+    const http = { ...record, toolName: 'http_request', toolCategory: 'http_fetch' as const };
+    expect(evaluateCoverage(target, [http]).entries.http_probe.status).toBe(resultType === 'empty' ? 'incomplete' : 'completed');
+  });
+  it('does not call a running assessment complete', () => {
+    const snapshot = evaluateCoverage('https://fixture.test/', []);
+    for (const entry of Object.values(snapshot.entries)) entry.status = 'completed';
+    snapshot.entries.vulnerability_scanning.status = 'in_progress';
+    expect(missionCompletionStatus([snapshot])).toBe('PARTIALLY_COMPLETED');
+  });
   it('does not declare input/authentication testing unnecessary when discovery failed or a login form exists', () => {
     const target = 'https://fixture.test';
     const records = ['dir_bruteforce', 'api_endpoint_discovery'].map(toolName => ({ target, toolName, toolCategory: 'content_discovery',

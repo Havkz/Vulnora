@@ -317,7 +317,7 @@ export function errorType(result: ToolResult): ToolErrorType | undefined {
   const text = `${result.error || ''} ${result.output || ''}`;
   if (result.success) {
     if (!String(result.output || '').trim() && !(result.findings?.length)) return 'empty_result';
-    if (!(result.findings?.length) && /(?:no (?:records|findings|vulnerabilities|open ports|interesting paths|API endpoints)|0 open|not found|missing)/i.test(String(result.output || ''))) return 'valid_negative_result';
+    if (!(result.findings?.length) && /(?:no (?:records|findings|vulnerabilities|open ports|interesting paths|API endpoints)|0 open)/i.test(String(result.output || ''))) return 'valid_negative_result';
     return undefined;
   }
   if (/budget exceeded/i.test(text)) return 'budget_exceeded';
