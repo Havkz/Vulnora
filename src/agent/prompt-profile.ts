@@ -66,7 +66,7 @@ const TOOL_PRIORITY: Record<string, string[]> = {
     'api_endpoint_discovery', 'waybackurls_tool',
   ],
   scanner: [
-    'nuclei_scan', 'web_surface_review', 'http_request', 'header_analysis', 'ssl_scan', 'csp_analysis',
+    'nuclei_scan', 'web_surface_review', 'browser_surface_review', 'http_request', 'header_analysis', 'ssl_scan', 'csp_analysis',
     'cors_check', 'cookie_analysis', 'http_methods_test', 'clickjacking_test',
     'technology_detect', 'version_detect', 'api_endpoint_discovery', 'open_redirect_test',
   ],

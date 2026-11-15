@@ -14,6 +14,8 @@ export interface WebsiteSurface {
   apiHints?: string[];
   complete?: boolean;
   limitations?: string[];
+  renderedUrls?: string[];
+  scriptedUrls?: string[];
 }
 
 type Page = { status: number; body: string; url?: string; contentType?: string };
@@ -31,6 +33,7 @@ export async function reviewWebsiteSurface(url: string, records: EvidenceRecord[
   const authentication = new Map<string, { url: string; status: number }>();
   const links = new Set<string>(); const scripts = new Set<string>(); const apiHints = new Set<string>();
   const forms: NonNullable<WebsiteSurface['forms']> = [];
+  const scriptedUrls = new Set<string>();
   const limitations = new Set<string>();
   const resolve = (value: string, base = root.href): URL | undefined => {
     try {
@@ -144,6 +147,8 @@ export async function reviewWebsiteSurface(url: string, records: EvidenceRecord[
         if (found) { if (links.size < MAX_INPUTS) links.add(found.href); addInputs(found); enqueue(found); }
       }
       if (node.tagName === 'script') {
+        const type = (attr(node, 'type') || '').toLowerCase();
+        if (!type || type === 'module' || /(?:javascript|ecmascript)/.test(type)) scriptedUrls.add(address.href);
         const source = attr(node, 'src');
         if (source) { const found = resolve(source, base); if (found) { if (scripts.size < MAX_INPUTS) scripts.add(found.href); enqueue(found); } }
         else scriptHints(node.childNodes.filter(child => 'value' in child).map(child => 'value' in child ? child.value : '').join(''), address.href);
@@ -166,7 +171,7 @@ export async function reviewWebsiteSurface(url: string, records: EvidenceRecord[
     }
   }
   const surface: WebsiteSurface = { reviewedUrls: [...new Set(reviewed)], inputTargets: [...inputs.values()], authentication: [...authentication.values()],
-    postForms: forms.filter(form => form.method !== 'get').length, forms, links: [...links], scripts: [...scripts], apiHints: [...apiHints], complete: limitations.size === 0, limitations: [...limitations] };
+    postForms: forms.filter(form => form.method !== 'get').length, forms, links: [...links], scripts: [...scripts], apiHints: [...apiHints], complete: limitations.size === 0, limitations: [...limitations], scriptedUrls: [...scriptedUrls] };
   return { success: usableResponses > 0, error: usableResponses ? undefined : 'Website surface review could not read a public response.',
     output: `Public website surface reviewed: ${surface.reviewedUrls.length} response(s), ${inputs.size} GET input(s), ${authentication.size} authentication boundary/entry point(s).\n`
       + [...inputs.values()].map(input => `${input.url} · parameter ${input.param}`).join('\n')

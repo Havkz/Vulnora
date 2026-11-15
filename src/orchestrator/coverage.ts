@@ -95,6 +95,23 @@ function targetUrl(target: string): URL {
   return new URL(/^https?:\/\//i.test(address) ? address : `https://${isIP(address) === 6 ? `[${address}]` : address}`);
 }
 
+function collectedSurface(records: EvidenceRecord[], origin: string): WebsiteSurface | undefined {
+  const latest = new Map<string, WebsiteSurface>();
+  for (const record of records) {
+    if (!['web_surface_review', 'browser_surface_review'].includes(record.toolName)
+      || record.executionStatus !== 'executed' || record.status !== 'success' || targetUrl(record.target).origin !== origin) continue;
+    const surface = record.result?.metadata?.websiteSurface as WebsiteSurface | undefined;
+    if (surface && Array.isArray(surface.inputTargets) && Array.isArray(surface.reviewedUrls) && Array.isArray(surface.authentication)) latest.set(`${record.toolName}:${record.target}`, surface);
+  }
+  const surfaces = [...latest.values()]; if (!surfaces.length) return undefined;
+  const inputs = new Map(surfaces.flatMap(surface => surface.inputTargets).map(input => [`${input.url}:${input.param}`, input]));
+  return { reviewedUrls: [...new Set(surfaces.flatMap(surface => surface.reviewedUrls))], inputTargets: [...inputs.values()],
+    authentication: surfaces.flatMap(surface => surface.authentication), postForms: Math.max(...surfaces.map(surface => surface.postForms)),
+    complete: surfaces.every(surface => surface.complete !== false),
+    scriptedUrls: [...new Set(surfaces.flatMap(surface => surface.scriptedUrls || []))],
+    renderedUrls: [...new Set(surfaces.flatMap(surface => surface.renderedUrls || []))] };
+}
+
 export function evaluateCoverage(target: string, records: EvidenceRecord[], reportingCompleted = false): CoverageSnapshot {
   const host = targetUrl(target).hostname;
   const hostRecords = records.filter(record => {
@@ -121,8 +138,7 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
     if (entries.authentication_testing.status === 'not_started') entries.authentication_testing = { ...entries.authentication_testing, status: 'not_applicable', reason: 'No authentication surface identified.' };
     if (entries.input_surface.status === 'not_started') entries.input_surface = { ...entries.input_surface, status: 'not_applicable', reason: 'No testable input surface identified.' };
   }
-  const review = [...hostRecords].reverse().find(record => record.toolName === 'web_surface_review'
-    && record.executionStatus === 'executed' && record.status === 'success')?.result?.metadata?.websiteSurface as WebsiteSurface | undefined;
+  const review = collectedSurface(hostRecords, targetUrl(target).origin);
   if (review?.reviewedUrls?.length && Array.isArray(review.inputTargets) && Array.isArray(review.authentication)) {
     if (entries.authentication_testing.status === 'not_started') entries.authentication_testing = {
       ...entries.authentication_testing, status: review.authentication.length ? 'completed_negative' : 'not_applicable',
@@ -140,6 +156,11 @@ export function evaluateCoverage(target: string, records: EvidenceRecord[], repo
     if (review.complete === false) {
       for (const capability of ['authentication_testing', 'input_surface'] as const) {
         entries[capability] = { ...entries[capability], status: 'incomplete', reason: 'Public surface review has unresolved responses or parsing/discovery limits.' };
+      }
+    }
+    if (review.scriptedUrls?.some(url => !review.renderedUrls?.includes(url))) {
+      for (const capability of ['authentication_testing', 'input_surface'] as const) {
+        entries[capability] = { ...entries[capability], status: 'incomplete', reason: 'JavaScript-bearing pages still need browser surface inspection.' };
       }
     }
   }
@@ -216,12 +237,18 @@ export function planCoverageRecovery(params: {
   if (params.includeValidation && open('vulnerability_scanning') && count('vulnerability_scanning') < 1 && availableTools.has('nuclei_scan')) return { capability: 'vulnerability_scanning', toolName: 'nuclei_scan', parameters: { target: url, severity: 'critical,high,medium' }, description: 'Automated vulnerability coverage' };
   if (params.includeValidation && open('targeted_validation') && count('targeted_validation') < 1 && availableTools.has('http_methods_test')) return { capability: 'targeted_validation', toolName: 'http_methods_test', parameters: { url }, description: 'Low-impact targeted HTTP validation' };
   if (params.includeValidation && (open('authentication_testing') || open('input_surface'))) {
-    const review = [...params.records].reverse().find(record => record.toolName === 'web_surface_review'
-      && record.executionStatus === 'executed' && record.status === 'success' && targetUrl(record.target).origin === address.origin)?.result?.metadata?.websiteSurface as WebsiteSurface | undefined;
+    const review = collectedSurface(params.records, address.origin);
     if (!review && availableTools.has('web_surface_review')) return {
       capability: open('authentication_testing') ? 'authentication_testing' : 'input_surface', toolName: 'web_surface_review', parameters: { url },
       description: 'Inspect existing public responses and observed routes for authentication boundaries and concrete GET inputs',
     };
+    if (availableTools.has('browser_surface_review')) {
+      const pending = review?.scriptedUrls?.find(candidate => !review.renderedUrls?.includes(candidate)
+        && params.records.filter(record => record.toolName === 'browser_surface_review' && record.target === candidate && record.executionStatus !== 'skipped').length < 2);
+      if (pending) return { capability: 'input_surface', toolName: 'browser_surface_review', parameters: { url: pending },
+        repeatReason: params.records.some(record => record.toolName === 'browser_surface_review' && record.target === pending) ? 'previous_failure' : undefined,
+        description: 'Inspect JavaScript-generated forms and observed API requests in sandboxed Chromium' };
+    }
     const pendingChecks: { action: CoverageRecoveryAction; priorAttempts: number }[] = [];
     for (const input of review?.inputTargets || []) {
       for (const toolName of ['xss_scan', 'sqli_scan']) {

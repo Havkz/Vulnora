@@ -72,7 +72,7 @@ export function canReplayInterruptedCall(call: LLMToolCall): boolean {
       && !call.arguments.body;
   }
   return ['dns_lookup', 'header_analysis', 'robots_txt_fetch', 'technology_detect',
-    'ssl_analysis', 'ssl_scan', 'jwt_decode', 'url_parse', 'api_endpoint_discovery', 'dir_bruteforce', 'web_surface_review'].includes(call.name);
+    'ssl_analysis', 'ssl_scan', 'jwt_decode', 'url_parse', 'api_endpoint_discovery', 'dir_bruteforce', 'web_surface_review', 'browser_surface_review'].includes(call.name);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

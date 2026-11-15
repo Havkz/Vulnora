@@ -17,6 +17,19 @@ const plan = (records: EvidenceRecord[], tools = ['web_surface_review', 'xss_sca
 };
 
 describe('evidence-driven website coverage', () => {
+  it('schedules browser inspection for JavaScript pages and retains inputs from both inventories', async () => {
+    const staticResult = await reviewWebsiteSurface(url, [], async () => ({ status: 200, body: '<script>loadApplication()</script><form><input name=staticInput></form>' }));
+    const records = [record('web_surface_review', staticResult)];
+    const action = () => plan(records, ['browser_surface_review', 'web_surface_review', 'xss_scan', 'sqli_scan']);
+    expect(evaluateCoverage(url, records).entries.input_surface.status).toBe('incomplete');
+    expect(action()).toMatchObject({ toolName: 'browser_surface_review', parameters: { url } });
+    records.push(record('browser_surface_review', { success: true, metadata: { websiteSurface: {
+      reviewedUrls: [url], inputTargets: [{ url: url + 'search?dynamic=', param: 'dynamic' }], authentication: [], postForms: 0, renderedUrls: [url], complete: true,
+    } } }));
+    expect(action()).toMatchObject({ toolName: 'xss_scan', parameters: { param: 'staticInput' } });
+    for (const tool of ['xss_scan', 'sqli_scan']) records.push(record(tool, { success: true }, { url: url + '?staticInput=', param: 'staticInput' }));
+    expect(action()).toMatchObject({ toolName: 'xss_scan', parameters: { param: 'dynamic' } });
+  });
   it('reviews cached bodies and observed API routes without inventing inputs or following foreign links', async () => {
     const http = record('http_request', { success: true, metadata: { responseBody: '<form action="/search" method="get"><input name="q"></form><a href="https://other.test/?foreign=1">Outside</a><form action="/login" method="post"><input type="password" name="password"></form>' } });
     const discovery = record('api_endpoint_discovery', { success: true, output: '/api/config -> 200 (application/json)\n/api/admin -> 401\nhttps://other.test/ -> 200' });

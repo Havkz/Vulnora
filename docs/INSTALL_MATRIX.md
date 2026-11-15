@@ -15,6 +15,7 @@ To isolate app settings, set `VULNORA_CONFIG_DIR` to an absolute directory. It h
 | Web/API pressure | `ffuf`, `gobuster`, `feroxbuster`, `nikto`, `dalfox`, `sqlmap` | Homebrew | Distro packages, Go installs, or upstream releases | Receipt-gated |
 | Web/TLS fingerprinting | `whatweb`, `wafw00f`, `testssl.sh` | Homebrew or pipx | Kali packages | Receipt-gated |
 | DNS/archive discovery | `amass`, `dnsx`, `waybackurls` | Homebrew or Go | Kali packages or Go | Receipt-gated |
+| Rendered web surface | Playwright Chromium headless shell | `npm run browser:install` | Browser libraries and enabled Chromium sandbox required | Managed same-origin HTTP |
 
 ## macOS Homebrew Repair
 
@@ -34,3 +35,4 @@ post-exploitation are excluded from the active arsenal and installers.
 
 On a Homebrew workstation, `scripts/install-tools.sh --web` installs the corresponding web
 tools. `npm run arsenal:doctor -- --offline --strict` verifies the binaries on PATH.
+Chromium has a separate check: `npm run browser:doctor`. See [browser setup](BROWSER.md).

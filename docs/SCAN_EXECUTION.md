@@ -46,6 +46,12 @@ unverified API hints, not proof of endpoint reachability or the request method.
 Browser-rendered routes and authenticated flows are not covered by this static
 review. It does not turn script strings or HTML comments into real forms.
 
+The separate `browser_surface_review` renders observed JavaScript pages and feeds
+its DOM inputs and actual fetch/XHR observations into the same coverage planner.
+Unrendered scripted pages keep the surface coverage open. See
+[browser setup and request boundaries](BROWSER.md) for its sandbox, limits and
+unsupported interactive flows.
+
 A review visits at most 32 distinct response candidates and parses at most
 262,144 characters and 10,000 HTML nodes per response. Input/form/field inventories
 are bounded to 128 entries. Common logout, deletion and credential-bearing links

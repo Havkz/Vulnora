@@ -39,6 +39,9 @@ for recipe in \
 done
 if ! command -v codex >/dev/null; then npm install --global --prefix "$HOME/.local" @openai/codex; fi
 npm ci
+npx --no-install playwright-core install-deps chromium
+npm run browser:install
+npm run browser:doctor
 npm run build
 nuclei -update-templates
 node scripts/arsenal-doctor.mjs --offline --json > "$HOME/arsenal-readiness.json"
