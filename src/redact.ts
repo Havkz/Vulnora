@@ -84,3 +84,13 @@ export function redactSecrets(value: unknown, seen = new WeakSet<object>()): unk
   }
   return result;
 }
+
+export function serializeRedactedReport(report: { schemaVersion: number; summary?: { credentialsHarvested?: unknown } }, compact = false): string {
+  const safe = redactSecrets(report) as typeof report;
+  // The field name matches the credential filter, but its numeric value is a report statistic.
+  const count = report.summary?.credentialsHarvested;
+  if (safe.summary && typeof safe.summary === 'object' && typeof count === 'number' && Number.isSafeInteger(count) && count >= 0) {
+    safe.summary.credentialsHarvested = count;
+  }
+  return compact ? JSON.stringify(safe) : JSON.stringify(safe, null, 2) + '\n';
+}

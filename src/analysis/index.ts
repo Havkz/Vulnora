@@ -18,7 +18,7 @@ import type { MissionControl } from '../mission/index.js';
 import type { OpsecController } from '../opsec/index.js';
 import { randomUUID } from 'crypto';
 import { SEVERITY_SCORES } from '../evidence/index.js';
-import { redactString, redactSecrets } from '../redact.js';
+import { redactString, redactSecrets, serializeRedactedReport } from '../redact.js';
 
 function appendCodeBlock(lines: string[], content: string): void {
   let length = 3;
@@ -425,10 +425,7 @@ export class AnalysisEngine {
   }
 
   exportToJson(report: Report): string {
-    const safe = redactSecrets(report) as Report;
-    // The shared redactor treats every credential-named field as secret, including this count.
-    safe.summary.credentialsHarvested = report.summary.credentialsHarvested;
-    return JSON.stringify({ schemaVersion: 1, ...safe }, null, 2) + '\n';
+    return serializeRedactedReport({ schemaVersion: 1, ...report });
   }
 }
 

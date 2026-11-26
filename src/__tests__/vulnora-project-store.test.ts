@@ -21,6 +21,23 @@ describe('project inputs', () => {
 });
 
 describe('durable project records', () => {
+  it('redacts older JSON evidence on export and preserves the stored snapshot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'vulnora-report-export-'));
+    try {
+      const store = new ProjectStore(directory);
+      const project = await store.create('Archived report', 'https://example.test');
+      const snapshot = { schemaVersion: 1, missionId: 'archived', generatedAt: 1,
+        summary: { credentialsHarvested: 2 },
+        findings: [{ output: 'HTTP/2 200\r\nSet-Cookie: sid=old-value\r\n', metadata: { authorization: 'old-value' } }] };
+      project.report = { generatedAt: 1, markdown: '# Archive', json: JSON.stringify(snapshot) };
+      await store.save(project);
+      const exported = await store.exportReport(await store.load(project.id), 'json');
+      expect(JSON.parse(await readFile(exported, 'utf8'))).toEqual({ ...snapshot,
+        findings: [{ output: 'HTTP/2 200\r\nSet-Cookie: [redacted]\r\n', metadata: { authorization: '[redacted]' } }] });
+      expect((await store.load(project.id)).report).toEqual(project.report);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+  });
+
   it('preserves legacy reports and saved data after malformed snapshots or failed exports', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'vulnora-report-store-'));
     try {

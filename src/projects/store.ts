@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { validateProjectName, validateProjectTarget, type ProjectTarget } from './targets.js';
 import { acquireProjectLease } from './lease.js';
-import { redactString } from '../redact.js';
+import { redactString, serializeRedactedReport } from '../redact.js';
 
 export type ReportFormat = 'markdown' | 'json';
 
@@ -176,8 +176,10 @@ export class ProjectStore {
     if (content === undefined) throw new Error('This legacy report contains Markdown only; no structured snapshot was saved.');
     const destination = directory === this.directory ? this : new ProjectStore(directory);
     const suffix = format === 'json' ? '.report.json' : '.report.md';
-    // JSON is already redacted structurally; applying text patterns to serialized JSON can corrupt its syntax.
-    await destination.publish(project.id, suffix, format === 'json' ? content : redactString(content));
+    const sanitized = format === 'json'
+      ? serializeRedactedReport(JSON.parse(content), !content.includes('\n'))
+      : redactString(content);
+    await destination.publish(project.id, suffix, sanitized);
     return destination.path(project.id, suffix);
   }
 
