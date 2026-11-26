@@ -42,6 +42,8 @@ export function redactString(value: string): string {
     redacted = redacted.replace(pattern, '[redacted]');
   }
   return redacted
+    // curl prefixes verbose headers with "> " or "< ", including on folded continuation lines.
+    .replace(/^([ \t]*([<>] )?(?:(?:proxy-)?authorization:[ \t]*(?:(?:Basic|Bearer)[ \t]+)?|(?:set-cookie|cookie):[ \t]*))[^\r\n]*(?:\r?\n\2[ \t][^\r\n]*)*/gim, '$1[redacted]')
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]{16,}/gi, 'Bearer [redacted]')
     .replace(/(api[_-]?key|token|secret|password)=([^&\s]+)/gi, '$1=[redacted]')
     // Generic URL userinfo (basic-auth): `scheme://user:pass@host` — the SECRET_PATTERNS only cover

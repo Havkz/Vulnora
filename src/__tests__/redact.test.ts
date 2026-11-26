@@ -39,6 +39,28 @@ describe('redactString — URL userinfo (basic-auth) scrub', () => {
 });
 
 describe('redactSecrets — approval-audit record shape', () => {
+  it.each(['\n', '\r\n'])('masks credentials in raw HTTP and curl log lines (%j)', (eol) => {
+    const input = [
+      '> Authorization: Basic dTpw',
+      '> cOoKiE: id=one; session=two',
+      '>  continued=three',
+      '< Set-Cookie: id=four; HttpOnly',
+      'Proxy-Authorization: Custom five',
+      '\tcontinued-six',
+      'Content-Type: text/plain',
+      '',
+      'body',
+    ];
+    const expected = [
+      '> Authorization: Basic [redacted]',
+      '> cOoKiE: [redacted]',
+      '< Set-Cookie: [redacted]',
+      'Proxy-Authorization: [redacted]',
+      ...input.slice(-3),
+    ];
+    expect(redactSecrets({ output: input.join(eol) })).toEqual({ output: expected.join(eol) });
+  });
+
   it('preserves cookie security attributes while masking session values', () => {
     const out = redactSecrets({ 'set-cookie': 'session=private; Secure; HttpOnly; SameSite=Lax, csrf=second-private; Path=/' }) as Record<string, string>;
     expect(out['set-cookie']).toBe('session=[redacted]; Secure; HttpOnly; SameSite=Lax, csrf=[redacted]; Path=/');
