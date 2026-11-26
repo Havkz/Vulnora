@@ -42,7 +42,7 @@ npm run build
 npm start
 ```
 
-Repository access is required while the project is private. This installs the application, not the external scanner binaries. See the [tool installation matrix](docs/INSTALL_MATRIX.md) for dependencies and supported platforms.
+See the [tool installation matrix](docs/INSTALL_MATRIX.md) for external dependencies and supported platforms.
 
 ### Windows with a dedicated Kali arsenal
 
